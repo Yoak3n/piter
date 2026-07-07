@@ -1,9 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "crates/addons",
-    "src-tauri"
-]
+members = ["src-tauri"]
 
 [workspace.dependencies]
 

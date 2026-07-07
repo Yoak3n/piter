@@ -1,5 +1,5 @@
 [package]
-name = "tauri-vue-template"
+name = "piter"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
@@ -11,7 +11,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "tauri_vue_template_lib"
+name = "piter_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -29,16 +29,35 @@ tokio = { version = "^1.44", features = [
     "macros",
     "time",
     "sync",
+    "net",
+    "io-util",
 ] }
 chrono = { version = "^0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
 
 once_cell = "1.21.4"
 anyhow = "^1.0.102"
 parking_lot = "0.12"
-
 mouse_position = "0.1.4"
 delay_timer = "0.11.6"
 dirs = "5"
+
+# Pi binary download
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
+
+# HTTP+WebSocket server (axum-based, replaces raw tokio-tungstenite)
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+futures-util = "0.3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+sha2 = "0.10"
+tempfile = "3"
+
+# QR code SVG generation (for /api/lan-qr)
+qrcode = { version = "0.14", features = ["svg"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

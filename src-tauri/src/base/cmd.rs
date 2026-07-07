@@ -1,26 +1,5 @@
-// Tauri command handlers — define `#[tauri::command]` functions here.
-
-use log::{info, warn, error, debug};
-
+/// Return the broker HTTP URL (for desktop frontend to discover).
 #[tauri::command]
-pub fn greet(name: &str) -> String {
-    info!("Greet command called with name: {}", name);
-    let message = format!("Hello, {}! You've been greeted from Rust!", name);
-    debug!("Greet response: {}", message);
-    message
-}
-
-#[tauri::command]
-pub fn log_example(level: &str, message: &str) -> String {
-    match level {
-        "info" => info!("{}", message),
-        "warn" => warn!("{}", message),
-        "error" => error!("{}", message),
-        "debug" => debug!("{}", message),
-        _ => {
-            warn!("Unknown log level: {}, defaulting to info", level);
-            info!("{}", message);
-        }
-    }
-    format!("Logged {} message: {}", level, message)
+pub fn get_broker_url() -> String {
+    std::env::var("PI_HTTP_URL").unwrap_or_else(|_| "http://127.0.0.1:0/".to_string())
 }

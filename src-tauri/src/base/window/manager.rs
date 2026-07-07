@@ -98,17 +98,21 @@ impl Manager {
             return Ok(existing_window);
         }
 
+        let url_str = url_with_args
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| window_type.url().to_string());
+
+        let webview_url = if url_str.starts_with("http://") || url_str.starts_with("https://")
+        {
+            tauri::WebviewUrl::External(url_str.parse().unwrap())
+        } else {
+            tauri::WebviewUrl::App(url_str.parse().unwrap())
+        };
+
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             window_type.label().to_string(),
-            tauri::WebviewUrl::App(
-                url_with_args
-                    .map(|u| {
-                        u.parse()
-                            .unwrap_or(window_type.url().parse().unwrap_or_default())
-                    })
-                    .unwrap_or_else(|| window_type.url().into()),
-            ),
+            webview_url,
         )
         .title(config.window_type.title())
         .inner_size(config.inner_size.0, config.inner_size.1)
@@ -345,17 +349,17 @@ impl Manager {
         match self.get_window(window_type) {
             Some(window) => {
                 if window.is_minimized().unwrap_or(false) {
-                    return true;
+                    true
                 } else {
                     if let Err(e) = window.minimize() {
                         println!("窗口最小化失败: {:?}", e);
                         return false;
                     }
                     self.update_window_state(window_type, WindowState::Minimized);
-                    return true;
+                    true
                 }
             }
-            None => return false,
+            None => false,
         }
     }
 

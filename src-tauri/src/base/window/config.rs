@@ -23,7 +23,7 @@ impl WindowConfig {
         match window_type {
             WindowType::Main => Self {
                 window_type,
-                inner_size: (800.0, 600.0),
+                inner_size: (1440.0, 960.0),
                 min_inner_size: (400.0, 80.0),
                 decorations: true,
                 transparent: false,

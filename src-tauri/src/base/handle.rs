@@ -16,7 +16,7 @@ impl Default for Handle {
 impl Handle {
     pub fn global() -> &'static Self {
         static APP_HANDLE: OnceCell<Handle> = OnceCell::new();
-        APP_HANDLE.get_or_init(|| Self::default())
+        APP_HANDLE.get_or_init(Self::default)
     }
 
     pub fn init(&self, input: AppHandle) {

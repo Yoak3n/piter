@@ -42,7 +42,7 @@ static TIMER_INSTANCE: std::sync::OnceLock<Timer> = std::sync::OnceLock::new();
 
 impl Timer {
     pub fn global() -> &'static Timer {
-        TIMER_INSTANCE.get_or_init(|| Self::new())
+        TIMER_INSTANCE.get_or_init(Self::new)
     }
     fn new() -> Self {
         Timer {

@@ -1,0 +1,4 @@
+{
+  "version": "0.80.3",
+  "_comment": "Locked pi release version. Bump this and run the downloader, then commit."
+}
