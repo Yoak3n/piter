@@ -72,9 +72,14 @@ export function usePiConnection() {
 
   function handlePiEvent(data: Record<string, unknown>) {
     // Route events to the correct session when sessionPath metadata is present
-    if (data.sessionPath && activeSessionPath.value) {
-      if (data.sessionPath !== activeSessionPath.value) return;
-      data = data.payload as Record<string, unknown>;
+    if (data.sessionPath) {
+      // Always extract the inner payload first — the real event data is inside
+      const inner = data.payload as Record<string, unknown>;
+      if (activeSessionPath.value) {
+        if (data.sessionPath !== activeSessionPath.value) return;
+      }
+      // Use the unwrapped payload for event processing
+      if (inner) data = inner;
     }
     switch (data.type) {
       case "pi_started":

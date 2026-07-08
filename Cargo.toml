@@ -1,9 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri"]
+members = ["src-tauri", "crates/pi_server"]
 
 [workspace.dependencies]
-
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
 [profile.release]
 opt-level = 3
 lto = true

@@ -5,7 +5,7 @@ use crate::base::{
     tray::create_tray_icon,
     window::{manager::Manager as WM, schema::WindowType},
 };
-use crate::pi::PiBroker;
+use pi_server::PiBroker;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{generate_handler, AppHandle, Builder, Manager, RunEvent};
@@ -100,7 +100,19 @@ pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {
     match event {
         tauri::RunEvent::Ready | tauri::RunEvent::Resumed => {}
         tauri::RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
+            // Stop all pi processes before exiting
+            if let Some(broker) = app_handle.try_state::<std::sync::Arc<crate::pi::PiBroker>>() {
+                log::info!("[app] stopping all pi processes before exit");
+                broker.kill_all();
+            }
             api.prevent_exit();
+        }
+        tauri::RunEvent::Exit => {
+            // Stop all pi processes on exit
+            if let Some(broker) = app_handle.try_state::<std::sync::Arc<crate::pi::PiBroker>>() {
+                log::info!("[app] stopping all pi processes on exit");
+                broker.kill_all();
+            }
         }
         tauri::RunEvent::WindowEvent { label, event, .. } => match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {

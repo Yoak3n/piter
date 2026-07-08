@@ -9,7 +9,7 @@
 use log::{error, info, warn};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager as _};
+// use tauri::{AppHandle, Manager as _};
 
 /// The locked version baked in at compile time.
 const PI_VERSION_JSON: &str = include_str!("../../../scripts/pi-version.json");
@@ -32,7 +32,7 @@ pub fn locked_pi_version() -> &'static str {
 }
 
 /// Path to pi binary inside an installation directory.
-fn pi_binary_name() -> &'static str {
+pub fn pi_binary_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "pi.exe"
     } else {
@@ -539,80 +539,37 @@ fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// ─── Public API ──────────────────────────────────────────────────────────────
-
-/// Return the path to the `resources/pi/` directory inside the Tauri bundle.
-fn bundle_pi_dir(app_handle: &AppHandle) -> PathBuf {
-    // During dev: src-tauri/resources/pi/
-    // During production: {resource_dir}/pi/
-    if cfg!(debug_assertions) {
-        // Use CARGO_MANIFEST_DIR relative path for dev
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("resources")
-            .join("pi")
-    } else {
-        // Production: use resource dir
-        app_handle
-            .path()
-            .resource_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join("pi")
-    }
-}
-
-/// Ensure the pi binary is available in the bundle resource directory.
+/// Resolve the pi binary path. Searches known install locations, copies/links
+/// into `target_dir`, or downloads from GitHub as a last resort.
 ///
-/// Returns the path to the pi executable.
-pub fn ensure_pi_binary(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let target_dir = bundle_pi_dir(app_handle);
+/// Returns the path to the pi executable inside `target_dir`.
+pub fn resolve_pi_binary(target_dir: &Path) -> Result<PathBuf, String> {
     let bin_path = target_dir.join(pi_binary_name());
-    let mut log: Vec<String> = Vec::new();
+    let mut log_msgs: Vec<String> = Vec::new();
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
-    log.push(format!(
-        "[Pi resolver] target={} platform={} {} locked_version={}",
-        bin_path.display(),
-        os,
-        arch,
-        locked_pi_version()
+    log_msgs.push(format!(
+        "[pi resolver] target={} platform={} {} locked_version={}",
+        bin_path.display(), os, arch, locked_pi_version()
     ));
 
     // ── ① Fast path: binary already exists at target ──
-    log.push(format!(
-        "  → Step 1: Check {} for existing binary",
-        bin_path.display()
-    ));
     if bin_path.is_file() {
-        log.push("    ✓ Found".into());
-        for l in &log {
-            info!("{}", l);
-        }
-        info!("pi binary ready at {}", bin_path.display());
+        log_msgs.push("  ✓ Found at target".into());
+        for l in &log_msgs { info!("{}", l); }
         return Ok(bin_path);
     }
-    log.push("    ✗ Not found".into());
-    log.push("      Hint: place or symlink pi here for fastest startup".into());
 
     // ── ② Search known install locations ──
-    log.push("  → Step 2: Search known installation locations".into());
+    log_msgs.push("  → Searching known installation locations".into());
     let candidates = find_candidates();
-    #[cfg(target_os = "windows")]
-    log.push("      Paths: PATH, %APPDATA%\\npm\\..., Picot, scoop, bun, ProgramData".into());
-    #[cfg(target_os = "macos")]
-    log.push(
-        "      Paths: PATH, /usr/local/lib/..., /Applications/Picot.app, nvm, homebrew, bun".into(),
-    );
-    #[cfg(target_os = "linux")]
-    log.push("      Paths: PATH, /usr/local/lib/..., nvm, bun".into());
-
-    // Filter and score in two passes to avoid closure borrow conflicts with `log`
     let valid: Vec<(PathBuf, String)> = candidates
         .into_iter()
         .filter(|(path, _)| is_valid_pi_dir(path))
         .collect();
-    for (ref path, ref source) in &valid {
-        log.push(format!("      Check {} ({}): ✓", path.display(), source));
+    for (path, source) in &valid {
+        log_msgs.push(format!("    Check {} ({}): ✓", path.display(), source));
     }
     let mut scored: Vec<(u32, PathBuf, String)> = valid
         .into_iter()
@@ -621,125 +578,72 @@ pub fn ensure_pi_binary(app_handle: &AppHandle) -> Result<PathBuf, String> {
             (score, path, source)
         })
         .collect();
-    // Log scores
-    for (score, ref _path, ref source) in &scored {
-        log.push(format!("        → {} score={}", source, score));
-    }
-
-    // Sort by score descending, then by source name
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
 
     if let Some((score, best_path, source)) = scored.first() {
-        log.push(format!(
+        log_msgs.push(format!(
             "    ✓ Best candidate: {} (source={}, score={})",
-            best_path.display(),
-            source,
-            score
+            best_path.display(), source, score
         ));
 
         if let Some(parent) = target_dir.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                log.push(format!("    ✗ Failed to create target dir: {}", e));
-                for l in &log {
-                    error!("{}", l);
-                }
+                log_msgs.push(format!("    ✗ Failed to create target dir: {}", e));
+                for l in &log_msgs { error!("{}", l); }
                 format!("Pi resolution failed: {}", e)
             })?;
         }
 
-        match link_or_copy(best_path, &target_dir) {
+        match link_or_copy(best_path, target_dir) {
             Ok(()) => {
                 if bin_path.is_file() {
-                    log.push(format!("    ✓ Linked to {}", target_dir.display()));
-                    for l in &log {
-                        info!("{}", l);
-                    }
+                    for l in &log_msgs { info!("{}", l); }
                     info!("pi binary ready at {}", bin_path.display());
                     return Ok(bin_path);
                 }
             }
             Err(e) => {
-                log.push(format!("    ✗ Link/copy failed: {}", e));
+                log_msgs.push(format!("    ✗ Link/copy failed: {}", e));
             }
         }
     } else {
-        log.push("    ✗ No valid pi installation found in any location".into());
+        log_msgs.push("    ✗ No valid pi installation found".into());
     }
-    log.push("      Hint: install pi via your package manager or from https://pi.dev".into());
 
     // ── ③ Download from GitHub ──
     let locked_ver = locked_pi_version();
-    log.push(format!(
-        "  → Step 3: Download pi {} from GitHub releases",
-        locked_ver
-    ));
-    let url = format!(
-        "https://github.com/earendil-works/pi/releases/download/v{}/{}-{}.zip",
-        locked_ver,
-        "pi",
-        if std::env::consts::OS == "windows" {
-            if std::env::consts::ARCH == "x86_64" {
-                "windows-x64"
-            } else {
-                "windows-arm64"
-            }
-        } else if std::env::consts::OS == "macos" {
-            if std::env::consts::ARCH == "aarch64" {
-                "darwin-arm64"
-            } else {
-                "darwin-x64"
-            }
-        } else {
-            if std::env::consts::ARCH == "x86_64" {
-                "linux-x64"
-            } else {
-                "linux-arm64"
-            }
-        }
-    );
-    log.push(format!("      URL: {}", url));
+    log_msgs.push(format!("  → Downloading pi {} from GitHub", locked_ver));
 
     if let Some(parent) = target_dir.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            log.push(format!("    ✗ Failed to create target dir: {}", e));
-            for l in &log {
-                error!("{}", l);
-            }
+            for l in &log_msgs { error!("{}", l); }
             format!("Pi resolution failed: {}", e)
         })?;
     }
 
-    match download_pi(locked_ver, &target_dir) {
+    match download_pi(locked_ver, target_dir) {
         Ok(()) => {
             if bin_path.is_file() {
-                log.push("    ✓ Download and extraction complete".into());
-                for l in &log {
-                    info!("{}", l);
-                }
+                for l in &log_msgs { info!("{}", l); }
                 info!("pi binary ready at {}", bin_path.display());
                 return Ok(bin_path);
             }
         }
         Err(e) => {
-            log.push(format!("    ✗ Download failed: {}", e));
-            log.push(
-                "      Hint: verify the version in scripts/pi-version.json exists on GitHub".into(),
-            );
+            log_msgs.push(format!("    ✗ Download failed: {}", e));
         }
     }
 
     // ── ④ All strategies exhausted ──
-    for l in &log {
-        error!("{}", l);
-    }
-    let detail = log.join("\n");
+    for l in &log_msgs { error!("{}", l); }
+    let detail = log_msgs.join("\n");
     Err(format!(
-        "[Pi resolver] All strategies exhausted — could not obtain pi binary.\n\n{}\n\nResolution:\n  \
+        "[Pi resolver] Could not obtain pi binary.\n\n{}\n\nResolution:\n  \
          1. Install pi via the official installer from https://pi.dev\n  \
-         2. Or symlink an existing pi installation:\n  \
-            mklink /D src-tauri\\resources\\pi <path-to-pi>   (Windows, admin)\n  \
-            ln -s <path-to-pi> src-tauri/resources/pi          (macOS/Linux)\n  \
-         3. Or fix scripts/pi-version.json and ensure network access for download",
+         2. Or symlink an existing pi installation into resources/pi/\n  \
+         3. Or fix scripts/pi-version.json and ensure network access",
         detail
     ))
 }
+
+

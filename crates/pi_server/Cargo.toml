@@ -1,0 +1,36 @@
+[package]
+name = "pi_server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log ={ workspace = true}
+serde = { workspace = true}
+serde_json = { workspace = true}
+parking_lot = { workspace = true}
+tokio = { version = "^1.44", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+    "net",
+    "io-util",
+] }
+# Pi binary download
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
+tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+
+# HTTP+WebSocket server (axum-based)
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+futures-util = "0.3"
+
+# Broker utilities
+chrono = "0.4"
+dirs = "6"
+qrcode = "0.14"
+uuid = { version = "1", features = ["v4"] }
+
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

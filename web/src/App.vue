@@ -148,6 +148,7 @@ watch(sessionStatus, (status) => {
         <template #header-extra>
           <ModelSelector
             :model-id="modelId"
+            :session-status="sessionStatus"
             @select-model="handleModelSelect"
           />
         </template>

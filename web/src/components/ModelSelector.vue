@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { ChevronDown } from "lucide-vue-next";
 
 export interface ModelInfo {
@@ -10,6 +10,7 @@ export interface ModelInfo {
 
 const props = defineProps<{
   modelId?: string;
+  sessionStatus?: "running" | "idle" | null;
 }>();
 
 const emit = defineEmits<{
@@ -21,6 +22,7 @@ const searchText = ref("");
 const models = ref<ModelInfo[]>([]);
 const loading = ref(false);
 const unavailable = ref(false);
+const triedOnce = ref(false);
 const dropdownRef = ref<HTMLDivElement | null>(null);
 
 const displayName = computed(() => {
@@ -88,11 +90,23 @@ async function fetchCurrentModel() {
     const data = await res.json();
     if (data.success && data.data?.model?.id) {
       emit("select-model", data.data.model.id);
+      unavailable.value = false;
     }
   } catch {
     // ignore
   }
 }
+
+// When session becomes active (pi starts responding), retry fetching current model
+// (in case initial mount failed because no pi was running yet)
+watch(() => props.sessionStatus, (status, oldStatus) => {
+  if (status === "running" && oldStatus !== "running") {
+    unavailable.value = false;
+    triedOnce.value = false;
+    models.value = [];
+    fetchCurrentModel();
+  }
+});
 
 function handleClickOutside(e: MouseEvent) {
   if (dropdownRef.value && !dropdownRef.value.contains(e.target as Node)) {
