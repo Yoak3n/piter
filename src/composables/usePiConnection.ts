@@ -30,6 +30,7 @@ export function usePiConnection() {
   let reconnectAttempts = 0;
   const MAX_RECONNECT_ATTEMPTS = 3;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingControlRequests = new Map<string, { resolve: Function; reject: Function; timer: ReturnType<typeof setTimeout> }>();
 
   function getWsUrl(): string {
     const params = new URLSearchParams(window.location.search);
@@ -57,11 +58,42 @@ export function usePiConnection() {
     return "";
   }
 
-  function handlePiEvent(data: Record<string, unknown>) {
-    if (data.sessionPath && activeSessionPath.value) {
-      if (data.sessionPath !== activeSessionPath.value) return;
-      data = data.payload as Record<string, unknown>;
+  function handlePiEvent(raw: Record<string, unknown>) {
+    // ── Broker-level meta events (not forwarded pi events) ──
+    if (raw.type === "capabilities") {
+      console.log("[broker] capabilities:", raw);
+      return;
     }
+    if (raw.type === "control_response") {
+      return;
+    }
+    if (raw.type === "command_undeliverable") {
+      const reason = raw.reason as string || "unknown";
+      const command = raw.command as string || "unknown";
+      addMessage("system", `[Delivery Error] Command "${command}" could not be delivered: ${reason}`);
+      isStreaming.value = false;
+      return;
+    }
+
+    // ── Filter by active session ──
+    if (raw.sessionPath && activeSessionPath.value) {
+      if (raw.sessionPath !== activeSessionPath.value) return;
+    }
+
+    // ── Unwrap the event envelope ──
+    // The reader thread wraps pi lifecycle events as:
+    //   {"type":"event", "event": {original pi event}, "sessionPath":..., "port":...}
+    // For response/other events it uses:
+    //   {"type": originalType, "payload": {original}, "sessionPath":..., "port":...}
+    let data: Record<string, unknown>;
+    if (raw.type === "event" && raw.event) {
+      data = raw.event as Record<string, unknown>;
+    } else if (raw.payload && typeof raw.payload === "object") {
+      data = raw.payload as Record<string, unknown>;
+    } else {
+      data = raw;
+    }
+
     switch (data.type) {
       case "pi_started":
       case "connected":
@@ -77,6 +109,11 @@ export function usePiConnection() {
         break;
       case "error":
         addMessage("system", `[Error] ${data.error}`);
+        break;
+      case "session_start":
+        // Session started on a pi process — nothing special for now,
+        // but log for debug.
+        console.log("[broker] session_start:", data);
         break;
       case "agent_start":
         isStreaming.value = true;
@@ -127,6 +164,11 @@ export function usePiConnection() {
       case "tool_execution_end": {
         const tc = data as { toolName?: string; isError?: boolean };
         if (tc.isError) addMessage("tool", `❌ ${tc.toolName || "Tool"} failed`);
+        break;
+      }
+      case "response": {
+        // RPC response events (e.g. switch_session result)
+        // Could be used to update session state on the frontend
         break;
       }
       case "raw":
@@ -181,7 +223,17 @@ export function usePiConnection() {
     if (!text.trim()) return;
     addMessage("user", text);
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "prompt", message: text }));
+      const sessionPath = activeSessionPath.value;
+      if (sessionPath) {
+        // Wrap as broker_command for multi-session routing
+        ws.send(JSON.stringify({
+          type: "broker_command",
+          sessionId: sessionPath,
+          payload: { type: "prompt", message: text },
+        }));
+      } else {
+        ws.send(JSON.stringify({ type: "prompt", message: text }));
+      }
     }
   }
 

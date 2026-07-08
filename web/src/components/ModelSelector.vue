@@ -80,21 +80,40 @@ async function fetchModels() {
   unavailable.value = true;
 }
 
-async function fetchCurrentModel() {
-  try {
-    const res = await fetch("/api/rpc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "get_state" }),
-    });
-    const data = await res.json();
-    if (data.success && data.data?.model?.id) {
-      emit("select-model", data.data.model.id);
-      unavailable.value = false;
-    }
-  } catch {
-    // ignore
+let fetchModelTimer: ReturnType<typeof setTimeout> | null = null;
+let fetchModelAttempts = 0;
+const MAX_FETCH_ATTEMPTS = 8;
+
+async function fetchCurrentModel(retry = true) {
+  if (fetchModelTimer) {
+    clearTimeout(fetchModelTimer);
+    fetchModelTimer = null;
   }
+  fetchModelAttempts = 0;
+
+  const attempt = async () => {
+    try {
+      const res = await fetch("/api/rpc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "get_state" }),
+      });
+      const data = await res.json();
+      if (data.success && data.data?.model?.id) {
+        emit("select-model", data.data.model.id);
+        unavailable.value = false;
+        return; // success — stop retrying
+      }
+    } catch {
+      // ignore
+    }
+    // Retry with increasing delay if pi process is still starting up
+    fetchModelAttempts++;
+    if (retry && fetchModelAttempts < MAX_FETCH_ATTEMPTS) {
+      fetchModelTimer = setTimeout(attempt, 800 * fetchModelAttempts);
+    }
+  };
+  await attempt();
 }
 
 // When session becomes active (pi starts responding), retry fetching current model
@@ -124,7 +143,13 @@ onMounted(() => {
   document.addEventListener("click", handleClickOutside);
   fetchCurrentModel();
 });
-onUnmounted(() => document.removeEventListener("click", handleClickOutside));
+onUnmounted(() => {
+  document.removeEventListener("click", handleClickOutside);
+  if (fetchModelTimer) {
+    clearTimeout(fetchModelTimer);
+    fetchModelTimer = null;
+  }
+});
 </script>
 
 <template>

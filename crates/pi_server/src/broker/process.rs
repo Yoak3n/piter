@@ -124,57 +124,100 @@ impl BrokerState {
         port: u16,
         session_path: Option<&str>,
     ) -> Result<(), String> {
-        let pi_exe_str = strip_verbatim_prefix(&self.pi_exe.to_string_lossy());
-        let static_dir = strip_verbatim_prefix(&self.static_dir.to_string_lossy());
-        let cwd = strip_verbatim_prefix(cwd);
+        spawn_pi_process(
+            &self.pi_exe,
+            &self.static_dir,
+            &self.pi_version,
+            cwd,
+            port,
+            session_path,
+            &self.event_tx,
+            &self.inner,
+        )
+    }
+}
 
-        let mut args: Vec<String> = vec![
-            "--mode".to_string(),
-            "rpc".to_string(),
+/// Standalone spawn function usable from both `PiBroker::spawn_pi` and
+/// the auto-spawn path in `ws.rs` where only `BrokerState` is available.
+pub fn spawn_pi_process(
+    pi_exe: &std::path::Path,
+    static_dir: &std::path::Path,
+    pi_version: &str,
+    cwd: &str,
+    port: u16,
+    session_path: Option<&str>,
+    event_tx: &super::types::EventTx,
+    inner: &Arc<super::types::BrokerInner>,
+) -> Result<(), String> {
+    let pi_exe_str = strip_verbatim_prefix(&pi_exe.to_string_lossy());
+    let static_dir_str = strip_verbatim_prefix(&static_dir.to_string_lossy());
+    let cwd = strip_verbatim_prefix(cwd);
+
+    let mut args: Vec<String> = vec![
+        "--mode".to_string(),
+        "rpc".to_string(),
+    ];
+    if let Some(session) = session_path {
+        args.push("--session".to_string());
+        args.push(session.to_string());
+    }
+
+    log::info!(
+        "[broker] spawning pi: bin={} args={:?} cwd={} port={} static_dir={}",
+        pi_exe_str, args, cwd, port, static_dir_str
+    );
+
+    let augmented_path = build_augmented_path();
+    log_child_path_diagnostics("spawn", &augmented_path);
+
+    let mut child_cmd = Command::new(&pi_exe_str);
+    configure_child_process_for_windows(&mut child_cmd);
+    child_cmd
+        .args(&args)
+        .current_dir(&cwd)
+        .env("PATH", augmented_path)
+        .env("PI_STUDIO_STATIC_DIR", &static_dir_str)
+        .env("PI_STUDIO_PORT", port.to_string())
+        .env("PI_STUDIO_PI_VERSION", pi_version)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+
+    let mut child = child_cmd.spawn().map_err(|e| {
+        format!("Failed to spawn embedded pi ({}): {}", pi_exe_str, e)
+    })?;
+
+    let stdout = child.stdout.take().ok_or_else(|| "No stdout".to_string())?;
+    let mut stdin = child.stdin.take().ok_or_else(|| "No stdin".to_string())?;
+
+    let running = Arc::new(AtomicBool::new(true));
+    let running_r = running.clone();
+    let running_w = running.clone();
+    let inner = inner.clone();
+    let event_tx = event_tx.clone();
+    let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
+
+    // Reader thread: pi stdout → event_tx broadcast
+    let inner_clone = inner.clone();
+    let port_clone = port;
+
+        // ── The pi event types we recognise (mirrors embedded-server). ──
+        // stdout `response` events are RPC responses (handled separately);
+        // everything else that pi emits via its event system falls into
+        // one of these categories.
+        const PI_LIFECYCLE_TYPES: &[&str] = &[
+            "started",
+            "session_start",
+            "session_shutdown",
+            "session_name",
+            "agent_start", "agent_end",
+            "turn_start", "turn_end",
+            "message_start", "message_update", "message_end",
+            "tool_execution_start", "tool_execution_update", "tool_execution_end",
+            "auto_compaction_start", "auto_compaction_end",
+            "auto_retry_start", "auto_retry_end",
+            "model_select",
         ];
-        if let Some(session) = session_path {
-            args.push("--session".to_string());
-            args.push(session.to_string());
-        }
-
-        log::info!(
-            "[broker] spawning pi: bin={} args={:?} cwd={} port={} static_dir={}",
-            pi_exe_str, args, cwd, port, static_dir
-        );
-
-        let augmented_path = build_augmented_path();
-        log_child_path_diagnostics("spawn", &augmented_path);
-
-        let mut child_cmd = Command::new(&pi_exe_str);
-        configure_child_process_for_windows(&mut child_cmd);
-        child_cmd
-            .args(&args)
-            .current_dir(&cwd)
-            .env("PATH", augmented_path)
-            .env("PI_STUDIO_STATIC_DIR", &static_dir)
-            .env("PI_STUDIO_PORT", port.to_string())
-            .env("PI_STUDIO_PI_VERSION", &self.pi_version)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
-
-        let mut child = child_cmd.spawn().map_err(|e| {
-            format!("Failed to spawn embedded pi ({}): {}", pi_exe_str, e)
-        })?;
-
-        let stdout = child.stdout.take().ok_or_else(|| "No stdout".to_string())?;
-        let mut stdin = child.stdin.take().ok_or_else(|| "No stdin".to_string())?;
-
-        let running = Arc::new(AtomicBool::new(true));
-        let running_r = running.clone();
-        let running_w = running.clone();
-        let inner = self.inner.clone();
-        let event_tx = self.event_tx.clone();
-        let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
-
-        // Reader thread: pi stdout → event_tx broadcast
-        let inner_clone = inner.clone();
-        let port_clone = port;
 
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
@@ -182,62 +225,95 @@ impl BrokerState {
                 if !running_r.load(Ordering::SeqCst) {
                     break;
                 }
-                if let Ok(text) = line {
-                    let trimmed = text.trim();
-                    if trimmed.is_empty() {
-                        continue;
+                let Ok(text) = line else { continue };
+                let trimmed = text.trim();
+                if trimmed.is_empty() { continue; }
+                let Ok(val) = serde_json::from_str::<Value>(trimmed) else { continue };
+
+                let event_type = val.get("type").and_then(Value::as_str).unwrap_or("");
+
+                // ── 1. Pending RPC response ──────────────────────────────
+                if event_type == "response" {
+                    if let Some(cmd) = val.get("command").and_then(Value::as_str) {
+                        if let Some(tx) = inner_clone.pending_rpc.lock().remove(cmd) {
+                            log::debug!("[broker] RPC response for command={}", cmd);
+                            let _ = tx.send(val.clone());
+                        }
                     }
-                    if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-                        // Pending RPC — match by command type in response events
-                        let event_type = val.get("type").and_then(Value::as_str);
-                        if event_type == Some("response") {
-                            let command = val.get("command").and_then(Value::as_str);
-                            if let Some(cmd) = command {
-                                if let Some(tx) = inner_clone.pending_rpc.lock().remove(cmd) {
-                                    log::debug!("[broker] RPC response for command={}", cmd);
-                                    let _ = tx.send(val.clone());
-                                }
+                    // Also emit response events to UI (e.g. switch_session result)
+                    if let Some(cmd) = val.get("command").and_then(Value::as_str) {
+                        let success = val.get("success").and_then(Value::as_bool).unwrap_or(false);
+                        if success && matches!(cmd, "switch_session" | "new_session") {
+                            if let Some(sf) = val.get("data")
+                                .and_then(|d| d.get("sessionFile"))
+                                .and_then(Value::as_str)
+                            {
+                                log::info!("[broker] pi confirmed session: port={} session={}", port_clone, sf);
+                                inner_clone.port_sessions.lock().insert(port_clone, sf.to_string());
+                                inner_clone.routes.lock().insert(sf.to_string(), port_clone);
                             }
-                        }
-
-                        // Learn route table (session_id → port)
-                        if let Some(session_id) = super::util::extract_session_id(&val) {
-                            log::debug!("[broker] learn route session_id={} -> port={}", session_id, port_clone);
-                            inner_clone.routes.lock().insert(session_id.to_string(), port_clone);
-                        }
-
-                        // Update port_sessions ONLY on confirmed session switch.
-                        // This prevents old streaming output from being mis-labeled
-                        // when the user switches while a response is still streaming.
-                        let event_type = val.get("type").and_then(Value::as_str);
-                        if event_type == Some("response") {
-                            let command = val.get("command").and_then(Value::as_str);
-                            let success = val.get("success").and_then(Value::as_bool).unwrap_or(false);
-                            if success && matches!(command, Some("switch_session") | Some("new_session")) {
-                                if let Some(sf) = val.get("data")
-                                    .and_then(|d| d.get("sessionFile"))
-                                    .and_then(Value::as_str)
-                                {
-                                    log::info!("[broker] pi confirmed session: port={} session={}", port_clone, sf);
-                                    inner_clone.port_sessions.lock().insert(port_clone, sf.to_string());
-                                    inner_clone.routes.lock().insert(sf.to_string(), port_clone);
-                                }
-                            }
-                        }
-
-                        // Tag event with sessionPath so frontend can filter
-                        let session_path = inner_clone.port_sessions.lock().get(&port_clone).cloned();
-                        if let Some(sp) = session_path {
-                            let wrapped = serde_json::json!({
-                                "sessionPath": sp,
-                                "payload": val,
-                            });
-                            let _ = event_tx.send(wrapped.to_string());
-                        } else {
-                            let _ = event_tx.send(text);
                         }
                     }
                 }
+
+                // ── 2. Learn route table from event payloads ────────────
+                if let Some(sid) = super::util::extract_session_id(&val) {
+                    log::debug!("[broker] learn route session_id={} -> port={}", sid, port_clone);
+                    inner_clone.routes.lock().insert(sid.to_string(), port_clone);
+                }
+
+                // ── 3. Handle session_start: update session tracking ────
+                //    Mirrors embedded-server's `pi.on("session_start", ...)`
+                if event_type == "session_start" {
+                    if let Some(sf) = val.get("sessionFile").and_then(Value::as_str) {
+                        if !sf.is_empty() {
+                            log::info!("[broker] session_start: port={} session={}", port_clone, sf);
+                            inner_clone.port_sessions.lock().insert(port_clone, sf.to_string());
+                            inner_clone.routes.lock().insert(sf.to_string(), port_clone);
+                        }
+                    }
+                }
+
+                // ── 4. Detect pi's "started" event ──────────────────────
+                //    Synthesise `pi_started` for the frontend connection state.
+                if event_type == "started" {
+                    log::info!("[broker] pi started event received on port {}", port_clone);
+                    let pi_started = serde_json::json!({
+                        "type": "pi_started",
+                        "port": port_clone,
+                        "payload": val,
+                    });
+                    let _ = event_tx.send(pi_started.to_string());
+                    continue;
+                }
+
+                // ── 5. Broadcast to UI clients ──────────────────────────
+                //    Wrap with route metadata (mirrors embedded-server's
+                //    `withRouteMeta` → `broadcast` pattern).
+                //    For recognised pi event types, wrap as `{"type":"event",
+                //    "event":...}` envelope. For responses and other types,
+                //    forward as-is with route metadata.
+                let session_path = inner_clone.port_sessions.lock().get(&port_clone).cloned();
+                let is_pi_event = PI_LIFECYCLE_TYPES.contains(&event_type);
+
+                let envelope = if is_pi_event {
+                    serde_json::json!({
+                        "type": "event",
+                        "event": val,
+                        "sessionPath": session_path,
+                        "port": port_clone,
+                        "protocolVersion": super::types::PROTOCOL_VERSION,
+                    })
+                } else {
+                    serde_json::json!({
+                        "type": event_type,
+                        "payload": val,
+                        "sessionPath": session_path,
+                        "port": port_clone,
+                        "protocolVersion": super::types::PROTOCOL_VERSION,
+                    })
+                };
+                let _ = event_tx.send(envelope.to_string());
             }
             running_r.store(false, Ordering::SeqCst);
         });
@@ -277,9 +353,18 @@ impl BrokerState {
             stdin_tx: Some(stdin_tx),
         };
 
-        self.inner.pi_processes.lock().insert(port, pi_process);
+        inner.pi_processes.lock().insert(port, pi_process);
+
+        // Set as active port if none is set yet (first spawn)
+        {
+            let mut active = inner.active_port.lock();
+            if active.is_none() {
+                *active = Some(port);
+            }
+        }
+
         log::info!("[broker] pi started on port {}", port);
 
         Ok(())
     }
-}
+

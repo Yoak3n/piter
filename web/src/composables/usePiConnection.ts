@@ -106,22 +106,48 @@ export function usePiConnection() {
     activeSessionPath.value = path;
   }
 
-  function handlePiEvent(data: Record<string, unknown>) {
-    // Route events to the correct session when sessionPath metadata is present
-    if (data.sessionPath) {
-      // Always extract the inner payload first — the real event data is inside
-      const inner = data.payload as Record<string, unknown>;
-      if (activeSessionPath.value) {
-        if (data.sessionPath !== activeSessionPath.value) return;
-      }
-      // Use the unwrapped payload for event processing
-      if (inner) data = inner;
+  function handlePiEvent(raw: Record<string, unknown>) {
+    // ── Broker-level meta events (not forwarded pi events) ──
+    if (raw.type === "capabilities") {
+      console.log("[broker] capabilities:", raw);
+      return;
     }
+    if (raw.type === "control_response") {
+      return;
+    }
+    if (raw.type === "command_undeliverable") {
+      const reason = raw.reason as string || "unknown";
+      const command = raw.command as string || "unknown";
+      addMessage("system", `[Delivery Error] Command "${command}" could not be delivered: ${reason}`);
+      isStreaming.value = false;
+      return;
+    }
+
+    // ── Filter by active session ──
+    let data: Record<string, unknown>;
+    if (raw.sessionPath) {
+      if (activeSessionPath.value && raw.sessionPath !== activeSessionPath.value) return;
+      // Unwrap the event envelope:
+      //   {"type":"event", "event": {original}, ...}  — lifecycle events
+      //   {"type": originalType, "payload": {original}, ...}  — responses/other
+      if (raw.type === "event" && raw.event) {
+        data = raw.event as Record<string, unknown>;
+      } else if (raw.payload && typeof raw.payload === "object") {
+        data = raw.payload as Record<string, unknown>;
+      } else {
+        data = raw;
+      }
+    } else {
+      data = raw;
+    }
+
     switch (data.type) {
       case "pi_started":
       case "connected":
         isRunning.value = true;
         statusText.value = "Connected";
+        // Pi process is ready — fetch current model info
+        sendCommand({ type: "get_state" });
         break;
       case "pi_exited":
       case "disconnected":
@@ -386,13 +412,33 @@ export function usePiConnection() {
     if (!text.trim()) return;
     addMessage("user", text);
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "prompt", message: text }));
+      const sessionPath = activeSessionPath.value;
+      if (sessionPath) {
+        // Wrap as broker_command for multi-session routing
+        ws.send(JSON.stringify({
+          type: "broker_command",
+          sessionId: sessionPath,
+          payload: { type: "prompt", message: text },
+        }));
+      } else {
+        ws.send(JSON.stringify({ type: "prompt", message: text }));
+      }
     }
   }
 
   function sendCommand(cmd: Record<string, unknown>) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(cmd));
+      // Wrap session-aware commands as broker_command for proper routing
+      const cmdType = cmd.type as string;
+      if ((cmdType === "new_session" || cmdType === "switch_session") && activeSessionPath.value) {
+        ws.send(JSON.stringify({
+          type: "broker_command",
+          sessionId: activeSessionPath.value,
+          payload: cmd,
+        }));
+      } else {
+        ws.send(JSON.stringify(cmd));
+      }
       return true;
     }
     return false;
