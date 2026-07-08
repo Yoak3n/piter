@@ -1,14 +1,25 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from "vue";
-import { Menu } from "lucide-vue-next";
+import { Menu, ChevronRight, Brain, Copy, Check } from "lucide-vue-next";
 import { marked } from "marked";
 
 marked.setOptions({ breaks: true, gfm: true });
+
+interface ToolExecution {
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  status: "pending" | "streaming" | "complete" | "error";
+  output?: string;
+  isError?: boolean;
+}
 
 interface Message {
   id: number;
   role: "user" | "assistant" | "tool" | "system";
   content: string;
+  thinking?: string;
+  toolExecutions?: ToolExecution[];
   meta?: Record<string, unknown>;
   timestamp: number;
 }
@@ -16,7 +27,7 @@ interface Message {
 interface Turn {
   id: number;
   user: Message | null;
-  assistant: Message | null;
+  assistants: Message[];
   tools: Message[];
   system: Message | null;
 }
@@ -26,6 +37,8 @@ const props = defineProps<{
   isRunning: boolean;
   isStreaming: boolean;
   currentAssistantContent: string;
+  currentThinking?: string;
+  toolExecutions?: ToolExecution[];
   statusText: string;
   sessionName?: string;
   modelName?: string;
@@ -41,21 +54,41 @@ const emit = defineEmits<{
 const inputText = ref("");
 const timelineRef = ref<HTMLDivElement | null>(null);
 
+// Track expanded/collapsed state for thinking blocks and tool cards
+const expandedThinking = ref<Set<number>>(new Set());
+const expandedTools = ref<Set<string>>(new Set());
+
+function toggleThinking(id: number) {
+  if (expandedThinking.value.has(id)) {
+    expandedThinking.value.delete(id);
+  } else {
+    expandedThinking.value.add(id);
+  }
+}
+
+function toggleTool(toolCallId: string) {
+  if (expandedTools.value.has(toolCallId)) {
+    expandedTools.value.delete(toolCallId);
+  } else {
+    expandedTools.value.add(toolCallId);
+  }
+}
+
 const turns = computed(() => {
   const result: Turn[] = [];
   let current: Turn | null = null;
   for (const msg of props.messages) {
     if (msg.role === "user") {
       if (current) result.push(current);
-      current = { id: msg.id, user: msg, assistant: null, tools: [], system: null };
+      current = { id: msg.id, user: msg, assistants: [], tools: [], system: null };
     } else if (msg.role === "assistant") {
-      if (!current) current = { id: msg.id, user: null, assistant: null, tools: [], system: null };
-      current.assistant = msg;
+      if (!current) current = { id: msg.id, user: null, assistants: [], tools: [], system: null };
+      current.assistants.push(msg);
     } else if (msg.role === "tool") {
-      if (!current) current = { id: msg.id, user: null, assistant: null, tools: [], system: null };
+      if (!current) current = { id: msg.id, user: null, assistants: [], tools: [], system: null };
       current.tools.push(msg);
     } else if (msg.role === "system") {
-      if (!current) current = { id: msg.id, user: null, assistant: null, tools: [], system: null };
+      if (!current) current = { id: msg.id, user: null, assistants: [], tools: [], system: null };
       current.system = msg;
     }
   }
@@ -64,6 +97,14 @@ const turns = computed(() => {
 });
 
 watch(() => props.messages.length, () => {
+  nextTick(() => { if (timelineRef.value) timelineRef.value.scrollTop = timelineRef.value.scrollHeight; });
+});
+
+// Auto-scroll during streaming
+watch(() => props.currentAssistantContent, () => {
+  nextTick(() => { if (timelineRef.value) timelineRef.value.scrollTop = timelineRef.value.scrollHeight; });
+});
+watch(() => props.currentThinking, () => {
   nextTick(() => { if (timelineRef.value) timelineRef.value.scrollTop = timelineRef.value.scrollHeight; });
 });
 
@@ -86,6 +127,46 @@ function renderMarkdown(content: string): string {
 
 function escapeHtml(t: string): string {
   return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function getArgsPreview(toolName: string, args: Record<string, unknown>): string {
+  if (!args || Object.keys(args).length === 0) return "";
+  if (args.path) return String(args.path).substring(0, 80);
+  if (args.command) return String(args.command).substring(0, 80);
+  if (args.query) return String(args.query).substring(0, 60);
+  if (args.url) return String(args.url);
+  for (const val of Object.values(args)) {
+    if (typeof val === "string" && val.length > 0) return val.substring(0, 60);
+  }
+  return "";
+}
+
+function formatArgs(args: Record<string, unknown>): string {
+  try {
+    if (Object.keys(args).length === 0) return "";
+    return JSON.stringify(args, null, 2);
+  } catch { return String(args); }
+}
+
+// Copy to clipboard
+const copiedId = ref<string | null>(null);
+function copyToClipboard(text: string, id: string) {
+  const doCopy = navigator.clipboard
+    ? navigator.clipboard.writeText(text)
+    : new Promise<void>((resolve) => {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;left:-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        resolve();
+      });
+  doCopy.then(() => {
+    copiedId.value = id;
+    setTimeout(() => { if (copiedId.value === id) copiedId.value = null; }, 1500);
+  });
 }
 </script>
 
@@ -121,26 +202,105 @@ function escapeHtml(t: string): string {
             <div class="markdown-body" v-html="renderMarkdown(turn.user.content)" />
           </div>
         </div>
-        <div v-if="turn.assistant" class="msg assistant-msg">
-          <div class="msg-bubble assistant-bubble">
-            <div class="markdown-body" v-html="renderMarkdown(turn.assistant.content)" />
-          </div>
-        </div>
+        <template v-if="turn.assistants.length">
+          <template v-for="assistant in turn.assistants" :key="assistant.id">
+            <!-- Thinking block (collapsible) -->
+            <div v-if="assistant.thinking" class="thinking-block">
+              <div class="thinking-header" @click="toggleThinking(assistant.id)">
+                <ChevronRight :size="12" class="thinking-chevron" :class="{ expanded: expandedThinking.has(assistant.id) }" />
+                <Brain :size="12" />
+                <span class="thinking-label">Thinking</span>
+              </div>
+              <div v-if="expandedThinking.has(assistant.id)" class="thinking-content">
+                {{ assistant.thinking }}
+              </div>
+            </div>
+            <!-- Tool execution cards -->
+            <div v-if="assistant.toolExecutions?.length" class="tool-executions">
+              <div v-for="te in assistant.toolExecutions" :key="te.toolCallId" class="tool-card">
+                <div class="tool-card-header" @click="toggleTool(te.toolCallId)">
+                  <div class="tool-header-left">
+                    <ChevronRight :size="12" class="tool-chevron" :class="{ expanded: expandedTools.has(te.toolCallId) }" />
+                    <span class="tool-name">{{ te.toolName }}</span>
+                    <span v-if="getArgsPreview(te.toolName, te.args)" class="tool-args-preview">{{ getArgsPreview(te.toolName, te.args) }}</span>
+                  </div>
+                  <div class="tool-header-right">
+                    <span class="tool-status" :class="te.status">{{ te.status }}</span>
+                  </div>
+                </div>
+                <div v-if="expandedTools.has(te.toolCallId)" class="tool-card-body">
+                  <div v-if="formatArgs(te.args)" class="tool-args">{{ formatArgs(te.args) }}</div>
+                  <div v-if="te.output" class="tool-output">{{ te.output }}</div>
+                </div>
+              </div>
+            </div>
+            <!-- Assistant text bubble -->
+            <div v-if="assistant.content" class="msg assistant-msg">
+              <div class="msg-bubble assistant-bubble">
+                <div class="markdown-body" v-html="renderMarkdown(assistant.content)" />
+                <button class="copy-btn" :class="{ copied: copiedId === `msg-${assistant.id}` }" @click="copyToClipboard(assistant.content, `msg-${assistant.id}`)">
+                  <Check v-if="copiedId === `msg-${assistant.id}`" :size="12" />
+                  <Copy v-else :size="12" />
+                </button>
+              </div>
+            </div>
+          </template>
+        </template>
       </div>
 
-      <div v-if="isStreaming" class="msg assistant-msg streaming">
-        <div class="msg-bubble assistant-bubble" :class="{ 'thinking-bubble': !currentAssistantContent }">
-          <template v-if="currentAssistantContent">
+      <!-- Streaming state -->
+      <div v-if="isStreaming" class="turn streaming-turn">
+        <!-- Streaming thinking -->
+        <div v-if="currentThinking" class="thinking-block streaming">
+          <div class="thinking-header expanded">
+            <ChevronRight :size="12" class="thinking-chevron expanded" />
+            <Brain :size="12" />
+            <span class="thinking-label">Thinking</span>
+            <span class="thinking-dots-inline">
+              <span class="thinking-dot" />
+              <span class="thinking-dot" />
+              <span class="thinking-dot" />
+            </span>
+          </div>
+          <div class="thinking-content expanded">
+            {{ currentThinking }}
+          </div>
+        </div>
+        <!-- Streaming tool executions -->
+        <div v-if="toolExecutions?.length" class="tool-executions">
+          <div v-for="te in toolExecutions" :key="te.toolCallId" class="tool-card" :class="te.status">
+            <div class="tool-card-header" @click="toggleTool(`stream-${te.toolCallId}`)">
+              <div class="tool-header-left">
+                <ChevronRight :size="12" class="tool-chevron" :class="{ expanded: expandedTools.has(`stream-${te.toolCallId}`) }" />
+                <span class="tool-name">{{ te.toolName }}</span>
+                <span v-if="getArgsPreview(te.toolName, te.args)" class="tool-args-preview">{{ getArgsPreview(te.toolName, te.args) }}</span>
+              </div>
+              <div class="tool-header-right">
+                <span class="tool-status" :class="te.status">{{ te.status }}</span>
+              </div>
+            </div>
+            <div v-if="expandedTools.has(`stream-${te.toolCallId}`)" class="tool-card-body">
+              <div v-if="formatArgs(te.args)" class="tool-args">{{ formatArgs(te.args) }}</div>
+              <div v-if="te.output" class="tool-output">{{ te.output }}</div>
+            </div>
+          </div>
+        </div>
+        <!-- Streaming assistant text -->
+        <div v-if="currentAssistantContent" class="msg assistant-msg">
+          <div class="msg-bubble assistant-bubble">
             <div class="markdown-body" v-html="renderMarkdown(currentAssistantContent)" />
             <span class="cursor-blink" />
-          </template>
-          <template v-else>
+          </div>
+        </div>
+        <!-- Thinking dots when nothing else to show -->
+        <div v-if="!currentThinking && !currentAssistantContent && (!toolExecutions?.length)" class="msg assistant-msg">
+          <div class="msg-bubble assistant-bubble thinking-bubble">
             <div class="thinking-dots">
               <span class="thinking-dot" />
               <span class="thinking-dot" />
               <span class="thinking-dot" />
             </div>
-          </template>
+          </div>
         </div>
       </div>
     </div>
@@ -204,7 +364,7 @@ function escapeHtml(t: string): string {
 .assistant-msg { align-self:flex-start; }
 .system-msg { align-self:center; font-size:10px; color:var(--color-text-tertiary); background:var(--color-bg-muted); padding:2px 10px; border-radius:10px; }
 
-.msg-bubble { border-radius:12px; padding:8px 12px; line-height:1.5; font-size:13px; }
+.msg-bubble { border-radius:12px; padding:8px 12px; line-height:1.5; font-size:13px; position:relative; }
 .user-bubble { background:var(--color-accent-soft); border:1px solid color-mix(in srgb, var(--color-accent) 15%, transparent); }
 .assistant-bubble { background:var(--color-bg-panel); border:1px solid var(--color-border-subtle); }
 
@@ -217,6 +377,94 @@ function escapeHtml(t: string): string {
 .thinking-dot:nth-child(2) { animation-delay:0.2s; }
 .thinking-dot:nth-child(3) { animation-delay:0.4s; }
 @keyframes thinkBounce { 0%,80%,100%{ transform:scale(0.6); opacity:0.4; } 40%{ transform:scale(1); opacity:1; } }
+
+/* Copy button */
+.copy-btn { position:absolute; top:6px; right:6px; opacity:0; display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:none; background:var(--color-bg-muted); border-radius:var(--radius-sm); color:var(--color-text-tertiary); cursor:pointer; transition:opacity 0.15s, color 0.15s; }
+.msg-bubble:hover .copy-btn { opacity:0.6; }
+.copy-btn:hover { opacity:1 !important; }
+.copy-btn.copied { opacity:1 !important; color:var(--success); }
+
+/* Thinking block */
+.thinking-block {
+  background:var(--color-bg-muted);
+  border:1px solid var(--color-border-subtle);
+  border-radius:10px;
+  overflow:hidden;
+  align-self:flex-start;
+  max-width:90%;
+  font-size:13px;
+  transition:border-color 0.2s var(--ease);
+}
+.thinking-block:hover { border-color:var(--color-border-strong); }
+.thinking-header {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 12px; cursor:pointer; user-select:none;
+  font-size:12px; color:var(--color-text-tertiary);
+  transition:background 0.15s var(--ease);
+}
+.thinking-header:hover { background:var(--color-bg-hover); }
+.thinking-label { font-family:var(--font-family-mono); font-size:11px; }
+.thinking-chevron { transition:transform 0.2s var(--ease); opacity:0.4; flex-shrink:0; }
+.thinking-chevron.expanded { transform:rotate(90deg); }
+.thinking-content {
+  padding:0 12px 12px; white-space:pre-wrap;
+  font-style:italic; border-top:1px solid var(--color-border-subtle);
+  max-height:260px; overflow-y:auto; overscroll-behavior:contain;
+  font-size:12px; line-height:1.5; color:var(--color-text-secondary);
+}
+.thinking-content.expanded { display:block; }
+.thinking-dots-inline { display:flex; gap:3px; margin-left:4px; }
+.thinking-dots-inline .thinking-dot { width:4px; height:4px; }
+
+/* Tool execution cards */
+.tool-executions { display:flex; flex-direction:column; gap:4px; align-self:flex-start; max-width:90%; }
+.tool-card {
+  background:var(--color-bg-muted);
+  border:1px solid var(--color-border-subtle);
+  border-radius:10px;
+  overflow:hidden;
+  font-size:13px;
+  transition:border-color 0.2s var(--ease);
+}
+.tool-card:hover { border-color:var(--color-border-strong); }
+.tool-card-header {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:8px 12px; cursor:pointer; user-select:none;
+  transition:background 0.15s var(--ease);
+}
+.tool-card-header:hover { background:var(--color-bg-hover); }
+.tool-header-left { display:flex; align-items:center; gap:8px; min-width:0; }
+.tool-header-right { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+.tool-chevron { transition:transform 0.2s var(--ease); opacity:0.4; flex-shrink:0; }
+.tool-chevron.expanded { transform:rotate(90deg); }
+.tool-name { color:var(--color-accent); font-family:var(--font-family-mono); font-size:11px; }
+.tool-args-preview { color:var(--color-text-tertiary); font-family:var(--font-family-mono); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:300px; }
+.tool-status {
+  font-size:10px; padding:2px 7px; border-radius:var(--radius-pill);
+  text-transform:uppercase; letter-spacing:0.04em; flex-shrink:0;
+  display:flex; align-items:center; gap:4px;
+}
+.tool-status.pending { background:var(--color-bg-panel); color:var(--color-text-tertiary); border:1px solid var(--color-border-subtle); }
+.tool-status.pending::before { content:"○"; font-size:8px; }
+.tool-status.streaming { background:var(--color-accent); color:#fff; animation:pulse 1.5s infinite; }
+.tool-status.streaming::before { content:"●"; font-size:7px; }
+.tool-status.complete { background:var(--success-soft, rgba(74,154,106,0.1)); color:var(--success); border:1px solid rgba(74,154,106,0.2); }
+.tool-status.complete::before { content:"✓"; font-size:9px; }
+.tool-status.error { background:var(--danger-soft, rgba(217,92,92,0.1)); color:var(--danger); border:1px solid rgba(217,92,92,0.2); }
+.tool-status.error::before { content:"!"; font-size:9px; }
+@keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:0.7; } }
+.tool-card-body { border-top:1px solid var(--color-border-subtle); }
+.tool-args {
+  background:rgba(0,0,0,0.06); padding:10px 12px;
+  font-family:var(--font-family-mono); font-size:11px;
+  overflow-x:auto; white-space:pre-wrap;
+  border-bottom:1px solid var(--color-border-subtle);
+}
+[data-theme="dark"] .tool-args { background:rgba(0,0,0,0.2); }
+.tool-output {
+  padding:10px 12px; font-family:var(--font-family-mono); font-size:11px;
+  white-space:pre-wrap; overflow-x:auto; max-height:300px; overflow-y:auto;
+}
 
 .composer { flex-shrink:0; border-top:1px solid var(--color-border-subtle); background:var(--color-bg-panel); }
 .composer-box { display:flex; flex-direction:column; padding:10px 12px; gap:6px; }
@@ -242,5 +490,6 @@ function escapeHtml(t: string): string {
   .msg { max-width:95%; }
   .session-label { max-width:120px; }
   .composer-input { font-size:16px; }  /* prevent iOS zoom */
+  .tool-args-preview { max-width:140px; }
 }
 </style>

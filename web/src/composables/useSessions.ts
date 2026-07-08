@@ -1,4 +1,5 @@
 import { ref } from "vue";
+import type { Message, ToolExecution } from "./usePiConnection";
 
 export interface SessionInfo {
   id: string;
@@ -33,7 +34,7 @@ export function useSessions() {
     }
   }
 
-  async function loadMessages(filePath: string): Promise<any[]> {
+  async function loadMessages(filePath: string): Promise<Message[]> {
     try {
       const res = await fetch(
         `/api/load-session?path=${encodeURIComponent(filePath)}`,
@@ -41,12 +42,18 @@ export function useSessions() {
       const msgs = await res.json();
       if (Array.isArray(msgs)) {
         return msgs
-          .map((m: any, i: number) => ({
-            id: i,
-            role: m.role || "assistant",
-            content: extractMsgText(m),
-            timestamp: Date.now(),
-          }))
+          .map((m: any, i: number) => {
+            const thinking = extractMsgThinking(m);
+            const toolExecs = extractToolExecutions(m);
+            return {
+              id: i,
+              role: m.role || "assistant",
+              content: extractMsgText(m),
+              thinking: thinking || undefined,
+              toolExecutions: toolExecs.length > 0 ? toolExecs : undefined,
+              timestamp: Date.now(),
+            };
+          })
           .filter(
             (m: any) => m.role === "user" || m.role === "assistant",
           );
@@ -112,4 +119,49 @@ function extractMsgText(msg: any): string {
       .join("\n");
   }
   return "";
+}
+
+function extractMsgThinking(msg: any): string {
+  if (Array.isArray(msg.content)) {
+    return msg.content
+      .filter((b: any) => b.type === "thinking")
+      .map((b: any) => b.thinking)
+      .join("\n");
+  }
+  return "";
+}
+
+function extractToolExecutions(msg: any): ToolExecution[] {
+  const execs: ToolExecution[] = [];
+  if (!Array.isArray(msg.content)) return execs;
+  for (const block of msg.content) {
+    if (block.type === "tool_use") {
+      execs.push({
+        toolCallId: block.id || `tool-${execs.length}`,
+        toolName: block.name || "Tool",
+        args: block.input || {},
+        status: "complete",
+      });
+    } else if (block.type === "tool_result") {
+      const match = execs.find((t) => t.toolCallId === block.tool_use_id);
+      if (match) {
+        const isErr = block.is_error || false;
+        match.output = formatToolOutput(block.content);
+        match.isError = isErr;
+        match.status = isErr ? "error" : "complete";
+      }
+    }
+  }
+  return execs;
+}
+
+function formatToolOutput(result: any): string {
+  if (!result) return "";
+  if (typeof result === "string") return result;
+  if (result.content && Array.isArray(result.content)) {
+    return result.content
+      .map((b: any) => (b.type === "text" ? b.text : JSON.stringify(b)))
+      .join("\n");
+  }
+  try { return JSON.stringify(result, null, 2); } catch { return String(result); }
 }

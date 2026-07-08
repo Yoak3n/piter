@@ -12,8 +12,11 @@ const {
   isStreaming,
   statusText,
   currentAssistantContent,
+  currentThinking,
+  toolExecutions,
   wsSessions,
   sessionStatus,
+  currentModel,
   connectWebSocket,
   sendPrompt,
   sendCommand,
@@ -31,6 +34,10 @@ const sidebarOpen = ref(window.innerWidth > 640);
 const activeSessionPath = ref<string | null>(null);
 const sessionName = ref("");
 const modelId = ref("");
+// Sync model from WS events into the modelId ref
+watch(currentModel, (m) => {
+  if (m) modelId.value = m;
+});
 const mobileMode = ref(
   new URLSearchParams(window.location.search).get("mobile") === "1",
 );
@@ -100,6 +107,16 @@ onMounted(() => {
   fetchSessions();
 });
 
+// Auto-create a new session once WS connects with no active session.
+// This spawns a pi process so model info and session state are available immediately.
+let autoSessionCreated = false;
+watch(isRunning, (running) => {
+  if (running && !autoSessionCreated && !activeSessionPath.value) {
+    autoSessionCreated = true;
+    handleNewSession();
+  }
+});
+
 // Refresh session list when pi finishes processing (new session file created)
 watch(sessionStatus, (status) => {
   if (status === "idle") {
@@ -137,6 +154,8 @@ watch(sessionStatus, (status) => {
         :is-running="isRunning"
         :is-streaming="isStreaming"
         :current-assistant-content="currentAssistantContent"
+        :current-thinking="currentThinking"
+        :tool-executions="toolExecutions"
         :status-text="statusText"
         :session-name="sessionName"
         :model-name="modelId"

@@ -106,6 +106,12 @@ watch(() => props.sessionStatus, (status, oldStatus) => {
     models.value = [];
     fetchCurrentModel();
   }
+  if (status === "idle" && oldStatus === "running") {
+    // Also retry on idle — model info should be available after agent finishes
+    if (!props.modelId) {
+      fetchCurrentModel();
+    }
+  }
 });
 
 function handleClickOutside(e: MouseEvent) {
@@ -216,7 +222,7 @@ onUnmounted(() => document.removeEventListener("click", handleClickOutside));
 .model-dropdown {
   position: absolute;
   top: calc(100% + 4px);
-  left: 0;
+  right: 0;
   min-width: 220px;
   max-height: 280px;
   display: flex;
