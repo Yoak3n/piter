@@ -30,7 +30,6 @@ export function usePiConnection() {
   let reconnectAttempts = 0;
   const MAX_RECONNECT_ATTEMPTS = 3;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingControlRequests = new Map<string, { resolve: Function; reject: Function; timer: ReturnType<typeof setTimeout> }>();
 
   function getWsUrl(): string {
     const params = new URLSearchParams(window.location.search);
@@ -82,9 +81,9 @@ export function usePiConnection() {
 
     // ── Unwrap the event envelope ──
     // The reader thread wraps pi lifecycle events as:
-    //   {"type":"event", "event": {original pi event}, "sessionPath":..., "port":...}
+    //   {"type":"event", "event": {original pi event}, "sessionPath":..., "instanceId":...}
     // For response/other events it uses:
-    //   {"type": originalType, "payload": {original}, "sessionPath":..., "port":...}
+    //   {"type": originalType, "payload": {original}, "sessionPath":..., "instanceId":...}
     let data: Record<string, unknown>;
     if (raw.type === "event" && raw.event) {
       data = raw.event as Record<string, unknown>;

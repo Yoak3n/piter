@@ -5,16 +5,23 @@ import { Trash2, Plus, Search, X, RefreshCw } from "lucide-vue-next";
 export interface SessionInfo {
   id: string;
   label: string;
-  created_at: string;
-  file_path: string;
-  updated_at: number;
+  createdAt: string;
+  filePath: string;
+  updatedAt: number;
   preview: string;
   cwd: string;
+  // Runtime state (from backend session manager)
+  instanceId?: string;
+  state?: "active" | "idle" | "unloaded";
+  model?: string;
+  thinkingLevel?: string;
+  messageCount?: number;
+  messageSeq?: number;
 }
 
 export interface ProjectGroup {
   path: string;
-  dir_name: string;
+  dirName: string;
   sessions: SessionInfo[];
 }
 
@@ -22,6 +29,7 @@ const props = defineProps<{
   activeSessionPath: string | null;
   projects?: ProjectGroup[];
   sessionStatus?: "running" | "idle" | null;
+  mobileMode?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -37,6 +45,10 @@ const searchQuery = ref("");
 const collapsedProjects = ref<Set<string>>(new Set());
 const showDeleteConfirm = ref<string | null>(null);
 const deleteLoading = ref(false);
+
+function handleNewSession() {
+  emit("new-session");
+}
 
 const filteredProjects = computed(() => {
   const q = searchQuery.value.toLowerCase().trim();
@@ -161,7 +173,7 @@ onMounted(fetchSessions);
         <button
           class="btn btn-ghost btn-icon btn-sm"
           title="New session"
-          @click="emit('new-session')"
+          @click="handleNewSession"
         >
           <Plus :size="16" />
         </button>
@@ -229,13 +241,13 @@ onMounted(fetchSessions);
           <button
             class="project-header"
             :title="project.path"
-            @click="toggleProject(project.dir_name)"
+            @click="toggleProject(project.dirName)"
           >
             <span
               class="project-chevron"
-              :class="{ collapsed: collapsedProjects.has(project.dir_name) }"
+              :class="{ collapsed: collapsedProjects.has(project.dirName) }"
             >&#9660;</span>
-            <span class="project-name">{{ project.dir_name }}</span>
+            <span class="project-name">{{ project.dirName }}</span>
             <span class="project-count">{{ project.sessions.length }}</span>
             <button
               class="project-new-btn"
@@ -247,22 +259,30 @@ onMounted(fetchSessions);
           </button>
 
           <div
-            v-if="!collapsedProjects.has(project.dir_name)"
+            v-if="!collapsedProjects.has(project.dirName)"
             class="project-sessions"
           >
             <button
               v-for="session in project.sessions"
-              :key="session.file_path"
+              :key="session.filePath"
               class="session-item"
               :class="{
-                active: session.file_path === activeSessionPath,
+                active: session.filePath === activeSessionPath,
               }"
-              @click="emit('select-session', session.file_path)"
+              @click="emit('select-session', session.filePath)"
             >
               <div class="session-item-main">
                 <div class="session-title">
                   <span
-                    v-if="session.file_path === activeSessionPath && sessionStatus === 'running'"
+                    class="session-status-dot"
+                    :class="{
+                      'status-active': session.state === 'active',
+                      'status-idle': session.state === 'idle',
+                    }"
+                    :title="session.state || 'unloaded'"
+                  />
+                  <span
+                    v-if="session.filePath === activeSessionPath && sessionStatus === 'running'"
                     class="session-running-indicator"
                     title="Pi is processing..."
                   />
@@ -270,19 +290,19 @@ onMounted(fetchSessions);
                 </div>
                 <div class="session-meta">
                   <span class="session-time">{{
-                    formatTime(session.updated_at)
+                    formatTime(session.updatedAt)
                   }}</span>
                 </div>
               </div>
 
               <!-- Delete confirm -->
-              <template v-if="showDeleteConfirm === session.file_path">
+              <template v-if="showDeleteConfirm === session.filePath">
                 <div class="delete-confirm" @click.stop>
                   <span class="delete-confirm-text">Delete?</span>
                   <button
                     class="btn btn-sm btn-danger"
                     :disabled="deleteLoading"
-                    @click="handleDelete(session.file_path)"
+                    @click="handleDelete(session.filePath)"
                   >
                     Yes
                   </button>
@@ -298,7 +318,7 @@ onMounted(fetchSessions);
                 <button
                   class="session-delete-btn"
                   title="Delete session"
-                  @click.stop="showDeleteConfirm = session.file_path"
+                  @click.stop="showDeleteConfirm = session.filePath"
                 >
                   <Trash2 :size="12" />
                 </button>
@@ -594,6 +614,25 @@ onMounted(fetchSessions);
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
+}
+
+.session-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--color-text-tertiary);
+  opacity: 0.3;
+}
+
+.session-status-dot.status-active {
+  background: #22c55e;
+  opacity: 1;
+}
+
+.session-status-dot.status-idle {
+  background: #f59e0b;
+  opacity: 0.7;
 }
 
 .session-meta {

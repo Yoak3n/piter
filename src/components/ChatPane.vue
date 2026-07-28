@@ -115,6 +115,7 @@ function formatTool(c: string): string {
       <div class="flex-row gap-2">
         <span v-if="!isRunning" class="status-label" style="color:var(--color-danger);">{{ statusText }}</span>
         <span class="status-dot" :class="{ connected: isRunning, disconnected: !isRunning }" :title="isRunning ? 'Connected' : 'Disconnected'"></span>
+        <slot name="header-extra" />
         <button class="btn btn-ghost btn-icon btn-sm" @click="$emit('toggle-terminal')" :title="terminalOpen ? 'Hide terminal' : 'Show terminal'">
           <Terminal :size="13" />
         </button>

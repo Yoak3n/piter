@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod base;
 pub mod pi;
 use base::init;

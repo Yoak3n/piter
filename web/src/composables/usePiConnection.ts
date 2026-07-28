@@ -22,16 +22,22 @@ export interface Message {
 export interface SessionInfo {
   id: string;
   label: string;
-  created_at: string;
-  file_path: string;
-  updated_at: number;
+  createdAt: string;
+  filePath: string;
+  updatedAt: number;
   preview: string;
   cwd: string;
+  instanceId?: string;
+  state?: "active" | "idle" | "unloaded";
+  model?: string;
+  thinkingLevel?: string;
+  messageCount?: number;
+  messageSeq?: number;
 }
 
 export interface ProjectGroup {
   path: string;
-  dir_name: string;
+  dirName: string;
   sessions: SessionInfo[];
 }
 
@@ -43,7 +49,8 @@ export function usePiConnection() {
   const currentAssistantContent = ref("");
   const currentThinking = ref("");
   const toolExecutions = ref<ToolExecution[]>([]);
-  const activeSessionPath = ref<string | null>(null);
+  /** Active pi instance ID (our UUID, not pi's sessionFile). */
+  const activeInstanceId = ref<string | null>(null);
   const wsSessions = ref<ProjectGroup[]>([]);
   const sessionStatus = ref<"running" | "idle" | null>(null);
   const currentModel = ref<string>("");
@@ -102,19 +109,16 @@ export function usePiConnection() {
     try { return JSON.stringify(result, null, 2); } catch { return String(result); }
   }
 
-  function setActiveSessionPath(path: string | null) {
-    activeSessionPath.value = path;
+  function setActiveInstanceId(id: string | null) {
+    activeInstanceId.value = id;
   }
 
+  // ─── Event Handler ─────────────────────────────────────────────────
+
   function handlePiEvent(raw: Record<string, unknown>) {
-    // ── Broker-level meta events (not forwarded pi events) ──
-    if (raw.type === "capabilities") {
-      console.log("[broker] capabilities:", raw);
-      return;
-    }
-    if (raw.type === "control_response") {
-      return;
-    }
+    // ── Broker-level meta events ──
+    if (raw.type === "capabilities") return;
+    if (raw.type === "control_response") return;
     if (raw.type === "command_undeliverable") {
       const reason = raw.reason as string || "unknown";
       const command = raw.command as string || "unknown";
@@ -123,32 +127,41 @@ export function usePiConnection() {
       return;
     }
 
-    // ── Filter by active session ──
-    let data: Record<string, unknown>;
-    if (raw.sessionPath) {
-      if (activeSessionPath.value && raw.sessionPath !== activeSessionPath.value) return;
-      // Unwrap the event envelope:
-      //   {"type":"event", "event": {original}, ...}  — lifecycle events
-      //   {"type": originalType, "payload": {original}, ...}  — responses/other
-      if (raw.type === "event" && raw.event) {
-        data = raw.event as Record<string, unknown>;
-      } else if (raw.payload && typeof raw.payload === "object") {
-        data = raw.payload as Record<string, unknown>;
-      } else {
-        data = raw;
+    // ── Session snapshot (from gateway, not pi) ──
+    if (raw.type === "session_snapshot") {
+      const iid = raw.instanceId as string;
+      if (iid) {
+        activeInstanceId.value = iid;
       }
+      const msgs = raw.messages as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        loadMessagesFromSnapshot(msgs);
+      }
+      return;
+    }
+
+    // ── Filter by active instance ──
+    const eventInstanceId = raw.instanceId as string | undefined;
+    if (eventInstanceId && activeInstanceId.value && eventInstanceId !== activeInstanceId.value) {
+      return;
+    }
+
+    // ── Unwrap the event envelope ──
+    let data: Record<string, unknown>;
+    if (raw.type === "event" && raw.event) {
+      data = raw.event as Record<string, unknown>;
+    } else if (raw.payload && typeof raw.payload === "object") {
+      data = raw.payload as Record<string, unknown>;
     } else {
       data = raw;
     }
 
     switch (data.type) {
       case "pi_started":
-      case "connected":
         isRunning.value = true;
         statusText.value = "Connected";
-        // Pi process is ready — fetch current model info
-        sendCommand({ type: "get_state" });
         break;
+
       case "pi_exited":
       case "disconnected":
         isRunning.value = false;
@@ -156,26 +169,26 @@ export function usePiConnection() {
         statusText.value = "Disconnected";
         scheduleReconnect();
         break;
+
       case "error":
         addMessage("system", `[Error] ${data.error}`);
         break;
+
       case "agent_start":
         isStreaming.value = true;
         currentAssistantContent.value = "";
         currentThinking.value = "";
         toolExecutions.value = [];
         break;
-      case "agent_end":
-        // Extract model from embedded messages (the assistant message carries model info)
-        {
-          const msgs = data.messages as Array<Record<string, unknown>> | undefined;
-          if (Array.isArray(msgs)) {
-            for (const m of msgs) {
-              const modelId = m.model as string | undefined;
-              if (modelId) {
-                currentModel.value = modelId;
-                break;
-              }
+
+      case "agent_end": {
+        const msgs = data.messages as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(msgs)) {
+          for (const m of msgs) {
+            const modelId = m.model as string | undefined;
+            if (modelId) {
+              currentModel.value = modelId;
+              break;
             }
           }
         }
@@ -190,10 +203,10 @@ export function usePiConnection() {
           toolExecutions.value = [];
         }
         break;
+      }
+
       case "message_update": {
-        const evt = data.assistantMessageEvent as
-          | Record<string, unknown>
-          | undefined;
+        const evt = data.assistantMessageEvent as Record<string, unknown> | undefined;
         if (evt?.type === "text_delta") {
           currentAssistantContent.value += (evt.delta as string) || "";
         } else if (evt?.type === "thinking_delta") {
@@ -201,6 +214,7 @@ export function usePiConnection() {
         }
         break;
       }
+
       case "message_end": {
         const msg = data.message as Record<string, unknown> | undefined;
         if (msg?.model) {
@@ -219,6 +233,7 @@ export function usePiConnection() {
         }
         break;
       }
+
       case "turn_end": {
         if (currentThinking.value || currentAssistantContent.value || toolExecutions.value.length > 0) {
           addMessage("assistant", currentAssistantContent.value, {
@@ -231,17 +246,12 @@ export function usePiConnection() {
         }
         break;
       }
+
       case "tool_execution_start": {
         const toolCallId = data.toolCallId as string || `tool-${Date.now()}`;
         const toolName = data.toolName as string || "Tool";
         const args = (data.args as Record<string, unknown>) || {};
-        const te: ToolExecution = {
-          toolCallId,
-          toolName,
-          args,
-          status: "pending",
-        };
-        toolExecutions.value = [...toolExecutions.value, te];
+        toolExecutions.value = [...toolExecutions.value, { toolCallId, toolName, args, status: "pending" }];
         break;
       }
       case "tool_execution_update": {
@@ -265,31 +275,21 @@ export function usePiConnection() {
         );
         break;
       }
-      case "raw":
-        addMessage("system", `[raw] ${data.data}`);
-        break;
+
       case "sessions_list":
         wsSessions.value = (data.projects as ProjectGroup[]) || [];
         break;
+
       case "session_status":
         sessionStatus.value = (data.status as "running" | "idle") || null;
         break;
+
       case "response": {
         const cmd = data.command as string;
         if (cmd === "new_session" && data.success) {
-          const d = data.data as Record<string, unknown> | undefined;
-          if (d?.sessionFile) {
-            activeSessionPath.value = d.sessionFile as string;
-            // Session created — fetch current model info via WS
-            setTimeout(() => sendCommand({ type: "get_state" }), 300);
-          }
-        }
-        if (cmd === "switch_session" && data.success) {
-          const d = data.data as Record<string, unknown> | undefined;
-          if (d?.sessionFile) {
-            activeSessionPath.value = d.sessionFile as string;
-            // Re-fetch model info for the new session's pi process
-            setTimeout(() => sendCommand({ type: "get_state" }), 300);
+          const iid = data.instanceId as string | undefined;
+          if (iid) {
+            activeInstanceId.value = iid;
           }
         }
         if (cmd === "get_state" && data.success) {
@@ -308,63 +308,46 @@ export function usePiConnection() {
         }
         break;
       }
-      case "mirror_sync": {
-        const entries = data.entries as Array<Record<string, unknown>> | undefined;
-        if (entries && Array.isArray(entries)) {
-          const msgs: Message[] = [];
-          for (let i = 0; i < entries.length; i++) {
-            const e = entries[i];
-            if (e.type === "message" && e.message) {
-              const m = e.message as Record<string, unknown>;
-              const role = (m.role as Message["role"]) || "assistant";
-              const thinking = extractThinkingContent(m);
-              // Extract tool executions from message content blocks
-              const toolExecs: ToolExecution[] = [];
-              if (Array.isArray(m.content)) {
-                for (const block of m.content as Record<string, unknown>[]) {
-                  if (block.type === "tool_use") {
-                    toolExecs.push({
-                      toolCallId: block.id as string || `tool-${i}`,
-                      toolName: block.name as string || "Tool",
-                      args: (block.input as Record<string, unknown>) || {},
-                      status: "complete",
-                    });
-                  } else if (block.type === "tool_result") {
-                    // Find matching tool exec and set output
-                    const matchId = block.tool_use_id as string;
-                    const match = toolExecs.find((t) => t.toolCallId === matchId);
-                    if (match) {
-                      const isErr = block.is_error as boolean || false;
-                      match.output = formatToolOutput(block.content);
-                      match.isError = isErr;
-                      match.status = isErr ? "error" : "complete";
-                    }
-                  }
-                }
-              }
-              msgs.push({
-                id: i,
-                role,
-                content: extractTextContent(m),
-                thinking: thinking || undefined,
-                toolExecutions: toolExecs.length > 0 ? toolExecs : undefined,
-                timestamp: Date.now(),
-              });
-            }
-          }
-          messages.value = msgs;
-          msgId = msgs.length;
-          currentAssistantContent.value = "";
-          currentThinking.value = "";
-          toolExecutions.value = [];
-          isStreaming.value = false;
-        }
-        if (data.sessionFile)
-          activeSessionPath.value = data.sessionFile as string;
-        break;
-      }
     }
   }
+
+  // ─── Snapshot Loading ───────────────────────────────────────────────
+
+  function loadMessagesFromSnapshot(msgs: Array<Record<string, unknown>>) {
+    const parsed: Message[] = [];
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      const role = (m.role as Message["role"]) || "assistant";
+      const toolExecs: ToolExecution[] = [];
+      if (Array.isArray(m.content)) {
+        for (const block of m.content as Record<string, unknown>[]) {
+          if (block.type === "tool_use") {
+            toolExecs.push({
+              toolCallId: block.id as string || `tool-${i}`,
+              toolName: block.name as string || "Tool",
+              args: (block.input as Record<string, unknown>) || {},
+              status: "complete",
+            });
+          }
+        }
+      }
+      parsed.push({
+        id: i,
+        role,
+        content: extractTextContent(m),
+        thinking: extractThinkingContent(m) || undefined,
+        toolExecutions: toolExecs.length > 0 ? toolExecs : undefined,
+        timestamp: (m.timestamp as number) || Date.now(),
+      });
+    }
+    messages.value = parsed;
+    msgId = parsed.length;
+    currentAssistantContent.value = "";
+    currentThinking.value = "";
+    toolExecutions.value = [];
+  }
+
+  // ─── WebSocket ──────────────────────────────────────────────────────
 
   function connectWebSocket() {
     const url = getWsUrl();
@@ -401,39 +384,36 @@ export function usePiConnection() {
       reconnectTimer = setTimeout(() => connectWebSocket(), delay);
     } else {
       statusText.value = "Connection failed";
-      addMessage(
-        "system",
-        `WebSocket disconnected after ${MAX_RECONNECT_ATTEMPTS} retries. Reload to reconnect.`,
-      );
+      addMessage("system", `WebSocket disconnected after ${MAX_RECONNECT_ATTEMPTS} retries. Reload to reconnect.`);
     }
   }
+
+  // ─── Commands ───────────────────────────────────────────────────────
 
   function sendPrompt(text: string) {
     if (!text.trim()) return;
     addMessage("user", text);
     if (ws && ws.readyState === WebSocket.OPEN) {
-      const sessionPath = activeSessionPath.value;
-      if (sessionPath) {
-        // Wrap as broker_command for multi-session routing
-        ws.send(JSON.stringify({
-          type: "broker_command",
-          sessionId: sessionPath,
-          payload: { type: "prompt", message: text },
-        }));
-      } else {
-        ws.send(JSON.stringify({ type: "prompt", message: text }));
+      const iid = activeInstanceId.value;
+      if (!iid) {
+        addMessage("system", "No active session yet — please wait for the session to be ready.");
+        return;
       }
+      ws.send(JSON.stringify({
+        type: "broker_command",
+        instanceId: iid,
+        payload: { type: "prompt", message: text },
+      }));
     }
   }
 
   function sendCommand(cmd: Record<string, unknown>) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      // Wrap session-aware commands as broker_command for proper routing
-      const cmdType = cmd.type as string;
-      if ((cmdType === "new_session" || cmdType === "switch_session") && activeSessionPath.value) {
+      const iid = activeInstanceId.value;
+      if (iid) {
         ws.send(JSON.stringify({
           type: "broker_command",
-          sessionId: activeSessionPath.value,
+          instanceId: iid,
           payload: cmd,
         }));
       } else {
@@ -444,9 +424,10 @@ export function usePiConnection() {
     return false;
   }
 
-  function switchSession(sessionFile: string) {
+  function switchSession(instanceId: string) {
     clearMessages();
-    sendCommand({ type: "switch_session", sessionFile });
+    activeInstanceId.value = instanceId;
+    sendCommand({ type: "switch_session", instanceId });
   }
 
   function restartPi() {
@@ -487,7 +468,7 @@ export function usePiConnection() {
     currentAssistantContent,
     currentThinking,
     toolExecutions,
-    activeSessionPath,
+    activeInstanceId,
     wsSessions,
     sessionStatus,
     currentModel,
@@ -495,7 +476,7 @@ export function usePiConnection() {
     sendPrompt,
     sendCommand,
     switchSession,
-    setActiveSessionPath,
+    setActiveInstanceId,
     restartPi,
     disconnect,
     loadHistory,

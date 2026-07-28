@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri::Manager;
 
-pub use pi_server::PiBroker;
+pub use pi_server::GatewayState;
 use pi_server::resolve;
 
 // ─── Public API ──────────────────────────────────────────────────────────────

@@ -4,16 +4,22 @@ import type { Message, ToolExecution } from "./usePiConnection";
 export interface SessionInfo {
   id: string;
   label: string;
-  created_at: string;
-  file_path: string;
-  updated_at: number;
+  createdAt: string;
+  filePath: string;
+  updatedAt: number;
   preview: string;
   cwd: string;
+  instanceId?: string;
+  state?: "active" | "idle" | "unloaded";
+  model?: string;
+  thinkingLevel?: string;
+  messageCount?: number;
+  messageSeq?: number;
 }
 
 export interface ProjectGroup {
   path: string;
-  dir_name: string;
+  dirName: string;
   sessions: SessionInfo[];
 }
 

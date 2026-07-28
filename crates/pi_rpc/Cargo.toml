@@ -1,0 +1,9 @@
+[package]
+name = "pi_rpc"
+version = "0.1.0"
+edition = "2021"
+description = "Type-safe Rust SDK for the pi coding agent RPC protocol"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

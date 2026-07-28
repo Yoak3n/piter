@@ -1,9 +1,9 @@
-//! Utility functions: path handling, environment augmentation, diagnostics.
+//! Utility functions: path handling, environment augmentation.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::Value;
+use super::types::PiAgentSettings;
 
 // ─── Path & Environment ────────────────────────────────────────────────────
 
@@ -132,93 +132,34 @@ pub fn log_child_path_diagnostics(context: &str, path: &str) {
     );
 }
 
-// ─── Port & Network ────────────────────────────────────────────────────────
+// ─── Piter Data Directory ───────────────────────────────────────────────────
 
-/// Check if a port is in use.
-pub fn is_port_in_use(port: u16) -> bool {
-    std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
+/// Returns piter's own data directory.
+///
+/// - Windows: `%LOCALAPPDATA%/piter/`
+/// - macOS: `~/Library/Application Support/piter/`
+/// - Linux: `~/.local/share/piter/`
+pub fn piter_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".local").join("share"))
+        .join("piter")
 }
 
-/// Check if an IPv4 address is in a private (RFC 1918) range.
-pub fn is_private_ipv4(ip: std::net::IpAddr) -> bool {
-    if !ip.is_ipv4() || ip.is_loopback() {
-        return false;
-    }
-    match ip {
-        std::net::IpAddr::V4(v4) => match v4.octets() {
-            [10, _, _, _] => true,
-            [172, b, _, _] if (16..=31).contains(&b) => true,
-            [192, 168, _, _] => true,
-            _ => false,
-        },
-        _ => false,
-    }
-}
+// ─── Pi Agent Config Readers ──────────────────────────────────────────────
 
-// ─── Payload Parsing ────────────────────────────────────────────────────────
-
-/// Extract session id from a payload.
-pub fn extract_session_id(payload: &Value) -> Option<&str> {
-    payload
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .or_else(|| payload.get("sessionFile").and_then(Value::as_str))
-}
-
-// ─── Session File Helpers ──────────────────────────────────────────────────
-
-pub fn get_sessions_dir() -> PathBuf {
+/// Returns the Pi agent config directory (`~/.pi/agent/`).
+pub fn get_pi_agent_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".pi")
         .join("agent")
-        .join("sessions")
 }
 
-/// Decode a pi-encoded project directory name back to a path.
-/// pi encodes `E:\Project\RustProject\piter` as `--E--Project-RustProject-piter--`.
-/// Rule: `--` prefix/suffix, `:\` → `--`, `\` → `-`.
-pub fn decode_project_name(encoded: &str) -> String {
-    let trimmed = encoded
-        .strip_prefix("--")
-        .and_then(|s| s.strip_suffix("--"))
-        .unwrap_or(encoded);
-    // First "--" separates drive letter from path
-    if let Some(pos) = trimmed.find("--") {
-        let drive = &trimmed[..pos];
-        let rest = &trimmed[pos + 2..];
-        format!("{}:\\{}", drive, rest.replace('-', "\\"))
-    } else {
-        trimmed.replace('-', "\\")
-    }
-}
-
-/// Encode a filesystem path into pi's project directory name format.
-/// `E:\Project\RustProject\piter` → `--E--Project-RustProject-piter--`.
-pub fn encode_project_name(path: &str) -> String {
-    let step1 = path.replace(":\\", "--");
-    let step2 = step1.replace('\\', "-");
-    format!("--{}--", step2)
-}
-
-pub fn format_timestamp(secs: u64) -> String {
-    use chrono::{DateTime, Utc};
-    let dt = DateTime::from_timestamp(secs as i64, 0).unwrap_or_else(|| Utc::now());
-    dt.to_rfc3339()
-}
-
-/// Generate an SVG QR code from a string.
-pub fn generate_qr_svg(data: &str) -> String {
-    use qrcode::QrCode;
-    use qrcode::render::svg as qr_svg;
-    match QrCode::new(data) {
-        Ok(code) => {
-            code.render()
-                .min_dimensions(200, 200)
-                .dark_color(qr_svg::Color("#000000"))
-                .light_color(qr_svg::Color("#ffffff"))
-                .build()
-        }
-        Err(_) => String::new(),
-    }
+/// Read Pi's settings.json directly from disk — no Pi process needed.
+pub fn read_pi_settings() -> Result<PiAgentSettings, String> {
+    let path = get_pi_agent_dir().join("settings.json");
+    let json = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    serde_json::from_str(&json)
+        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
 }

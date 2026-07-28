@@ -6,6 +6,7 @@ const routes = [
   { path: "/", component: ChatView },
   { path: "/chat", component: ChatView },
   { path: "/desktop", component: DesktopView },
+  { path: "/admin", component: () => import("../views/AdminView.vue") },
 ];
 
 const router = createRouter({

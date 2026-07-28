@@ -91,6 +91,19 @@ async function fetchCurrentModel(retry = true) {
   }
   fetchModelAttempts = 0;
 
+  // First try reading Pi settings from disk — no Pi process needed
+  try {
+    const res = await fetch("/api/pi/settings");
+    const data = await res.json();
+    if (data.success && data.default_model) {
+      emit("select-model", data.default_model);
+      return;
+    }
+  } catch {
+    // fall through to RPC method
+  }
+
+  // Fallback: ask running Pi process via RPC
   const attempt = async () => {
     try {
       const res = await fetch("/api/rpc", {
@@ -102,12 +115,11 @@ async function fetchCurrentModel(retry = true) {
       if (data.success && data.data?.model?.id) {
         emit("select-model", data.data.model.id);
         unavailable.value = false;
-        return; // success — stop retrying
+        return;
       }
     } catch {
       // ignore
     }
-    // Retry with increasing delay if pi process is still starting up
     fetchModelAttempts++;
     if (retry && fetchModelAttempts < MAX_FETCH_ATTEMPTS) {
       fetchModelTimer = setTimeout(attempt, 800 * fetchModelAttempts);

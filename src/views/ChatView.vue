@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
+import { useRouter } from "vue-router";
+import { Settings } from "lucide-vue-next";
 import ChatPane from "../components/ChatPane.vue";
+import LanShare from "../components/LanShare.vue";
 import { usePiConnection } from "../composables/usePiConnection";
+
+const router = useRouter();
 
 const {
   messages, isRunning, isStreaming, statusText, currentAssistantContent,
@@ -33,7 +38,14 @@ onMounted(() => {
       @toggle-sidebar="() => {}"
       @toggle-drawer="() => {}"
       @toggle-terminal="() => {}"
-    />
+    >
+      <template #header-extra>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Settings" @click="router.push('/admin')">
+          <Settings :size="13" />
+        </button>
+        <LanShare />
+      </template>
+    </ChatPane>
   </div>
 </template>
 
