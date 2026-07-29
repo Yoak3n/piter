@@ -71,20 +71,16 @@ onMounted(() => emit("refresh"));
         </div>
       </div>
 
-      <div class="status-card">
-        <div class="status-card-label">Pi Instance</div>
-        <div class="status-card-value">
-          <span v-if="status && status.pi_instance_id" class="status-card-mono">{{ status.pi_instance_id.slice(0, 8) }}</span>
-          <span v-else class="status-card-muted">—</span>
+      <div class="status-card status-card-wide">
+        <div class="status-card-label">Active Sessions ({{ status?.active_sessions.length ?? 0 }})</div>
+        <div v-if="status && status.active_sessions.length" class="session-list">
+          <div v-for="s in status.active_sessions" :key="s.instance_id" class="session-item">
+            <span class="status-card-mono">{{ s.instance_id.slice(0, 8) }}</span>
+            <span class="badge" :class="s.state === 'running' ? 'badge-success' : 'badge-muted'">{{ s.state }}</span>
+            <span class="status-card-path">{{ s.cwd }}</span>
+          </div>
         </div>
-      </div>
-
-      <div class="status-card">
-        <div class="status-card-label">Session</div>
-        <div class="status-card-value">
-          <span v-if="status && status.pi_session_path" class="status-card-path">{{ status.pi_session_path }}</span>
-          <span v-else class="status-card-muted">—</span>
-        </div>
+        <div v-else class="status-card-muted">No active sessions</div>
       </div>
 
       <div class="status-card">
@@ -125,7 +121,7 @@ onMounted(() => emit("refresh"));
     <div class="info-block" v-if="status">
       <div class="info-row">
         <span class="info-key">WebSocket</span>
-        <code class="info-value">{{ status.broker_url }}</code>
+        <code class="info-value">{{ status.broker_ws_url }}</code>
       </div>
       <div class="info-row">
         <span class="info-key">HTTP</span>
@@ -206,6 +202,23 @@ onMounted(() => emit("refresh"));
 
 .status-card-muted {
   color: var(--text-tertiary);
+}
+
+.status-card-wide {
+  grid-column: 1 / -1;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-size-caption);
 }
 
 .control-row {

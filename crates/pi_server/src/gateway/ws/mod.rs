@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 
 use super::GatewayState;
 use crate::broker::types::PROTOCOL_VERSION;
-use helper::{extract_cwd, extract_project_id, resolve_command_instance};
+use helper::{extract_cwd, resolve_command_instance};
 
 pub async fn ws_handler(
     ws: axum::extract::WebSocketUpgrade,
@@ -126,15 +126,28 @@ fn route_ui_message(
             notify_undeliverable(client_tx, &value, "missing_or_invalid_cwd");
             return;
         };
-        let project_id = extract_project_id(&value);
+        let name = value.pointer("/payload/name").and_then(Value::as_str)
+            .or_else(|| value.get("name").and_then(Value::as_str))
+            .unwrap_or("New Project");
 
         match super::session_manager::SessionManager::create_session(
-            &state.session_manager, state, &cwd, "New Session",
-            project_id.as_deref(), client_id,
+            &state.session_manager, state, &cwd, name, client_id,
         ) {
             Ok(instance_id) => {
                 // Immediately push updated sessions list
                 super::push_sessions_list_to_clients(state);
+
+                // Fire-and-forget get_state so we learn sessionId/sessionFile/model ASAP.
+                // The response is handled by the event loop (mod.rs §1c).
+                {
+                    let instances = state.inner.instances.lock();
+                    if let Some(inst) = instances.get(&instance_id) {
+                        if let Some(tx) = &inst.stdin_tx {
+                            let _ = tx.send(serde_json::json!({"type": "get_state"}).to_string());
+                        }
+                    }
+                }
+
                 // Send snapshot (empty for new session)
                 let snapshot = json!({
                     "type": "session_snapshot",
@@ -195,41 +208,51 @@ fn route_ui_message(
             super::session_manager::SessionResult::NeedSpawn { .. } => {
                 // Session exists in DB but not running — spawn with persisted instance_id
                 log::info!("[gateway] switch_session: instance {} not running, spawning", iid);
-                // Get cwd from frontend command, or look up from DB
-                let cwd = extract_cwd(&value).or_else(|| {
-                    state.db.all_sessions().into_iter()
-                        .find(|s| s.instance_id == iid)
-                        .map(|s| s.cwd)
-                });
+                // Get cwd and session_path from DB
+                let db_session = state.db.all_sessions().into_iter()
+                    .find(|s| s.instance_id == iid);
+                let cwd = extract_cwd(&value).or_else(|| db_session.as_ref().map(|s| s.cwd.clone()));
                 let Some(cwd) = cwd else {
                     log::warn!("[gateway] switch_session: no cwd for instance {}", iid);
                     notify_undeliverable(client_tx, &value, "missing_cwd");
                     return;
                 };
+                let session_path = db_session.and_then(|s| s.session_path);
                 let extensions = super::project::resolve_project_extensions(&state.db, &cwd, &cwd);
-                // Reuse the persisted instance_id
-                match state.spawn().cwd(&cwd).extensions(&extensions).id(iid).run() {
+                // Load existing messages from session file (if it exists)
+                let existing_messages: Vec<Value> = session_path.as_ref()
+                    .map(|sp| super::handlers::session::load_session(sp))
+                    .unwrap_or_default();
+                let msg_seq = existing_messages.len() as u64;
+                // Reuse the persisted instance_id, resume existing session file
+                let mut builder = state.spawn().cwd(&cwd).extensions(&extensions).id(iid);
+                if let Some(ref sp) = session_path {
+                    builder = builder.session_path(sp);
+                }
+                match builder.run() {
                     Ok(new_iid) => {
                         // Register in routing table
                         state.inner.routes.lock().insert(new_iid.clone(), new_iid.clone());
+                        // Register in session manager with existing messages
+                        super::session_manager::SessionManager::register_instance(
+                            &state.session_manager, &new_iid, &cwd, client_id,
+                        );
+                        // Inject loaded messages into the managed session
                         {
-                            let mut active = state.inner.active_instance.lock();
-                            if active.is_none() {
-                                *active = Some(new_iid.clone());
+                            let mut mgr = state.session_manager.lock();
+                            if let Some(session) = mgr.sessions.get_mut(&new_iid) {
+                                session.messages = existing_messages.clone();
+                                session.message_seq = msg_seq;
                             }
                         }
-                        // Register in session manager
-                        super::session_manager::SessionManager::register_instance(
-                            &state.session_manager, state, &new_iid, &cwd, client_id,
-                        );
-                        // Immediately push updated sessions list (don't wait for event loop)
+                        // Immediately push updated sessions list
                         super::push_sessions_list_to_clients(state);
-                        // Tell frontend the instance is ready (same id)
+                        // Tell frontend the instance is ready with loaded messages
                         let snapshot = serde_json::json!({
                             "type": "session_snapshot",
                             "instanceId": new_iid,
-                            "messages": [],
-                            "messageSeq": 0,
+                            "messages": existing_messages,
+                            "messageSeq": msg_seq,
                         });
                         let _ = client_tx.send(snapshot.to_string());
                         // Forward switch_session after pi starts
@@ -393,8 +416,8 @@ fn dispatch_gateway_command(
             Ok(serde_json::json!({ "projects": projects }))
         }
         "delete_session" => {
-            let path = data.get("path").and_then(Value::as_str).ok_or("missing path")?;
-            super::handlers::session::delete_session(path, state)?;
+            let iid = data.get("instanceId").or_else(|| data.get("path")).and_then(Value::as_str).ok_or("missing instanceId")?;
+            super::handlers::session::delete_session(iid, state)?;
             Ok(json!({}))
         }
         "rename_session" => {

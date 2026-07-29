@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -78,6 +78,8 @@ pub struct ManagedSession {
     pub partial_message: Option<Value>,
     pub subscribers: HashSet<u64>,
     pub last_active: Instant,
+    /// Wall-clock epoch seconds for the last activity (for API responses).
+    pub last_active_epoch: u64,
     pub message_seq: u64,
     pub pi_state: Option<PiSessionState>,
     /// Auto-generated or user-set session name.
@@ -87,7 +89,7 @@ pub struct ManagedSession {
     /// Whether a title has been generated/set.
     title_set: bool,
     /// Captured user message texts for title generation.
-    user_messages: Vec<String>,
+    title_candidates: Vec<String>,
 }
 
 pub struct SessionManager {
@@ -126,6 +128,14 @@ pub enum SessionResult {
     },
 }
 
+/// Current wall-clock epoch seconds.
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 // ─── Implementation ─────────────────────────────────────────────────────────
 
 impl SessionManager {
@@ -149,54 +159,36 @@ impl SessionManager {
         sm: &Arc<parking_lot::Mutex<SessionManager>>,
         gw: &GatewayState,
         cwd: &str,
-        _name: &str,
-        project_id: Option<&str>,
+        name: &str,
         client_id: u64,
     ) -> Result<String, String> {
-        // Auto-create project if none specified and cwd doesn't match an existing one
-        let effective_project_id = match project_id {
-            Some(pid) => Some(pid.to_string()),
-            None => {
-                // Check if a project exists for this cwd
-                if let Some(existing) = gw.db.find_project_by_cwd(cwd) {
-                    Some(existing.id)
-                } else {
-                    // Auto-create a project from the cwd
-                    let dir_name = std::path::Path::new(cwd)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(cwd);
-                    match super::project::create_project(&gw.db, dir_name, cwd, Vec::new()) {
-                        Ok(proj) => {
-                            log::info!("[session_manager] auto-created project '{}' for cwd={}", proj.name, cwd);
-                            Some(proj.id)
-                        }
-                        Err(e) => {
-                            log::warn!("[session_manager] auto-create project failed: {}", e);
-                            None
-                        }
-                    }
+        // Resolve project: reuse existing (cwd, name) or create a new one
+        let effective_project_id = if let Some(existing) = gw.db.find_project_by_cwd_and_name(cwd, name) {
+            existing.id
+        } else {
+            match super::project::create_project(&gw.db, name, cwd, Vec::new()) {
+                Ok(proj) => {
+                    log::info!("[session_manager] auto-created project '{}' for cwd={}", proj.name, cwd);
+                    proj.id
+                }
+                Err(e) => {
+                    log::warn!("[session_manager] auto-create project failed: {}", e);
+                    return Err(e.to_string());
                 }
             }
         };
 
-        let extensions = effective_project_id
-            .as_ref()
-            .map(|pid| super::project::resolve_project_extensions(&gw.db, pid, cwd))
-            .unwrap_or_default();
+        let extensions = super::project::resolve_project_extensions(&gw.db, &effective_project_id, cwd);
 
         let instance_id = super::handlers::pi::spawn_persistent_for_gateway(gw, cwd, &extensions)?;
 
         // Register session in DB (session_path filled later by get_state response)
-        let _ = gw.db.register_session(&instance_id, cwd, effective_project_id.as_deref());
+        let _ = gw.db.register_session(&instance_id, cwd, Some(effective_project_id.as_str()));
         // the actual file via get_state response in the event loop.
 
         {
             let mut mgr = sm.lock();
-
-            if let Some(ref pid) = effective_project_id {
-                mgr.pending_links.insert(instance_id.clone(), pid.clone());
-            }
+            mgr.pending_links.insert(instance_id.clone(), effective_project_id);
 
             mgr.sessions.insert(
                 instance_id.clone(),
@@ -212,12 +204,13 @@ impl SessionManager {
                         s
                     },
                     last_active: Instant::now(),
+                    last_active_epoch: now_epoch(),
                     message_seq: 0,
                     pi_state: None,
                     session_name: None,
                     turn_count: 0,
                     title_set: false,
-                    user_messages: Vec::new(),
+                    title_candidates: Vec::new(),
                 },
             );
             mgr.dirty = true;
@@ -250,6 +243,7 @@ impl SessionManager {
                     s.subscribers.insert(client_id);
                     s.state = SessionState::Active;
                     s.last_active = Instant::now();
+                    s.last_active_epoch = now_epoch();
                 });
 
                 SessionResult::Switched {
@@ -269,7 +263,6 @@ impl SessionManager {
     /// Register a newly spawned instance (for switch_session NeedSpawn path).
     pub fn register_instance(
         sm: &Arc<parking_lot::Mutex<SessionManager>>,
-        gw: &GatewayState,
         instance_id: &str,
         cwd: &str,
         client_id: u64,
@@ -290,22 +283,19 @@ impl SessionManager {
                         s
                     },
                     last_active: Instant::now(),
+                    last_active_epoch: now_epoch(),
                     message_seq: 0,
                     pi_state: None,
                     session_name: None,
                     turn_count: 0,
                     title_set: false,
-                    user_messages: Vec::new(),
+                    title_candidates: Vec::new(),
                 },
             );
             mgr.dirty = true;
         }
 
         // Routes registered from get_state response
-        let mut active = gw.inner.active_instance.lock();
-        if active.is_none() {
-            *active = Some(instance_id.to_string());
-        }
     }
 
     // ── Activate / Deactivate ──────────────────────────────────────────
@@ -318,6 +308,7 @@ impl SessionManager {
                 let was_idle = matches!(session.state, SessionState::Idle { .. });
                 session.subscribers.insert(client_id);
                 session.last_active = now;
+                session.last_active_epoch = now_epoch();
                 session.state = SessionState::Active;
 
                 if was_idle {
@@ -383,6 +374,7 @@ impl SessionManager {
         }
 
         session.last_active = Instant::now();
+        session.last_active_epoch = now_epoch();
 
         let tracked: TrackedEvent = serde_json::from_value(event.clone()).ok()?;
 
@@ -413,7 +405,7 @@ impl SessionManager {
                     if role == "user" && !session.title_set {
                         let text = extract_message_text(m);
                         if text.len() >= 10 {
-                            session.user_messages.push(text);
+                            session.title_candidates.push(text);
                         }
                     }
                     session.messages.push(m.clone());
@@ -440,9 +432,9 @@ impl SessionManager {
                     session.turn_count += 1;
                     if !session.title_set
                         && session.turn_count >= 2
-                        && !session.user_messages.is_empty()
+                        && !session.title_candidates.is_empty()
                     {
-                        if let Some(title) = generate_session_title(&session.user_messages) {
+                        if let Some(title) = generate_session_title(&session.title_candidates) {
                             log::info!(
                                 "[session_manager] auto-title for {}: {}",
                                 session.instance_id, title
@@ -641,15 +633,6 @@ pub fn spawn_cleanup_task(
                     use std::sync::atomic::Ordering;
                     inst.running.store(false, Ordering::SeqCst);
                     let _ = inst.child.kill();
-
-                    let mut active = inner.active_instance.lock();
-                    if active.as_deref() == Some(iid.as_str()) {
-                        *active = instances
-                            .iter()
-                            .filter(|(_, i)| i.persistent)
-                            .map(|(id, _)| id.clone())
-                            .next();
-                    }
                 }
             }
 

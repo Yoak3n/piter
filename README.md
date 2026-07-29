@@ -1,200 +1,169 @@
-# Tauri + Vue + TypeScript 模板
+# Piter
 
-基于 Tauri 2.x + Vue 3 + TypeScript 的桌面应用开发模板，内置了窗口管理、系统托盘、轻量模式等常用功能。
-
-## 技术栈
-
-- **前端**: Vue 3 + Vite + TypeScript
-- **后端**: Tauri 2.x + Rust
-- **包管理**: pnpm (Workspace 模式)
-
-## 自带功能特性
-
-### 窗口管理系统
-
-完整的窗口生命周期管理，支持状态追踪和多窗口扩展。
-
-**窗口状态** (`src-tauri/src/base/window/schema.rs`):
-- `VisibleFocused` - 可见且有焦点
-- `Minimized` - 最小化
-- `Hidden` - 隐藏
-- `NotExist` - 不存在
-
-**核心操作** (`src-tauri/src/base/window/manager.rs`):
-- `show_window()` - 显示窗口（自动处理创建/激活/恢复）
-- `close_window()` - 关闭窗口（实际隐藏到托盘）
-- `toggle_window()` - 切换窗口显示状态
-- `destroy_window()` - 销毁窗口释放资源
-
-**窗口配置** (`src-tauri/src/base/window/config.rs`):
-```rust
-// 可配置项
-inner_size: (800.0, 600.0),      // 窗口大小
-min_inner_size: (400.0, 80.0),   // 最小大小
-decorations: true,                // 是否显示标题栏
-transparent: false,               // 是否透明
-always_on_top: false,             // 是否置顶
-skip_taskbar: false,              // 是否隐藏任务栏图标
-float: false,                     // 是否启用浮动定位
-```
-
-**浮动窗口定位** (`src-tauri/src/base/window/position.rs`):
-- 基于鼠标位置自动定位
-- 多显示器支持
-- 自动边界检测
-
-### 系统托盘
-
-预配置的系统托盘功能 (`src-tauri/src/base/tray.rs`):
-- **Show/Hide** - 显示/隐藏主窗口
-- **AutoStart** - 开机自启开关（仅桌面端）
-- **Quit** - 退出应用
-- 左键点击托盘图标切换窗口显示
-
-### 轻量模式
-
-自动资源管理机制 (`src-tauri/src/base/lightweight.rs`):
-- 所有窗口关闭后启动 10 分钟计时器
-- 超时后自动销毁所有窗口，进入轻量模式
-- 窗口获得焦点时自动取消计时器
-- 最大程度节省系统资源
-
-### 开机自启
-
-集成 `tauri-plugin-autostart` 插件（仅桌面端）:
-- 通过托盘菜单切换
-- macOS 使用 LaunchAgent 方式
-
-### 定时任务系统
-
-基于 `delay_timer` 的任务调度 (`src-tauri/src/base/timer.rs`):
-- 全局单例 Timer
-- 原子操作保证线程安全
-- 每分钟自动刷新任务
-
-### 全局状态管理
-
-- `Handle` - 全局 AppHandle 单例 (`src-tauri/src/base/handle.rs`)
-- `AppState` - 应用状态管理 (`src-tauri/src/base/state.rs`)
-- 使用 `parking_lot::Mutex` 和 `once_cell::OnceCell` 保证线程安全
+Piter 是一个 AI 编程助手客户端，以 Web UI 和 Tauri 桌面应用两种形式提供，通过 WebSocket + REST API 驱动后端管理的 pi coding agent 进程。
 
 ## 项目结构
 
 ```
 ├── crates/
-│   └── addons/          # Rust 扩展 crate
-├── src/                 # Vue 前端代码
-│   ├── App.vue
-│   └── main.ts
-├── src-tauri/           # Tauri 后端代码
-│   ├── capabilities/    # 权限配置
-│   ├── icons/           # 应用图标
+│   ├── pi_rpc/            # Pi RPC 协议类型定义（命令、事件、消息、模型）
+│   └── pi_server/         # 核心后端服务
+│       ├── src/
+│       │   ├── broker/    # Pi 进程管理（spawn、生命周期、子进程 I/O）
+│       │   ├── gateway/   # Gateway 核心
+│       │   │   ├── handlers/  # REST API 处理器
+│       │   │   │   ├── extensions.rs
+│       │   │   │   ├── mod.rs
+│       │   │   │   ├── pi.rs
+│       │   │   │   ├── project.rs
+│       │   │   │   ├── session.rs
+│       │   │   │   └── system.rs
+│       │   │   ├── ws/        # WebSocket 消息路由
+│       │   │   ├── db.rs      # SQLite 数据库
+│       │   │   ├── mod.rs     # Gateway 状态定义与事件循环
+│       │   │   ├── project.rs # 项目管理
+│       │   │   └── session_manager.rs  # 会话内存管理、空闲清理、自动命名
+│       │   ├── lib.rs
+│       │   └── resolve.rs     # Pi 二进制文件查找与下载
+│       └── Cargo.toml
+├── web/                   # 独立 Web 前端（轻量版，无 Tauri 依赖）
 │   └── src/
-│       ├── base/
-│       │   ├── window/  # 窗口管理模块
-│       │   ├── cmd.rs   # Tauri 命令定义
-│       │   ├── handle.rs
-│       │   ├── init.rs  # 初始化配置
-│       │   ├── lightweight.rs
-│       │   ├── state.rs
-│       │   ├── timer.rs
-│       │   └── tray.rs
-│       ├── lib.rs
-│       └── main.rs
-├── Cargo.toml           # Rust Workspace 配置
-├── package.json
-└── vite.config.ts
+│       ├── components/    # Vue 组件（ChatPane、SessionSidebar、ModelSelector 等）
+│       ├── composables/   # Vue 组合式函数（usePiConnection、useSessions）
+│       ├── types/         # TypeScript 类型定义
+│       └── utils/         # 工具函数
+├── src/                   # Tauri 桌面前端（完整版，含 Admin 面板）
+│   └── src/
+│       ├── components/    # Vue 组件（ChatPane、LanShare、Admin 子组件）
+│       ├── composables/   # Vue 组合式函数（useAdmin、usePiConnection）
+│       └── views/         # 页面视图（ChatView、AdminView、DesktopView）
+├── src-tauri/             # Tauri 后端
+│   └── src/
+│       ├── admin/         # 管理面板命令
+│       ├── base/          # 窗口管理、系统托盘、轻量模式、定时任务
+│       └── pi/            # Pi 二进制文件解析与 Tauri 集成
+├── public/
+├── scripts/
+│   └── pi-version.json    # 锁定的 pi 版本号
+└── Cargo.toml             # Rust Workspace 配置
 ```
 
-## 需要配置的地方
+## 技术栈
 
-### 1. 应用标识符
+| 层 | 技术 |
+|----|------|
+| 桌面壳 | Tauri 2.x |
+| 前端 | Vue 3 + Vite + TypeScript |
+| 后端 | Rust (axum + tokio) |
+| 数据库 | SQLite (rusqlite) |
+| 通信 | WebSocket + REST API |
+| 包管理 | pnpm (workspace) |
 
-修改 `src-tauri/tauri.conf.json`:
-```json
-{
-  "identifier": "com.your-company.your-app"
-}
+## 架构概览
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        客户端层                                  │
+│  ┌──────────────┐    ┌──────────────┐                           │
+│  │  Tauri 桌面   │    │   Web 前端    │                          │
+│  │  (src/)       │    │  (web/src/)   │                          │
+│  └──────┬───────┘    └──────┬───────┘                           │
+│         │  HTTP / WS        │  HTTP / WS                        │
+├─────────┼────────────────────┼───────────────────────────────────┤
+│         ▼                    ▼                                   │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                   pi_server (Gateway)                    │    │
+│  │  ┌──────────┐  ┌──────────────┐  ┌──────────────────┐   │    │
+│  │  │ REST API │  │  WebSocket   │  │  Event Loop      │   │    │
+│  │  │ Handlers │  │  Router      │  │  (pi ↔ clients)  │   │    │
+│  │  └────┬─────┘  └──────┬───────┘  └────────┬─────────┘   │    │
+│  │       │               │                    │             │    │
+│  │       ▼               ▼                    ▼             │    │
+│  │  ┌──────────┐  ┌──────────────────────────────────┐      │    │
+│  │  │   SQLite  │  │       SessionManager             │      │    │
+│  │  │   (DB)    │  │  (内存会话状态、消息缓存、空闲清理)│      │    │
+│  │  └──────────┘  └──────────────────────────────────┘      │    │
+│  │                                                          │    │
+│  │  ┌──────────────────────────────────────────────────┐    │    │
+│  │  │              Broker (进程管理)                     │    │    │
+│  │  │  spawn → stdin_tx ──→ pi 子进程 ──→ stdout 事件流 │    │    │
+│  │  └──────────────────────────────────────────────────┘    │    │
+│  └──────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2. 窗口配置
+Gateway 负责管理多个 pi coding agent 进程实例，每个实例对应一个会话（Session）。前端通过 WebSocket 与 Gateway 实时通信，Gateway 负责将命令转发给对应的 pi 进程，并将 pi 的事件流广播回前端。
 
-修改 `src-tauri/src/base/window/config.rs` 中的 `WindowConfig::new()`:
-```rust
-WindowType::Main => Self {
-    inner_size: (1024.0, 768.0),  // 调整默认窗口大小
-    decorations: true,             // false 可隐藏标题栏
-    // ... 其他配置
-}
-```
+## 核心功能
 
-### 3. 添加新窗口类型
+### 会话管理
 
-在 `src-tauri/src/base/window/schema.rs` 中扩展 `WindowType` 枚举:
-```rust
-pub enum WindowType {
-    Main,
-    Settings,  // 新增
-}
-```
+- **创建会话**：指定工作目录（cwd）和可选的项目 ID，Gateway 启动一个 pi 子进程
+- **切换会话**：支持在多个并行会话间切换，每个会话维护独立的消息历史和状态
+- **删除会话**：终止 pi 进程、清理内存状态、删除数据库记录和磁盘文件
+- **会话恢复**：从数据库和磁盘文件恢复历史会话（pi 进程按需重启）
+- **空闲清理**：超过空闲超时时间（默认 10 分钟）的会话自动卸载以节省资源
+- **自动命名**：根据用户消息内容自动生成会话标题
 
-然后在 `config.rs` 中添加对应配置。
+### 项目管理
 
-### 4. Tauri 命令
+- 项目与工作目录（cwd）绑定，支持 CRUD 操作
+- 支持项目置顶（pin）和归档（archive）
+- 每个项目可配置独立的扩展（extensions）
 
-在 `src-tauri/src/base/cmd.rs` 中添加新命令:
-```rust
-#[tauri::command]
-pub fn your_command(param: &str) -> String {
-    // 实现
-}
-```
+### WebSocket 实时通信
 
-并在 `init.rs` 的 `generate_handlers()` 中注册。
+前端通过 WebSocket 发送以下命令：
 
-### 5. 轻量模式超时时间
+| 消息类型 | 说明 |
+|---------|------|
+| `broker_command` | 向 pi 进程发送命令（prompt、set_model 等） |
+| `switch_session` | 切换活跃会话 |
+| `new_session` | 创建新会话 |
 
-修改 `src-tauri/src/base/lightweight.rs`:
-```rust
-.set_frequency_once_by_minutes(10)  // 修改超时分钟数
-```
+后端推送以下事件：
 
-### 6. 权限配置
+| 事件类型 | 说明 |
+|---------|------|
+| `session_snapshot` | 会话完整消息历史（切换时发送） |
+| `sessions_list` | 更新后的项目-会话列表 |
+| `agent_start/end` | Agent 开始/结束处理 |
+| `message_update` | 流式文本更新（text_delta / thinking_delta） |
+| `tool_execution_*` | 工具调用状态更新 |
+| `turn_start/end` | 对话轮次开始/结束 |
+| `response` | 命令执行响应 |
+| `pi_started` | 新 pi 进程启动通知 |
 
-修改 `src-tauri/capabilities/default.json` 添加所需权限:
-```json
-{
-  "permissions": [
-    "core:default",
-    "opener:default",
-    "fs:default"  // 示例：添加文件系统权限
-  ]
-}
-```
+### REST API
 
-### 7. 应用图标
+| 端点 | 说明 |
+|------|------|
+| `GET /api/sessions` | 项目-会话树 |
+| `GET /api/delete-session` | 删除会话 |
+| `POST /api/sessions/create` | 创建会话 |
+| `GET /api/pi/status` | Pi 运行状态 |
+| `POST /api/rpc` | 向活跃实例发送 RPC |
+| `GET/POST/PUT /api/projects` | 项目 CRUD |
+| `GET/PUT /api/global-extensions` | 全局扩展管理 |
+| `GET /api/health` | 健康检查 |
+| `GET /api/lan-info` | 局域网访问信息 |
+| `GET /ws` | WebSocket 端点 |
 
-替换 `src-tauri/icons/` 目录下的图标文件。
+### Tauri 桌面特有功能
 
-### 8. 构建优化
+- **窗口管理**：多窗口支持、状态追踪、浮动定位、多显示器适配
+- **系统托盘**：显示/隐藏切换、开机自启、退出
+- **轻量模式**：窗口全部关闭后自动计时，超时后释放资源
+- **局域网分享**：生成 QR 码，支持局域网内其他设备通过浏览器访问
 
-`Cargo.toml` 已配置 Release 优化:
-```toml
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
-```
+## 开发环境
 
-## 开发指南
-
-### 环境要求
+### 前置要求
 
 - Node.js >= 18
 - pnpm
 - Rust 工具链
-- Tauri CLI (已包含在 devDependencies)
+- Tauri CLI（已包含在 devDependencies）
 
 ### 安装依赖
 
@@ -204,11 +173,27 @@ pnpm install
 
 ### 开发运行
 
+仅 Web 前端（需要单独启动 pi_server）：
+
+```bash
+cd web && pnpm dev
+```
+
+Tauri 桌面应用（完整开发环境）：
+
 ```bash
 pnpm tauri dev
 ```
 
-### 构建打包
+### 构建
+
+Web 前端：
+
+```bash
+cd web && pnpm build
+```
+
+Tauri 桌面应用：
 
 ```bash
 pnpm tauri build

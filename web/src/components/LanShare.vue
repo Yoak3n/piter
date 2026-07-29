@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref } from "vue";
 import { QrCode, Copy, Check, X } from "lucide-vue-next";
 
 defineProps<{

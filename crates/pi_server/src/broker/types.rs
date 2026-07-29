@@ -50,7 +50,6 @@ pub struct PendingRpc {
 pub struct BrokerInner {
     pub instances: PLMutex<HashMap<String, PiInstance>>,
     pub routes: PLMutex<HashMap<String, String>>,
-    pub active_instance: PLMutex<Option<String>>,
     pub next_client_id: AtomicU64,
     pub pending_rpc: PLMutex<HashMap<String, PendingRpc>>,
 }

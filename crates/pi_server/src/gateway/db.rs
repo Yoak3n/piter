@@ -79,6 +79,7 @@ impl Db {
             CREATE TABLE IF NOT EXISTS project_extensions (
                 project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                 extension_name  TEXT NOT NULL,
+                extension_path  TEXT,
                 PRIMARY KEY (project_id, extension_name)
             );
 
@@ -92,11 +93,19 @@ impl Db {
             );
 
             CREATE TABLE IF NOT EXISTS global_extensions (
-                extension_name  TEXT PRIMARY KEY
+                extension_name  TEXT PRIMARY KEY,
+                extension_path  TEXT
             );
             ",
         )
         .map_err(|e| format!("migrate: {}", e))?;
+
+        // Add extension_path column to existing tables (idempotent for upgrades)
+        let _ = conn.execute_batch(
+            "ALTER TABLE project_extensions ADD COLUMN extension_path TEXT;
+             ALTER TABLE global_extensions ADD COLUMN extension_path TEXT;"
+        );
+        // Ignore errors if columns already exist
 
         Ok(())
     }
@@ -137,11 +146,21 @@ impl Db {
                 params![id],
             )
             .map_err(|e| format!("clear extensions: {}", e))?;
+            // Get cwd for resolving extension paths
+            let cwd: String = conn
+                .query_row(
+                    "SELECT cwd FROM projects WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
             let mut stmt = conn
-                .prepare("INSERT INTO project_extensions (project_id, extension_name) VALUES (?1, ?2)")
+                .prepare("INSERT INTO project_extensions (project_id, extension_name, extension_path) VALUES (?1, ?2, ?3)")
                 .map_err(|e| format!("prepare ext insert: {}", e))?;
             for ext in exts {
-                stmt.execute(params![id, ext])
+                let path = super::project::resolve_extension_name(ext, &cwd)
+                    .map(|p| p.to_string_lossy().to_string());
+                stmt.execute(params![id, ext, path])
                     .map_err(|e| format!("insert extension: {}", e))?;
             }
             conn.execute(
@@ -254,6 +273,30 @@ impl Db {
             .collect()
     }
 
+    /// Get project extensions with their resolved file paths.
+    /// Returns Vec of (name, Option<path>).
+    pub fn get_project_extensions_with_paths(&self, project_id: &str) -> Vec<(String, Option<String>)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT extension_name, extension_path FROM project_extensions WHERE project_id = ?1")
+            .unwrap();
+        stmt.query_map(params![project_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    /// Update the resolved path for a specific project extension.
+    pub fn set_project_extension_path(&self, project_id: &str, name: &str, path: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE project_extensions SET extension_path = ?1 WHERE project_id = ?2 AND extension_name = ?3",
+            params![path, project_id, name],
+        )
+        .map_err(|e| format!("set_project_extension_path: {}", e))?;
+        Ok(())
+    }
+
     // ── Sessions ───────────────────────────────────────────────────────
 
     /// Register a new session in the database (before pi reports sessionPath).
@@ -282,6 +325,40 @@ impl Db {
         )
         .map_err(|e| format!("complete_session: {}", e))?;
         Ok(())
+    }
+
+    /// Delete a session record by session_path.
+    pub fn delete_session(&self, session_path: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM sessions WHERE session_path = ?1",
+            params![session_path],
+        )
+        .map_err(|e| format!("delete_session: {}", e))?;
+        Ok(())
+    }
+
+    /// Delete a session record by instance_id.
+    pub fn delete_session_by_instance(&self, instance_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM sessions WHERE instance_id = ?1",
+            params![instance_id],
+        )
+        .map_err(|e| format!("delete_session_by_instance: {}", e))?;
+        Ok(())
+    }
+
+    /// Get the session file path for an instance_id, if known.
+    pub fn get_session_path(&self, instance_id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT session_path FROM sessions WHERE instance_id = ?1",
+            params![instance_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten()
     }
 
     /// Get the project_id for a session by instance_id.
@@ -323,7 +400,7 @@ impl Db {
     pub fn all_sessions(&self) -> Vec<SessionRow> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT instance_id, session_path, project_id, cwd, name FROM sessions")
+            .prepare("SELECT instance_id, session_path, project_id, cwd, name, created_at FROM sessions")
             .unwrap();
         stmt.query_map([], |row| {
             Ok(SessionRow {
@@ -332,6 +409,7 @@ impl Db {
                 project_id: row.get(2)?,
                 cwd: row.get(3)?,
                 name: row.get(4)?,
+                created_at: row.get(5)?,
             })
         })
         .unwrap()
@@ -339,12 +417,13 @@ impl Db {
         .collect()
     }
 
-    /// Find a project by its cwd path.
-    pub fn find_project_by_cwd(&self, cwd: &str) -> Option<ProjectRow> {
+    /// Find a project by its cwd path and name.
+    pub fn find_project_by_cwd_and_name(&self, cwd: &str, name: &str) -> Option<ProjectRow> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, name, cwd, pinned, archived, created_at, updated_at FROM projects WHERE cwd = ?1",
-            params![cwd],
+            "SELECT id, name, cwd, pinned, archived, created_at, updated_at \
+             FROM projects WHERE cwd = ?1 AND name = ?2",
+            params![cwd, name],
             |row| Ok(ProjectRow {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -356,28 +435,6 @@ impl Db {
             }),
         )
         .ok()
-    }
-
-    /// Resolve instance_id → project extensions (file paths).
-    pub fn resolve_session_extensions(&self, instance_id: &str, cwd: &str) -> Vec<String> {
-        let project_id = match self.get_session_project(instance_id) {
-            Some(id) => id,
-            None => return Vec::new(),
-        };
-        let names = self.get_project_extensions(&project_id);
-        let mut paths = Vec::new();
-        for name in &names {
-            match super::project::resolve_extension_name(name, cwd) {
-                Some(p) => paths.push(p.to_string_lossy().to_string()),
-                None => {
-                    log::warn!(
-                        "[db] extension '{}' not found for project {} (cwd={})",
-                        name, project_id, cwd
-                    );
-                }
-            }
-        }
-        paths
     }
 
     // ── Global Extensions ──────────────────────────────────────────────
@@ -393,15 +450,31 @@ impl Db {
             .collect()
     }
 
+    /// Get global extensions with their resolved file paths.
+    pub fn get_global_extensions_with_paths(&self) -> Vec<(String, Option<String>)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT extension_name, extension_path FROM global_extensions")
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
     pub fn set_global_extensions(&self, extensions: &[String]) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM global_extensions", [])
             .map_err(|e| format!("clear global exts: {}", e))?;
         let mut stmt = conn
-            .prepare("INSERT INTO global_extensions (extension_name) VALUES (?1)")
+            .prepare("INSERT INTO global_extensions (extension_name, extension_path) VALUES (?1, ?2)")
             .map_err(|e| format!("prepare global ext insert: {}", e))?;
+        let global_dir = crate::broker::util::get_pi_agent_dir().join("extensions");
         for ext in extensions {
-            stmt.execute(params![ext])
+            let path = super::project::resolve_extension_name(ext, "")
+                .filter(|p| p.starts_with(&global_dir))
+                .map(|p| p.to_string_lossy().to_string());
+            stmt.execute(params![ext, path])
                 .map_err(|e| format!("insert global ext: {}", e))?;
         }
         Ok(())
@@ -428,6 +501,7 @@ pub struct SessionRow {
     pub project_id: Option<String>,
     pub cwd: String,
     pub name: Option<String>,
+    pub created_at: String,
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

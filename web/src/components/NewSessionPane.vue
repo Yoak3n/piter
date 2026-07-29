@@ -2,12 +2,12 @@
 import { ref, computed, onMounted } from 'vue'
 
 const props = defineProps<{
-  projects: Array<{ path: string; dirName: string }>
+  projects: Array<{ path: string; name: string }>
   mobileMode: boolean
 }>()
 
 const emit = defineEmits<{
-  (e: 'create', payload: { cwd: string; projectId?: string; name?: string; message?: string }): void
+  (e: 'create', payload: { cwd: string; name: string; message?: string }): void
 }>()
 
 const selectedCwd = ref('')
@@ -24,16 +24,24 @@ async function fetchProjects() {
     const resp = await fetch('/api/projects')
     const data = await resp.json()
     if (data.success) dbProjects.value = data.projects
-  } catch { /* ignore */ }
+  } catch (err) {
+    const errorMsg = err instanceof Error ? `Failed to fetch projects: ${err.message}` : 'Unknown error'
+    error.value = errorMsg
+    console.error(errorMsg)
+  }
 }
 
+// 根据项目的path来去重？我不需要啊
 const uniqueDirs = computed(() => {
   const seen = new Set<string>()
   return props.projects.filter(p => {
     if (seen.has(p.path)) return false
     seen.add(p.path)
     return true
-  })
+  }).map(p => ({
+    path: p.path,
+    dirName: p.path.split(/[/\\]/).filter(Boolean).pop() || p.name,
+  }))
 })
 
 const matchingProjects = computed(() =>
@@ -78,14 +86,21 @@ function handleCreate() {
   }
   error.value = ''
 
-  const payload: { cwd: string; projectId?: string; name?: string; message?: string } = {
-    cwd: selectedCwd.value,
-  }
+  // Determine the project name: selected existing project, new project name, or directory name as fallback
+  let name = ''
   if (selectedProjectId.value) {
-    payload.projectId = selectedProjectId.value
+    const proj = dbProjects.value.find(p => p.id === selectedProjectId.value)
+    name = proj?.name || ''
+  } else if (createNewProject.value && newProjectName.value.trim()) {
+    name = newProjectName.value.trim()
   }
-  if (createNewProject.value && newProjectName.value.trim()) {
-    payload.name = newProjectName.value.trim()
+  if (!name) {
+    name = selectedCwd.value.split(/[/\\]/).filter(Boolean).pop() || 'New Session'
+  }
+
+  const payload: { cwd: string; name: string; message?: string } = {
+    cwd: selectedCwd.value,
+    name,
   }
   if (firstMessage.value.trim()) {
     payload.message = firstMessage.value.trim()
@@ -98,7 +113,7 @@ function handleCreate() {
   <div class="welcome-pane">
     <div class="welcome-content">
       <div class="welcome-header">
-        <h1>piter</h1>
+        <h1>Piter</h1>
         <p class="tagline">Start a conversation</p>
       </div>
 
@@ -371,3 +386,4 @@ function handleCreate() {
   text-align: center;
 }
 </style>
+tyle>

@@ -2,27 +2,9 @@
 import { ref, computed, nextTick, watch } from "vue";
 import { Menu, ChevronRight, Brain, Copy, Check } from "lucide-vue-next";
 import { marked } from "marked";
+import type { Message, ToolExecution } from "../types";
 
 marked.setOptions({ breaks: true, gfm: true });
-
-interface ToolExecution {
-  toolCallId: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  status: "pending" | "streaming" | "complete" | "error";
-  output?: string;
-  isError?: boolean;
-}
-
-interface Message {
-  id: number;
-  role: "user" | "assistant" | "tool" | "system";
-  content: string;
-  thinking?: string;
-  toolExecutions?: ToolExecution[];
-  meta?: Record<string, unknown>;
-  timestamp: number;
-}
 
 interface Turn {
   id: number;
@@ -129,7 +111,7 @@ function escapeHtml(t: string): string {
   return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function getArgsPreview(toolName: string, args: Record<string, unknown>): string {
+function getArgsPreview(_toolName: string, args: Record<string, unknown>): string {
   if (!args || Object.keys(args).length === 0) return "";
   if (args.path) return String(args.path).substring(0, 80);
   if (args.command) return String(args.command).substring(0, 80);

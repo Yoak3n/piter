@@ -1,40 +1,18 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
 import { Trash2, Plus, Search, X, RefreshCw } from "lucide-vue-next";
-
-export interface SessionInfo {
-  id: string;
-  label: string;
-  createdAt: string;
-  filePath: string;
-  updatedAt: number;
-  preview: string;
-  cwd: string;
-  // Runtime state (from backend session manager)
-  instanceId?: string;
-  state?: "active" | "idle" | "unloaded";
-  model?: string;
-  thinkingLevel?: string;
-  messageCount?: number;
-  messageSeq?: number;
-}
-
-export interface ProjectGroup {
-  path: string;
-  dirName: string;
-  sessions: SessionInfo[];
-}
+import type { ProjectGroup } from "../types";
 
 const props = defineProps<{
-  activeSessionPath: string | null;
+  activeSessionId: string | null;
   projects?: ProjectGroup[];
   sessionStatus?: "running" | "idle" | null;
   mobileMode?: boolean;
 }>();
 
 const emit = defineEmits<{
-  (e: "select-session", path: string): void;
-  (e: "delete-session", path: string): void;
+  (e: "select-session", instanceId: string): void;
+  (e: "delete-session", instanceId: string): void;
   (e: "new-session", cwd?: string): void;
 }>();
 
@@ -70,7 +48,7 @@ const filteredProjects = computed(() => {
 watch(
   () => props.projects,
   (ext) => {
-    if (ext && ext.length > 0) {
+    if (ext) {
       projects.value = ext;
       loading.value = false;
     }
@@ -92,10 +70,10 @@ async function fetchSessions() {
   }
 }
 
-function toggleProject(dirName: string) {
+function toggleProject(projectName: string) {
   const s = new Set(collapsedProjects.value);
-  if (s.has(dirName)) s.delete(dirName);
-  else s.add(dirName);
+  if (s.has(projectName)) s.delete(projectName);
+  else s.add(projectName);
   collapsedProjects.value = s;
 }
 
@@ -120,14 +98,14 @@ function formatTime(updatedAt: number): string {
   });
 }
 
-async function handleDelete(filePath: string) {
+async function handleDelete(instanceId: string) {
   deleteLoading.value = true;
   try {
     await fetch(
-      `/api/delete-session?path=${encodeURIComponent(filePath)}`,
+      `/api/delete-session?instanceId=${encodeURIComponent(instanceId)}`,
     );
     await fetchSessions();
-    emit("delete-session", filePath);
+    emit("delete-session", instanceId);
   } catch (e) {
     console.error("Delete failed:", e);
   } finally {
@@ -241,13 +219,13 @@ onMounted(fetchSessions);
           <button
             class="project-header"
             :title="project.path"
-            @click="toggleProject(project.dirName)"
+            @click="toggleProject(project.name)"
           >
             <span
               class="project-chevron"
-              :class="{ collapsed: collapsedProjects.has(project.dirName) }"
+              :class="{ collapsed: collapsedProjects.has(project.name) }"
             >&#9660;</span>
-            <span class="project-name">{{ project.dirName }}</span>
+            <span class="project-name">{{ project.name }}</span>
             <span class="project-count">{{ project.sessions.length }}</span>
             <button
               class="project-new-btn"
@@ -259,17 +237,17 @@ onMounted(fetchSessions);
           </button>
 
           <div
-            v-if="!collapsedProjects.has(project.dirName)"
+            v-if="!collapsedProjects.has(project.name)"
             class="project-sessions"
           >
             <button
               v-for="session in project.sessions"
-              :key="session.filePath"
+              :key="session.instanceId ?? session.id"
               class="session-item"
               :class="{
-                active: session.filePath === activeSessionPath,
+                active: (session.instanceId ?? session.id) === activeSessionId,
               }"
-              @click="emit('select-session', session.filePath)"
+              @click="emit('select-session', session.instanceId ?? session.id)"
             >
               <div class="session-item-main">
                 <div class="session-title">
@@ -282,7 +260,7 @@ onMounted(fetchSessions);
                     :title="session.state || 'unloaded'"
                   />
                   <span
-                    v-if="session.filePath === activeSessionPath && sessionStatus === 'running'"
+                    v-if="(session.instanceId ?? session.id) === activeSessionId && sessionStatus === 'running'"
                     class="session-running-indicator"
                     title="Pi is processing..."
                   />
@@ -296,13 +274,13 @@ onMounted(fetchSessions);
               </div>
 
               <!-- Delete confirm -->
-              <template v-if="showDeleteConfirm === session.filePath">
+              <template v-if="showDeleteConfirm === session.instanceId">
                 <div class="delete-confirm" @click.stop>
                   <span class="delete-confirm-text">Delete?</span>
                   <button
                     class="btn btn-sm btn-danger"
                     :disabled="deleteLoading"
-                    @click="handleDelete(session.filePath)"
+                    @click="handleDelete(session.instanceId)"
                   >
                     Yes
                   </button>
@@ -318,7 +296,7 @@ onMounted(fetchSessions);
                 <button
                   class="session-delete-btn"
                   title="Delete session"
-                  @click.stop="showDeleteConfirm = session.filePath"
+                  @click.stop="showDeleteConfirm = session.instanceId ?? null"
                 >
                   <Trash2 :size="12" />
                 </button>

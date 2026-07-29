@@ -3,7 +3,7 @@ use std::sync::Arc;
 use pi_server::gateway::GatewayState;
 
 use super::config::ConfigManager;
-use super::types::{AdminConfig, AdminStatus};
+use super::types::{AdminConfig, AdminStatus, SessionInfo};
 
 #[tauri::command]
 pub fn get_admin_config() -> AdminConfig {
@@ -19,10 +19,23 @@ pub fn update_admin_config(config: AdminConfig) -> Result<AdminConfig, String> {
 pub fn get_admin_status(
     gw: tauri::State<'_, Arc<GatewayState>>,
 ) -> AdminStatus {
+    let active_sessions: Vec<SessionInfo> = {
+        let instances = gw.inner.instances.lock();
+        instances.iter().map(|(id, inst)| SessionInfo {
+            instance_id: id.clone(),
+            session_path: inst.session_path.clone(),
+            cwd: inst.cwd.clone(),
+            state: if inst.running.load(std::sync::atomic::Ordering::SeqCst) {
+                "running".to_string()
+            } else {
+                "stopped".to_string()
+            },
+        }).collect()
+    };
+
     AdminStatus {
         pi_running: gw.has_active_processes(),
-        pi_instance_id: gw.active_instance_id(),
-        pi_session_path: gw.active_session_path(),
+        active_sessions,
         pi_version: pi_server::locked_pi_version().to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         broker_ws_url: gw.ws_url(),

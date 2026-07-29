@@ -18,13 +18,19 @@ export interface AdminConfig {
   pi: PiSettings;
 }
 
+export interface SessionInfo {
+  instance_id: string;
+  session_path: string | null;
+  cwd: string;
+  state: string;
+}
+
 export interface AdminStatus {
   pi_running: boolean;
-  pi_instance_id: string | null;
-  pi_session_path: string | null;
+  active_sessions: SessionInfo[];
   pi_version: string;
   app_version: string;
-  broker_url: string;
+  broker_ws_url: string;
   broker_http_url: string;
   uptime_secs: number;
   data_dir: string;

@@ -71,10 +71,17 @@ impl Default for PiSettings {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SessionInfo {
+    pub instance_id: String,
+    pub session_path: Option<String>,
+    pub cwd: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AdminStatus {
     pub pi_running: bool,
-    pub pi_instance_id: Option<String>,
-    pub pi_session_path: Option<String>,
+    pub active_sessions: Vec<SessionInfo>,
     pub pi_version: String,
     pub app_version: String,
     pub broker_ws_url: String,

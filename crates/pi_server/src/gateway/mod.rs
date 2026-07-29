@@ -266,21 +266,6 @@ impl GatewayState {
     pub fn has_active_processes(&self) -> bool {
         !self.inner.instances.lock().is_empty()
     }
-
-    pub fn active_instance_id(&self) -> Option<String> {
-        self.inner.active_instance.lock().clone()
-    }
-
-    pub fn active_session_path(&self) -> Option<String> {
-        let active_id = self.inner.active_instance.lock().clone();
-        active_id.and_then(|id| {
-            self.inner
-                .instances
-                .lock()
-                .get(&id)
-                .and_then(|i| i.session_path.clone())
-        })
-    }
 }
 
 // ─── Gateway Server ────────────────────────────────────────────────────────
@@ -569,6 +554,7 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
             message_count: session.messages.len() as u32,
             message_seq: session.message_seq,
             session_name: session.session_name.clone(),
+            last_active_epoch: session.last_active_epoch,
         };
         runtime_by_iid.insert(session.instance_id.clone(), info);
     }
@@ -610,7 +596,12 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
                 file_path: db_row
                     .and_then(|r| r.session_path.clone())
                     .unwrap_or_default(),
-                updated_at: rt.map(|r| r.message_count as u64).unwrap_or(0),
+                updated_at: rt.map(|r| r.last_active_epoch).unwrap_or_else(|| {
+                    // Parse DB created_at RFC3339 string to epoch
+                    db_row.and_then(|r| chrono::DateTime::parse_from_rfc3339(&r.created_at).ok())
+                        .map(|dt| dt.timestamp() as u64)
+                        .unwrap_or(0)
+                }),
                 preview: String::new(),
                 cwd: proj.cwd.clone(),
                 instance_id: Some(iid.clone()),
@@ -683,6 +674,7 @@ struct RuntimeSessionInfo {
     message_count: u32,
     message_seq: u64,
     session_name: Option<String>,
+    last_active_epoch: u64,
 }
 
 

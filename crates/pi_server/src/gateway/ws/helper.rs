@@ -20,38 +20,25 @@ pub fn extract_cwd(value: &Value) -> Option<String> {
     }
 }
 
-pub fn extract_project_id(value: &Value) -> Option<String> {
-    value
-        .pointer("/payload/projectId")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("projectId").and_then(Value::as_str))
-        .map(|s| s.to_string())
-}
 
 
-
-/// Resolve instance by instanceId (primary) or active_instance fallback.
+/// Resolve instance by instanceId (from message payload). Returns None if
+/// not provided or not found in the running instances table.
 pub fn resolve_command_instance(value: &Value, state: &Arc<GatewayState>) -> Option<String> {
-    // Direct instanceId
     let direct_id = value
         .get("instanceId")
         .and_then(Value::as_str)
         .or_else(|| value.pointer("/payload/instanceId").and_then(Value::as_str));
 
-    if let Some(iid) = direct_id {
-        if state.inner.instances.lock().contains_key(iid) {
-            return Some(iid.to_string());
+    match direct_id {
+        Some(iid) if state.inner.instances.lock().contains_key(iid) => Some(iid.to_string()),
+        Some(iid) => {
+            log::warn!("[gateway] instanceId '{}' not found in running instances", iid);
+            None
+        }
+        None => {
+            log::warn!("[gateway] no instanceId in message");
+            None
         }
     }
-
-    // Active instance fallback (only when unambiguous)
-    let instance_count = state.inner.instances.lock().len();
-    let active = state.inner.active_instance.lock().clone();
-
-    if instance_count > 1 {
-        log::warn!("[gateway] ambiguous: {} instances, no instanceId", instance_count);
-        return None;
-    }
-
-    active
 }

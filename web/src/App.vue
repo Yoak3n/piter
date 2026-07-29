@@ -23,13 +23,12 @@ const {
   connectWebSocket,
   sendPrompt,
   sendCommand,
+  switchSession,
   restartPi,
-  loadHistory,
   clearMessages,
 } = usePiConnection();
 
-const { sessions, fetchSessions, loadMessages, deleteSession } =
-  useSessions();
+const { sessions, fetchSessions } = useSessions();
 
 const sidebarOpen = ref(window.innerWidth > 640);
 const sessionName = ref("");
@@ -59,32 +58,24 @@ function handleSend(text: string) {
   sendPrompt(text);
 }
 
-async function handleSelectSession(filePath: string) {
+async function handleSelectSession(instanceId: string) {
   showNewSession.value = false;
   const allProjects = wsSessions.value.length > 0 ? wsSessions.value : sessions.value;
-  let instanceId: string | undefined;
   for (const project of allProjects) {
-    const s = project.sessions.find((s) => s.filePath === filePath);
+    const s = project.sessions.find((s) => (s.instanceId ?? s.id) === instanceId);
     if (s) {
       sessionName.value = s.label || s.id;
-      instanceId = s.instanceId;
       break;
     }
   }
-  const msgs = await loadMessages(filePath);
-  loadHistory(msgs);
-  if (instanceId) {
-    sendCommand({ type: "switch_session", instanceId });
-  }
+  switchSession(instanceId);
   if (mobileMode.value) closeSidebar();
 }
 
-async function handleDeleteSession(filePath: string) {
+function handleDeleteSession(_instanceId: string) {
   sessionName.value = "";
   clearMessages();
   showNewSession.value = true;
-  await deleteSession(filePath);
-  fetchSessions();
 }
 
 // Global "+" or per-project "+" — show the new session pane
@@ -94,12 +85,11 @@ function handleNewSession(_cwd?: string) {
 }
 
 // New session pane confirmed — create the session
-function handleCreateSession(payload: { cwd: string; projectId?: string; name?: string; message?: string }) {
-  const cmd: Record<string, unknown> = { type: "new_session", cwd: payload.cwd };
-  if (payload.projectId) cmd.projectId = payload.projectId;
-  if (payload.name) {
-    sessionName.value = payload.name;
-  }
+async function handleCreateSession(payload: { cwd: string; name: string; message?: string }) {
+  sessionName.value = payload.name;
+
+  const cmd: Record<string, unknown> = { type: "new_session", cwd: payload.cwd, name: payload.name };
+
   // Store the first message to send after session is created
   pendingFirstMessage.value = payload.message || null;
   sendCommand(cmd);
@@ -155,7 +145,7 @@ watch(sessionStatus, (status) => {
     <!-- Session sidebar -->
     <aside class="app-sidebar" :class="{ open: sidebarOpen, closed: !sidebarOpen }">
       <SessionSidebar
-        :active-session-path="null"
+        :active-session-id="activeInstanceId"
         :projects="wsSessions"
         :session-status="sessionStatus"
         :mobile-mode="mobileMode"
@@ -169,7 +159,7 @@ watch(sessionStatus, (status) => {
     <main class="app-main">
       <NewSessionPane
         v-if="showNewSession"
-        :projects="wsSessions.map(p => ({ path: p.path, dirName: p.dirName }))"
+        :projects="wsSessions.map(p => ({ path: p.path, name: p.name }))"
         :mobile-mode="mobileMode"
         @create="handleCreateSession"
       />

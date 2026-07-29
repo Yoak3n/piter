@@ -116,9 +116,10 @@ impl SpawnBuilder {
         // ── Build pi CLI args ─────────────────────────────────────────
         let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
 
-        // Persistent: no --session-dir, let pi use its default (~/.pi/agent/sessions/)
-        // The actual session file path is discovered via get_state after spawn.
-        if !self.persistent {
+        if let Some(ref sp) = self.session_path {
+            args.push("--session".into());
+            args.push(sp.clone());
+        } else if !self.persistent {
             args.push("--no-session".into());
         }
 

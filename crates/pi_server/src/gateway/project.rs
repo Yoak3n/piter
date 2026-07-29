@@ -94,7 +94,7 @@ pub fn list_projects(db: &Db, include_archived: bool) -> Vec<Project> {
 
 // ─── Extension Resolution ───────────────────────────────────────────────────
 
-/// Resolve an extension name to a file path.
+/// Resolve an extension name to a file path using filesystem probes.
 ///
 /// Search order:
 /// 1. `~/.pi/agent/extensions/<name>.ts` (global single file)
@@ -129,19 +129,26 @@ pub fn resolve_extension_name(name: &str, cwd: &str) -> Option<PathBuf> {
 
 /// Resolve project extensions to file paths for passing to pi via `-e` flags.
 ///
-/// Only resolves project-specific extensions. Global extensions (from `settings.json`
-/// `packages`) are loaded automatically by pi and should NOT be passed via `-e`.
+/// Reads already-resolved paths from the database. Logs a warning for any
+/// extension whose path column is NULL or points to a missing file.
 pub fn resolve_project_extensions(db: &super::db::Db, project_id: &str, cwd: &str) -> Vec<String> {
-    let names = db.get_project_extensions(project_id);
+    let exts = db.get_project_extensions_with_paths(project_id);
     let mut paths = Vec::new();
-    for name in &names {
-        match resolve_extension_name(name, cwd) {
-            Some(p) => paths.push(p.to_string_lossy().to_string()),
-            None => {
-                log::warn!(
-                    "[project] extension '{}' not found (project={}, cwd={})",
-                    name, project_id, cwd
-                );
+    for (name, path) in &exts {
+        match path {
+            Some(p) if Path::new(p).is_file() => paths.push(p.clone()),
+            _ => {
+                // Path missing or file gone — try to re-resolve
+                if let Some(resolved) = resolve_extension_name(name, cwd) {
+                    let rp = resolved.to_string_lossy().to_string();
+                    let _ = db.set_project_extension_path(project_id, name, &rp);
+                    paths.push(rp);
+                } else {
+                    log::warn!(
+                        "[project] extension '{}' not found (project={}, cwd={})",
+                        name, project_id, cwd
+                    );
+                }
             }
         }
     }

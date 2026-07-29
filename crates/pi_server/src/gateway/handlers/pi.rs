@@ -16,16 +16,13 @@ use crate::gateway::GatewayState;
 // ─── Shared logic (callable from WS) ───────────────────────────────────────
 
 pub fn get_pi_status(state: &GatewayState) -> PiStatusResponse {
-    let active_id = state.inner.active_instance.lock().clone();
-    if let Some(ref id) = active_id {
-        let instances = state.inner.instances.lock();
-        if let Some(inst) = instances.get(id) {
-            return PiStatusResponse {
-                running: inst.running.load(Ordering::SeqCst),
-                instance_id: Some(id.clone()),
-                session_path: inst.session_path.clone(),
-            };
-        }
+    let instances = state.inner.instances.lock();
+    if let Some((id, inst)) = instances.iter().next() {
+        return PiStatusResponse {
+            running: inst.running.load(Ordering::SeqCst),
+            instance_id: Some(id.clone()),
+            session_path: inst.session_path.clone(),
+        };
     }
     PiStatusResponse {
         running: false,
@@ -142,11 +139,10 @@ pub async fn pi_restart_handler(
     let instance_id = body
         .get("instanceId")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| state.inner.active_instance.lock().clone());
+        .map(|s| s.to_string());
 
     let Some(instance_id) = instance_id else {
-        return Json(serde_json::json!({"success": false, "error": "no instance specified"}));
+        return Json(serde_json::json!({"success": false, "error": "instanceId required"}));
     };
 
     match restart_pi_instance(&state, &instance_id) {
@@ -162,11 +158,10 @@ pub async fn pi_stop_handler(
     let instance_id = body
         .get("instanceId")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| state.inner.active_instance.lock().clone());
+        .map(|s| s.to_string());
 
     let Some(instance_id) = instance_id else {
-        return Json(serde_json::json!({"success": false, "error": "no instance specified"}));
+        return Json(serde_json::json!({"success": false, "error": "instanceId required"}));
     };
 
     if stop_pi_instance(&state, &instance_id) {
@@ -202,16 +197,12 @@ async fn rpc_to_instance(state: &Arc<GatewayState>, mut body: Value) -> Json<Val
 
     let target_id = if let Some(ref id) = instance_id {
         if state.inner.instances.lock().contains_key(id) {
-            Some(id.clone())
+            id.clone()
         } else {
             return Json(serde_json::json!({"success": false, "error": "instance not found"}));
         }
     } else {
-        state.inner.active_instance.lock().clone()
-    };
-
-    let Some(target_id) = target_id else {
-        return Json(serde_json::json!({"success": false, "error": "no active pi instance"}));
+        return Json(serde_json::json!({"success": false, "error": "instanceId required"}));
     };
 
     let request_id = body
@@ -268,18 +259,13 @@ pub fn spawn_persistent_for_gateway(
         .extensions(extensions)
         .run()?;
 
-    // Register instance_id as a route immediately (sessionFile/sessionId added later by get_state)
-    state
-        .inner
-        .routes
-        .lock()
-        .insert(instance_id.clone(), instance_id.clone());
-
     {
-        let mut active = state.inner.active_instance.lock();
-        if active.is_none() {
-            *active = Some(instance_id.clone());
-        }
+    // Register instance_id as a route immediately (sessionFile/sessionId added later by get_state)
+        state
+            .inner
+            .routes
+            .lock()
+            .insert(instance_id.clone(), instance_id.clone());
     }
 
     log::info!(
@@ -307,26 +293,16 @@ fn spawn_ephemeral_for_gateway(
     Ok(id)
 }
 
-fn kill_instance_for_gateway(state: &GatewayState, instance_id: &str) -> bool {
+pub fn kill_instance_for_gateway(state: &GatewayState, instance_id: &str) -> bool {
     let mut instances = state.inner.instances.lock();
     if let Some(mut inst) = instances.remove(instance_id) {
         inst.running.store(false, Ordering::SeqCst);
         let _ = inst.child.kill();
 
-        if let Some(ref sp) = inst.session_path {
-            state.inner.routes.lock().remove(sp);
-        }
-
-        {
-            let mut active = state.inner.active_instance.lock();
-            if active.as_deref() == Some(instance_id) {
-                *active = instances
-                    .iter()
-                    .filter(|(_, i)| i.persistent)
-                    .map(|(id, _)| id.clone())
-                    .next();
-            }
-        }
+        // Remove all route entries pointing to this instance
+        let mut routes = state.inner.routes.lock();
+        routes.retain(|_, v| v != instance_id);
+        drop(routes);
 
         log::info!("[gateway] instance {} killed", instance_id);
         true

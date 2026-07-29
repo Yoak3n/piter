@@ -31,8 +31,35 @@ pub fn load_session(file_path: &str) -> Vec<Value> {
     messages
 }
 
-pub fn delete_session(file_path: &str, state: &Arc<GatewayState>) -> Result<(), String> {
-    std::fs::remove_file(file_path).map_err(|e| e.to_string())?;
+pub fn delete_session(instance_id: &str, state: &Arc<GatewayState>) -> Result<(), String> {
+    // 1. Try to get the session file path from DB or in-memory pi_state
+    let session_file = state.db.get_session_path(instance_id)
+        .or_else(|| {
+            let mgr = state.session_manager.lock();
+            mgr.sessions.get(instance_id)
+                .and_then(|s| s.pi_state.as_ref())
+                .and_then(|p| p.session_file.clone())
+        });
+
+    // 2. Kill running pi process and remove from routes
+    super::pi::kill_instance_for_gateway(state, instance_id);
+
+    // 3. Remove from session manager (in-memory state)
+    {
+        let mut mgr = state.session_manager.lock();
+        mgr.sessions.remove(instance_id);
+        mgr.pending_links.remove(instance_id);
+    }
+
+    // 4. Remove DB record (by instance_id)
+    let _ = state.db.delete_session_by_instance(instance_id);
+
+    // 5. Try to delete the session file on disk
+    if let Some(sf) = session_file {
+        let _ = std::fs::remove_file(&sf);
+    }
+
+    // 6. Broadcast updated session list
     super::super::push_sessions_list_to_clients(state);
     Ok(())
 }
@@ -98,11 +125,11 @@ pub async fn delete_session_handler(
     Query(params): Query<HashMap<String, String>>,
     axum::extract::State(state): axum::extract::State<Arc<GatewayState>>,
 ) -> Json<Value> {
-    let file_path = match params.get("path") {
+    let instance_id = match params.get("instanceId").or_else(|| params.get("path")) {
         Some(p) => p,
-        None => return Json(serde_json::json!({"success": false, "error": "missing path"})),
+        None => return Json(serde_json::json!({"success": false, "error": "missing instanceId"})),
     };
-    match delete_session(file_path, &state) {
+    match delete_session(instance_id, &state) {
         Ok(()) => Json(serde_json::json!({"success": true})),
         Err(e) => Json(serde_json::json!({"success": false, "error": e})),
     }
