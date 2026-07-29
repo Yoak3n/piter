@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 
+// Only show the 'Browse' button when running inside Tauri (native dialog)
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const props = defineProps<{
   projects: Array<{ path: string; name: string }>
   mobileMode: boolean
@@ -133,7 +135,7 @@ function handleCreate() {
               {{ d.dirName }}
             </button>
             <button
-              v-if="!mobileMode"
+              v-if="!mobileMode && isTauri"
               class="chip chip-dashed"
               @click="handleBrowse"
             >

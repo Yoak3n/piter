@@ -112,7 +112,7 @@ fn get_dist_path(app: &AppHandle) -> PathBuf {
     }
     app.path()
         .resource_dir()
-        .map(|p| p.join("frontend"))
+        .map(|p| p.join("web-frontend"))
         .unwrap_or(dev_path)
 }
 

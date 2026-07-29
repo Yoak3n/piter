@@ -717,7 +717,7 @@ pub fn discover_lan_ips() -> Vec<String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        for (cmd, args) in &[("ifconfig", &["-a"] as &[&str]), ("ip", &["addr"])] {
+        for (cmd, args) in [("ifconfig", &["-a"] as &[&str]), ("ip", &["addr"])] {
             if let Ok(output) = std::process::Command::new(cmd).args(args).output() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for line in stdout.lines() {
