@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 
 use super::GatewayState;
 use crate::broker::types::PROTOCOL_VERSION;
+use pi_rpc::command::Command;
 use helper::{extract_cwd, resolve_command_instance};
 
 pub async fn ws_handler(
@@ -143,7 +144,7 @@ fn route_ui_message(
                     let instances = state.inner.instances.lock();
                     if let Some(inst) = instances.get(&instance_id) {
                         if let Some(tx) = &inst.stdin_tx {
-                            let _ = tx.send(serde_json::json!({"type": "get_state"}).to_string());
+                            let _ = tx.send(Command::GetState.to_json_line());
                         }
                     }
                 }

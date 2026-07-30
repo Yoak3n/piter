@@ -26,6 +26,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::broker::types::{BrokerInner, EVENT_CHANNEL_CAP, EventTx, PROTOCOL_VERSION};
+use pi_rpc::command::Command;
 
 // ─── Gateway State ─────────────────────────────────────────────────────────
 
@@ -359,7 +360,7 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
                 // Send get_state to learn sessionId and sessionFile
                 if let Some(inst) = state.inner.instances.lock().get(&instance_id) {
                     if let Some(tx) = &inst.stdin_tx {
-                        let get_state = serde_json::json!({"type": "get_state"}).to_string();
+                        let get_state = Command::GetState.to_json_line();
                         let _ = tx.send(get_state);
                     }
                 }
@@ -370,6 +371,7 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
     // ── 1c. On get_state response → complete pending link + store full state ──
     if event_type == "response" && !instance_id.is_empty() {
         if let Ok(resp) = pi_rpc::event::Response::from_json_line(raw) {
+            // catch "get_state" response to complete session record
             if resp.success && resp.command == "get_state" {
                 let data = resp.data.as_ref();
 
