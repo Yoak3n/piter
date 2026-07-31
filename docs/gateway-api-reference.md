@@ -278,7 +278,7 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 
 ### Pi 生命周期事件（封装在 `type: "event"` 内）
 
-`session_start`, `session_shutdown`, `session_name`, `agent_start`, `agent_end`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_update`, `tool_execution_end`, `auto_compaction_start`, `auto_compaction_end`, `auto_retry_start`, `auto_retry_end`, `model_select`
+`agent_start`, `agent_end`, `agent_settled`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `bash_execution_update`, `tool_execution_start`, `tool_execution_update`, `tool_execution_end`, `queue_update`, `compaction_start`, `compaction_end`, `auto_retry_start`, `auto_retry_end`, `summarization_retry_scheduled`, `summarization_retry_attempt_start`, `summarization_retry_finished`, `extension_error`
 
 ### command_undeliverable 的 reason 值
 

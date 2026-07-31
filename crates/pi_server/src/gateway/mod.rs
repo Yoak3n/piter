@@ -8,10 +8,14 @@
 //!
 //! The broker handles pi process communication only.
 
+mod broadcast;
 pub mod db;
 pub mod handlers;
+mod helper;
+mod messages;
 pub mod project;
 pub mod session_manager;
+pub mod state;
 pub mod ws;
 
 use std::collections::HashMap;
@@ -21,13 +25,15 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::{delete, get, post, put};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast as tokio_broadcast_channel, mpsc};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::broker::types::{BrokerInner, EVENT_CHANNEL_CAP, EventTx, PROTOCOL_VERSION};
-use pi_rpc::command::Command;
-
+use pi_rpc::event::LIFECYCLE_EVENT_TYPES;
+use broadcast::{broadcast_to_clients, broadcast_to_subscribers, push_sessions_list_to_clients};
+use helper::discover_lan_ips;
+use messages::command;
 // ─── Gateway State ─────────────────────────────────────────────────────────
 
 /// Clone-able state passed into every axum handler via `State`.
@@ -75,7 +81,7 @@ impl GatewayState {
 
         let lan_ips = discover_lan_ips();
 
-        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAP);
+        let (event_tx, _) = tokio_broadcast_channel::channel(EVENT_CHANNEL_CAP);
         let inner = Arc::new(BrokerInner::default());
         let static_dir = pi_exe
             .parent()
@@ -86,8 +92,7 @@ impl GatewayState {
             session_manager::SessionManager::new(idle_timeout_secs),
         ));
 
-        let db = db::Db::open()
-            .map_err(|e| format!("[gateway] db open failed: {}", e))?;
+        let db = db::Db::open().map_err(|e| format!("[gateway] db open failed: {}", e))?;
 
         let state = Arc::new(GatewayState {
             event_tx: event_tx.clone(),
@@ -112,29 +117,71 @@ impl GatewayState {
             .route("/api/git-branch", get(handlers::system::git_branch_handler))
             // Sessions
             .route("/api/sessions", get(handlers::session::sessions_handler))
-            .route("/api/load-session", get(handlers::session::load_session_handler))
-            .route("/api/delete-session", get(handlers::session::delete_session_handler))
-            .route("/api/sessions/create", post(handlers::session::create_session_handler))
-            .route("/api/sessions/rename", post(handlers::session::rename_session_handler))
+            .route(
+                "/api/load-session",
+                get(handlers::session::load_session_handler),
+            )
+            .route(
+                "/api/delete-session",
+                get(handlers::session::delete_session_handler),
+            )
+            .route(
+                "/api/sessions/create",
+                post(handlers::session::create_session_handler),
+            )
+            .route(
+                "/api/sessions/rename",
+                post(handlers::session::rename_session_handler),
+            )
             // Pi control
             .route("/api/pi/status", get(handlers::pi::pi_status_handler))
             .route("/api/pi/settings", get(handlers::pi::pi_settings_handler))
             .route("/api/pi/restart", post(handlers::pi::pi_restart_handler))
             .route("/api/pi/stop", post(handlers::pi::pi_stop_handler))
             .route("/api/rpc", post(handlers::pi::rpc_handler))
-            .route("/api/rpc/ephemeral", post(handlers::pi::rpc_ephemeral_handler))
+            .route(
+                "/api/rpc/ephemeral",
+                post(handlers::pi::rpc_ephemeral_handler),
+            )
             // Projects
             .route("/api/projects", get(handlers::project::projects_handler))
-            .route("/api/projects", post(handlers::project::create_project_handler))
-            .route("/api/projects/:id", put(handlers::project::update_project_handler))
-            .route("/api/projects/:id", delete(handlers::project::delete_project_handler))
-            .route("/api/projects/:id/pin", post(handlers::project::pin_project_handler))
-            .route("/api/projects/:id/archive", post(handlers::project::archive_project_handler))
+            .route(
+                "/api/projects",
+                post(handlers::project::create_project_handler),
+            )
+            .route(
+                "/api/projects/:id",
+                put(handlers::project::update_project_handler),
+            )
+            .route(
+                "/api/projects/:id",
+                delete(handlers::project::delete_project_handler),
+            )
+            .route(
+                "/api/projects/:id/pin",
+                post(handlers::project::pin_project_handler),
+            )
+            .route(
+                "/api/projects/:id/archive",
+                post(handlers::project::archive_project_handler),
+            )
             // Extensions & config
-            .route("/api/global-extensions", get(handlers::extensions::global_extensions_handler))
-            .route("/api/global-extensions", put(handlers::extensions::update_global_extensions_handler))
-            .route("/api/session-config", get(handlers::extensions::session_config_handler))
-            .route("/api/session-config", put(handlers::extensions::update_session_config_handler))
+            .route(
+                "/api/global-extensions",
+                get(handlers::extensions::global_extensions_handler),
+            )
+            .route(
+                "/api/global-extensions",
+                put(handlers::extensions::update_global_extensions_handler),
+            )
+            .route(
+                "/api/session-config",
+                get(handlers::extensions::session_config_handler),
+            )
+            .route(
+                "/api/session-config",
+                put(handlers::extensions::update_session_config_handler),
+            )
             // WebSocket
             .route("/ws", get(ws::ws_handler))
             .route("/ui-ws", get(ws::ws_handler))
@@ -195,6 +242,15 @@ impl GatewayState {
         }
 
         Ok((state, actual_port))
+    }
+
+    /// Clone the stdin sender for a running instance, if it exists.
+    pub fn instance_stdin_tx(&self, instance_id: &str) -> Option<mpsc::UnboundedSender<String>> {
+        self.inner
+            .instances
+            .lock()
+            .get(instance_id)
+            .and_then(|inst| inst.stdin_tx.clone())
     }
 
     /// Start building a persistent pi process spawn.
@@ -273,41 +329,22 @@ impl GatewayState {
 
 // ─── Event Loop ────────────────────────────────────────────────────────────
 
-/// pi event types we recognise for envelope wrapping.
-const PI_LIFECYCLE_TYPES: &[&str] = &[
-    "session_start",
-    "session_shutdown",
-    "session_name",
-    "agent_start",
-    "agent_end",
-    "turn_start",
-    "turn_end",
-    "message_start",
-    "message_update",
-    "message_end",
-    "tool_execution_start",
-    "tool_execution_update",
-    "tool_execution_end",
-    "auto_compaction_start",
-    "auto_compaction_end",
-    "auto_retry_start",
-    "auto_retry_end",
-    "model_select",
-];
-
 /// Main event loop: subscribe to broker events, maintain routing table,
 /// wrap and forward events to WS clients.
-async fn run_event_loop(state: &Arc<GatewayState>, event_rx: &mut broadcast::Receiver<String>) {
+async fn run_event_loop(
+    state: &Arc<GatewayState>,
+    event_rx: &mut tokio_broadcast_channel::Receiver<String>,
+) {
     loop {
         match event_rx.recv().await {
             Ok(raw) => {
                 process_broker_event(state, &raw);
             }
-            Err(broadcast::error::RecvError::Closed) => {
+            Err(tokio_broadcast_channel::error::RecvError::Closed) => {
                 log::info!("[gateway] event channel closed, event loop exiting");
                 break;
             }
-            Err(broadcast::error::RecvError::Lagged(n)) => {
+            Err(tokio_broadcast_channel::error::RecvError::Lagged(n)) => {
                 log::warn!("[gateway] event loop lagged {} events, skipping", n);
                 continue;
             }
@@ -317,117 +354,216 @@ async fn run_event_loop(state: &Arc<GatewayState>, event_rx: &mut broadcast::Rec
 
 /// Process a single event from the broker.
 fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
+    // 3个卫语句：
+    // 1. 解析JSON字符串为serde_json::Value
+    // 2. 检查type字段是否存在且为字符串类型
+    // 3. 检查instance_id字段是否存在且为字符串类型
     let Ok(val) = serde_json::from_str::<serde_json::Value>(raw) else {
         return;
     };
+    let Some(event_type) = val.get("type").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    let Some(iid) = pi_rpc::event::extract_instance_id(&val) else {
+        return;
+    };
 
-    let event_type = val
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
 
-    let instance_id = pi_rpc::event::extract_instance_id(&val)
-        .unwrap_or("")
-        .to_string();
-    // ── 1. Response events: track session assignment ───────────────────
+    let instance_id = iid.to_string();
+
+    // ── 1. Response events ─────────────────────────────────────────────
     if event_type == "response" {
-        if let Ok(resp) = pi_rpc::event::Response::from_json_line(raw) {
-            if resp.is_session_response() {
-                if let Some(sf) = resp.session_file() {
-                    let instance_id = pi_rpc::event::extract_instance_id(&val).unwrap_or("");
-                    if !instance_id.is_empty() {
-                        log::info!(
-                            "[gateway] pi confirmed session: instance={} session={}",
-                            instance_id,
-                            sf
-                        );
-                        state
-                            .inner
-                            .routes
-                            .lock()
-                            .insert(sf.to_string(), instance_id.to_string());
-                    }
-                }
-                push_sessions_list_to_clients(state);
-            }
+        handle_response_event(state, raw, &instance_id);
+    }
+
+    // ── 2. Track message in session manager and broadcast ───────────
+    track_and_broadcast(state, &val, event_type, &instance_id);
+
+    // ── 3. Push updated sessions list for session-changing events ─────
+    if matches!(event_type, "agent_end" | "turn_end") {
+        push_sessions_list_to_clients(state);
+    }
+
+    // ── 5b. Refresh pi state after agent finishes handling a message ──
+    if event_type == "agent_end" {
+        command::send_get_state(state, &instance_id);
+    }
+
+    // ── 6. Push if session state changed (active↔idle transitions) ───
+    if event_type == "session_cleanup" {
+        push_sessions_list_to_clients(state);
+        return;
+    }
+
+    // Persist any auto-generated session names to DB
+    let pending_names = state.session_manager.lock().take_pending_names();
+    for (iid, name) in &pending_names {
+        let _ = state.db.set_session_name(iid, name);
+    }
+
+    if state.session_manager.lock().take_dirty() || !pending_names.is_empty() {
+        push_sessions_list_to_clients(state);
+    }
+}
+
+/// Handle response-type events: session tracking, get_state triggers, and state completion.
+fn handle_response_event(state: &Arc<GatewayState>, raw: &str, instance_id: &str) {
+    let Ok(resp) = pi_rpc::event::Response::from_json_line(raw) else {
+        return;
+    };
+
+    handle_session_response(state, &resp, instance_id);
+    handle_get_state_response(state, &resp, instance_id);
+}
+
+/// 1a/1b. On session-related responses: track assignment + trigger get_state.
+fn handle_session_response(
+    state: &Arc<GatewayState>,
+    resp: &pi_rpc::event::Response,
+    instance_id: &str,
+) {
+    if !resp.is_session_response() {
+        return;
+    }
+
+    if let Some(sf) = resp.session_file() {
+        log::info!(
+            "[gateway] pi confirmed session: instance={} session={}",
+            instance_id,
+            sf
+        );
+        state
+            .inner
+            .routes
+            .lock()
+            .insert(sf.to_string(), instance_id.to_string());
+    }
+    push_sessions_list_to_clients(state);
+    command::send_get_state(state, instance_id);
+}
+
+/// 1c. On get_state response → complete pending link + store full state.
+fn handle_get_state_response(
+    state: &Arc<GatewayState>,
+    resp: &pi_rpc::event::Response,
+    instance_id: &str,
+) {
+    if !resp.success || resp.command != "get_state" {
+        return;
+    }
+
+    let data = match resp.data.as_ref() {
+        Some(d) => d,
+        None => return,
+    };
+
+    // Extract sessionFile for DB link and routing
+    let session_file = data
+        .get("sessionFile")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty());
+
+    if let Some(sf) = session_file {
+        let _ = state.db.complete_session(instance_id, sf);
+        state
+            .inner
+            .routes
+            .lock()
+            .insert(sf.to_string(), instance_id.to_string());
+        let pending = state
+            .session_manager
+            .lock()
+            .pending_links
+            .remove(instance_id);
+        if pending.is_some() {
+            push_sessions_list_to_clients(state);
         }
     }
 
-    // ── 1b. On new_session/switch_session success → query get_state ───
-    if event_type == "response" && !instance_id.is_empty() {
-        if let Ok(resp) = pi_rpc::event::Response::from_json_line(raw) {
-            if resp.success && matches!(resp.command.as_str(), "new_session" | "switch_session") {
-                // Send get_state to learn sessionId and sessionFile
-                if let Some(inst) = state.inner.instances.lock().get(&instance_id) {
-                    if let Some(tx) = &inst.stdin_tx {
-                        let get_state = Command::GetState.to_json_line();
-                        let _ = tx.send(get_state);
-                    }
-                }
-            }
-        }
+    // Extract pi's native sessionId and register as route
+    let pi_session_id = data
+        .get("sessionId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty());
+
+    if let Some(sid) = pi_session_id {
+        state
+            .inner
+            .routes
+            .lock()
+            .insert(sid.to_string(), instance_id.to_string());
     }
 
-    // ── 1c. On get_state response → complete pending link + store full state ──
-    if event_type == "response" && !instance_id.is_empty() {
-        if let Ok(resp) = pi_rpc::event::Response::from_json_line(raw) {
-            // catch "get_state" response to complete session record
-            if resp.success && resp.command == "get_state" {
-                let data = resp.data.as_ref();
+    // Parse full pi session state and store in session manager
+    let model = data.get("model");
+    let pi_state = session_manager::PiSessionState {
+        session_file: session_file.map(|s| s.to_string()),
+        session_id: pi_session_id.map(|s| s.to_string()),
+        session_name: data
+            .get("sessionName")
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.to_string()),
+        model_id: model
+            .and_then(|m| m.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.to_string()),
+        model_name: model
+            .and_then(|m| m.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.to_string()),
+        model_provider: model
+            .and_then(|m| m.get("provider"))
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.to_string()),
+        thinking_level: data
+            .get("thinkingLevel")
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.to_string()),
+        is_streaming: data
+            .get("isStreaming")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        is_compacting: data
+            .get("isCompacting")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        message_count: data
+            .get("messageCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32,
+        pending_message_count: data
+            .get("pendingMessageCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32,
+        context_window: model
+            .and_then(|m| m.get("contextWindow"))
+            .and_then(serde_json::Value::as_u64)
+            .map(|v| v as u32),
+    };
+    state
+        .session_manager
+        .lock()
+        .update_pi_state(instance_id, pi_state);
+}
 
-                // Extract sessionFile for DB link and routing
-                let session_file = data
-                    .and_then(|d| d.get("sessionFile").and_then(serde_json::Value::as_str))
-                    .filter(|s| !s.is_empty());
-
-                if let Some(sf) = session_file {
-                    // Complete session record with actual file path from pi
-                    let _ = state.db.complete_session(&instance_id, sf);
-                    state.inner.routes.lock().insert(sf.to_string(), instance_id.clone());
-                    // Check if there was a pending project link
-                    let pending = state.session_manager.lock().pending_links.remove(&instance_id);
-                    if pending.is_some() {
-                        push_sessions_list_to_clients(state);
-                    }
-                }
-
-                // Extract pi's native sessionId and register as route
-                let pi_session_id = data
-                    .and_then(|d| d.get("sessionId").and_then(serde_json::Value::as_str))
-                    .filter(|s| !s.is_empty());
-
-                if let Some(sid) = pi_session_id {
-                    state.inner.routes.lock().insert(sid.to_string(), instance_id.clone());
-                }
-
-                // Parse full pi session state and store in session manager
-                let pi_state = session_manager::PiSessionState {
-                    session_file: session_file.map(|s| s.to_string()),
-                    session_id: pi_session_id.map(|s| s.to_string()),
-                    session_name: data.and_then(|d| d.get("sessionName").and_then(serde_json::Value::as_str)).map(|s| s.to_string()),
-                    model_id: data.and_then(|d| d.get("model").and_then(|m| m.get("id")).and_then(serde_json::Value::as_str)).map(|s| s.to_string()),
-                    model_name: data.and_then(|d| d.get("model").and_then(|m| m.get("name")).and_then(serde_json::Value::as_str)).map(|s| s.to_string()),
-                    model_provider: data.and_then(|d| d.get("model").and_then(|m| m.get("provider")).and_then(serde_json::Value::as_str)).map(|s| s.to_string()),
-                    thinking_level: data.and_then(|d| d.get("thinkingLevel").and_then(serde_json::Value::as_str)).map(|s| s.to_string()),
-                    is_streaming: data.and_then(|d| d.get("isStreaming").and_then(serde_json::Value::as_bool)).unwrap_or(false),
-                    is_compacting: data.and_then(|d| d.get("isCompacting").and_then(serde_json::Value::as_bool)).unwrap_or(false),
-                    message_count: data.and_then(|d| d.get("messageCount").and_then(serde_json::Value::as_u64)).unwrap_or(0) as u32,
-                    pending_message_count: data.and_then(|d| d.get("pendingMessageCount").and_then(serde_json::Value::as_u64)).unwrap_or(0) as u32,
-                    context_window: data.and_then(|d| d.get("model").and_then(|m| m.get("contextWindow")).and_then(serde_json::Value::as_u64)).map(|v| v as u32),
-                };
-                state.session_manager.lock().update_pi_state(&instance_id, pi_state);
-            }
-        }
-    }
-
-    // ── 4. Track message in session manager and broadcast ───────────
+/// Track message in session manager and broadcast to clients.
+fn track_and_broadcast(
+    state: &Arc<GatewayState>,
+    val: &serde_json::Value,
+    event_type: &str,
+    instance_id: &str,
+) {
     let message_seq = if !instance_id.is_empty() {
-        state.session_manager.lock().on_event(&val, &instance_id).unwrap_or(0)
+        state
+            .session_manager
+            .lock()
+            .on_event(val, instance_id)
+            .unwrap_or(0)
     } else {
         0
     };
 
-    let is_pi_event = PI_LIFECYCLE_TYPES.contains(&event_type);
+    let is_pi_event = LIFECYCLE_EVENT_TYPES.contains(&event_type);
 
     let envelope = if is_pi_event {
         serde_json::json!({
@@ -449,222 +585,11 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
 
     // If instance has subscribers, send only to them; otherwise broadcast to all
     let envelope_str = envelope.to_string();
-    if !instance_id.is_empty() && state.session_manager.lock().has_subscribers(&instance_id) {
-        broadcast_to_subscribers(state, &instance_id, &envelope_str);
+    if !instance_id.is_empty() && state.session_manager.lock().has_subscribers(instance_id) {
+        broadcast_to_subscribers(state, instance_id, &envelope_str);
     } else {
         broadcast_to_clients(state, &envelope_str);
     }
-
-    // ── 5. Push updated sessions list for session-changing events ─────
-    if matches!(
-        event_type,
-        "session_start" | "session_shutdown" | "agent_end" | "turn_end"
-    ) {
-        push_sessions_list_to_clients(state);
-    }
-
-    // ── 6. Push if session state changed (active↔idle transitions) ───
-    if event_type == "session_cleanup" {
-        push_sessions_list_to_clients(state);
-        return;
-    }
-
-    // Persist any auto-generated session names to DB
-    let pending_names = state.session_manager.lock().take_pending_names();
-    for (iid, name) in &pending_names {
-        let _ = state.db.set_session_name(iid, name);
-    }
-
-    if state.session_manager.lock().take_dirty() || !pending_names.is_empty() {
-        push_sessions_list_to_clients(state);
-    }
-}
-
-/// Send a message to all connected WS clients.
-fn broadcast_to_clients(state: &GatewayState, msg: &str) {
-    let mut clients = state.ui_clients.lock();
-    let mut dead = Vec::new();
-    for (id, tx) in clients.iter() {
-        if tx.send(msg.to_string()).is_err() {
-            dead.push(*id);
-        }
-    }
-    for id in dead {
-        clients.remove(&id);
-    }
-}
-
-/// Send a message only to clients subscribed to a specific session.
-fn broadcast_to_subscribers(state: &GatewayState, instance_id: &str, msg: &str) {
-    let subscriber_ids: Vec<u64> = state
-        .session_manager
-        .lock()
-        .sessions
-        .get(instance_id)
-        .map(|s| s.subscribers.iter().copied().collect())
-        .unwrap_or_default();
-
-    if subscriber_ids.is_empty() {
-        return;
-    }
-
-    let clients = state.ui_clients.lock();
-    let mut dead = Vec::new();
-    for id in &subscriber_ids {
-        if let Some(tx) = clients.get(id) {
-            if tx.send(msg.to_string()).is_err() {
-                dead.push(*id);
-            }
-        }
-    }
-    drop(clients);
-    if !dead.is_empty() {
-        let mut clients = state.ui_clients.lock();
-        for id in dead {
-            clients.remove(&id);
-        }
-    }
-}
-
-/// Push the current sessions list directly to all connected WS clients.
-/// Builds from database: projects → linked sessions → file metadata.
-pub fn push_sessions_list_to_clients(state: &GatewayState) {
-    let projects = build_project_session_tree(state);
-    if let Ok(json) = serde_json::to_string(&projects) {
-        let msg = format!(r#"{{"type":"sessions_list","projects":{}}}"#, json);
-        broadcast_to_clients(state, &msg);
-    }
-}
-
-/// Build project-session tree from database + session file metadata + runtime state.
-pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::ProjectGroup> {
-    use handlers::{ProjectGroup, SessionInfo};
-    use std::collections::HashMap;
-
-    // Build lookup: session_file_path → (instance_id, state_info) from session manager
-    let mgr = state.session_manager.lock();
-    let mut runtime_by_iid: HashMap<String, RuntimeSessionInfo> = HashMap::new();
-    for session in mgr.sessions.values() {
-        let info = RuntimeSessionInfo {
-            state: match &session.state {
-                session_manager::SessionState::Active => "active".to_string(),
-                session_manager::SessionState::Idle { .. } => "idle".to_string(),
-                session_manager::SessionState::Unloaded => "unloaded".to_string(),
-            },
-            model: session.pi_state.as_ref().and_then(|p| p.model_id.clone()),
-            thinking_level: session.pi_state.as_ref().and_then(|p| p.thinking_level.clone()),
-            message_count: session.messages.len() as u32,
-            message_seq: session.message_seq,
-            session_name: session.session_name.clone(),
-            last_active_epoch: session.last_active_epoch,
-        };
-        runtime_by_iid.insert(session.instance_id.clone(), info);
-    }
-    drop(mgr);
-
-    // Single DB query for all sessions (avoid O(n²))
-    let all_db_sessions = state.db.all_sessions();
-    let db_by_iid: HashMap<String, db::SessionRow> = all_db_sessions
-        .into_iter()
-        .map(|s| (s.instance_id.clone(), s))
-        .collect();
-
-    let db_projects = super::gateway::project::list_projects(&state.db, false);
-
-    let mut result: Vec<ProjectGroup> = Vec::new();
-
-    for proj in &db_projects {
-        let instance_ids = state.db.get_project_sessions(&proj.id);
-        let mut sessions: Vec<SessionInfo> = Vec::new();
-
-        for iid in &instance_ids {
-            let rt = runtime_by_iid.get(iid);
-            let db_row = db_by_iid.get(iid);
-
-            // Label: runtime auto-title > DB name > instance id fallback
-            let label = rt
-                .and_then(|r| r.session_name.clone())
-                .or_else(|| db_row.and_then(|r| r.name.clone()))
-                .unwrap_or_else(|| iid.chars().take(8).collect());
-
-            let state_str = rt
-                .map(|r| r.state.clone())
-                .unwrap_or_else(|| "unloaded".to_string());
-
-            sessions.push(SessionInfo {
-                id: iid.clone(),
-                label,
-                created_at: String::new(),
-                file_path: db_row
-                    .and_then(|r| r.session_path.clone())
-                    .unwrap_or_default(),
-                updated_at: rt.map(|r| r.last_active_epoch).unwrap_or_else(|| {
-                    // Parse DB created_at RFC3339 string to epoch
-                    db_row.and_then(|r| chrono::DateTime::parse_from_rfc3339(&r.created_at).ok())
-                        .map(|dt| dt.timestamp() as u64)
-                        .unwrap_or(0)
-                }),
-                preview: String::new(),
-                cwd: proj.cwd.clone(),
-                instance_id: Some(iid.clone()),
-                state: Some(state_str),
-                model: rt.and_then(|r| r.model.clone()),
-                thinking_level: rt.and_then(|r| r.thinking_level.clone()),
-                message_count: rt.map(|r| r.message_count).unwrap_or(0),
-                message_seq: rt.map(|r| r.message_seq).unwrap_or(0),
-            });
-        }
-
-        sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-
-        result.push(ProjectGroup {
-            path: proj.cwd.clone(),
-            dir_name: proj.name.clone(),
-            sessions,
-        });
-    }
-
-    // Orphaned sessions (in DB but no project)
-    let all_linked: std::collections::HashSet<String> = result
-        .iter()
-        .flat_map(|p| p.sessions.iter().filter_map(|s| s.instance_id.clone()))
-        .collect();
-
-    let orphans: Vec<SessionInfo> = db_by_iid
-        .values()
-        .filter(|s| s.project_id.is_none() && !all_linked.contains(&s.instance_id))
-        .map(|s| {
-            let rt = runtime_by_iid.get(&s.instance_id);
-            let label = s.name.clone()
-                .or_else(|| rt.and_then(|r| r.session_name.clone()))
-                .unwrap_or_else(|| s.instance_id.chars().take(8).collect());
-            SessionInfo {
-                id: s.instance_id.clone(),
-                label,
-                created_at: String::new(),
-                file_path: s.session_path.clone().unwrap_or_default(),
-                updated_at: rt.map(|r| r.message_count as u64).unwrap_or(0),
-                preview: String::new(),
-                cwd: s.cwd.clone(),
-                instance_id: Some(s.instance_id.clone()),
-                state: Some(rt.map(|r| r.state.clone()).unwrap_or_else(|| "unloaded".to_string())),
-                model: rt.and_then(|r| r.model.clone()),
-                thinking_level: None,
-                message_count: rt.map(|r| r.message_count).unwrap_or(0),
-                message_seq: rt.map(|r| r.message_seq).unwrap_or(0),
-            }
-        })
-        .collect();
-
-    if !orphans.is_empty() {
-        result.push(ProjectGroup {
-            path: String::new(),
-            dir_name: "Other".to_string(),
-            sessions: orphans,
-        });
-    }
-
-    result
 }
 
 /// Lightweight runtime info from session manager for enriching project tree.
@@ -677,81 +602,4 @@ struct RuntimeSessionInfo {
     message_seq: u64,
     session_name: Option<String>,
     last_active_epoch: u64,
-}
-
-
-// ─── LAN IP Discovery ──────────────────────────────────────────────────────
-
-pub fn discover_lan_ips() -> Vec<String> {
-    let mut ips: Vec<String> = Vec::new();
-
-    // Primary: UDP socket trick — connect to public DNS to find route IP
-    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:53").is_ok() {
-            if let Ok(addr) = socket.local_addr() {
-                let ip = addr.ip();
-                if is_private_ipv4(ip) {
-                    ips.push(ip.to_string());
-                }
-            }
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(output) = std::process::Command::new("ipconfig").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let line = line.trim();
-                if line.contains("IPv4") && line.contains(':') {
-                    if let Some(ip_str) = line.split(':').next_back() {
-                        let ip_str = ip_str.trim();
-                        if let Ok(addr) = ip_str.parse::<std::net::IpAddr>() {
-                            if is_private_ipv4(addr) && !ips.contains(&ip_str.to_string()) {
-                                ips.push(ip_str.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        for (cmd, args) in [("ifconfig", &["-a"] as &[&str]), ("ip", &["addr"])] {
-            if let Ok(output) = std::process::Command::new(cmd).args(args).output() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    let trimmed = line.trim();
-                    if let Some(inet) = trimmed.strip_prefix("inet ") {
-                        if let Some(ip_part) = inet.split_whitespace().next() {
-                            if let Ok(addr) = ip_part.parse::<std::net::IpAddr>() {
-                                if is_private_ipv4(addr) && !ips.contains(&ip_part.to_string()) {
-                                    ips.push(ip_part.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-                if !ips.is_empty() {
-                    break;
-                }
-            }
-        }
-    }
-
-    ips
-}
-
-fn is_private_ipv4(ip: std::net::IpAddr) -> bool {
-    if !ip.is_ipv4() || ip.is_loopback() {
-        return false;
-    }
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            matches!(v4.octets(), [10, ..] | [172, 16..=31, ..] | [192, 168, ..])
-        }
-        _ => false,
-    }
 }

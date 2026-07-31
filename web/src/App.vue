@@ -2,11 +2,11 @@
 import { ref, watch, onMounted } from "vue";
 import ChatPane from "./components/ChatPane.vue";
 import SessionSidebar from "./components/SessionSidebar.vue";
-import ModelSelector from "./components/ModelSelector.vue";
-import LanShare from "./components/LanShare.vue";
+import GlobalHeader from "./components/GlobalHeader.vue";
 import NewSessionPane from "./components/NewSessionPane.vue";
 import { usePiConnection } from "./composables/usePiConnection";
 import { useSessions } from "./composables/useSessions";
+import type { ModelRef } from "./types";
 
 const {
   messages,
@@ -22,7 +22,7 @@ const {
   currentModel,
   connectWebSocket,
   sendPrompt,
-  sendCommand,
+  newSession,
   switchSession,
   restartPi,
   clearMessages,
@@ -32,7 +32,7 @@ const { sessions, fetchSessions } = useSessions();
 
 const sidebarOpen = ref(window.innerWidth > 640);
 const sessionName = ref("");
-const modelId = ref("");
+const modelId = ref<ModelRef | null>(null);
 const showNewSession = ref(true);
 const pendingFirstMessage = ref<string | null>(null);
 
@@ -55,7 +55,7 @@ function closeSidebar() {
 }
 
 function handleSend(text: string) {
-  sendPrompt(text);
+  sendPrompt(text, modelId.value);
 }
 
 async function handleSelectSession(instanceId: string) {
@@ -87,18 +87,14 @@ function handleNewSession(_cwd?: string) {
 // New session pane confirmed — create the session
 async function handleCreateSession(payload: { cwd: string; name: string; message?: string }) {
   sessionName.value = payload.name;
-
-  const cmd: Record<string, unknown> = { type: "new_session", cwd: payload.cwd, name: payload.name };
-
-  // Store the first message to send after session is created
   pendingFirstMessage.value = payload.message || null;
-  sendCommand(cmd);
+  newSession(payload.cwd, payload.name, modelId.value);
   clearMessages();
   showNewSession.value = false;
 }
 
-function handleModelSelect(modelIdStr: string) {
-  modelId.value = modelIdStr;
+function handleModelSelect(model: ModelRef) {
+  modelId.value = model;
 }
 
 onMounted(() => {
@@ -119,7 +115,7 @@ watch(activeInstanceId, (id) => {
     if (pendingFirstMessage.value) {
       const msg = pendingFirstMessage.value;
       pendingFirstMessage.value = null;
-      setTimeout(() => sendPrompt(msg), 100);
+      setTimeout(() => sendPrompt(msg, modelId.value), 100);
     }
   }
 });
@@ -155,8 +151,20 @@ watch(sessionStatus, (status) => {
       />
     </aside>
 
-    <!-- Main area: new session pane OR chat pane -->
+    <!-- Main area: global header + new session pane OR chat pane -->
     <main class="app-main">
+      <GlobalHeader
+        :session-name="sessionName"
+        :show-session-name="!showNewSession"
+        :is-running="isRunning"
+        :status-text="statusText"
+        :model-id="modelId"
+        :session-status="sessionStatus"
+        :mobile-mode="mobileMode"
+        @toggle-sidebar="toggleSidebar"
+        @select-model="handleModelSelect"
+      />
+
       <NewSessionPane
         v-if="showNewSession"
         :projects="wsSessions.map(p => ({ path: p.path, name: p.name }))"
@@ -171,23 +179,9 @@ watch(sessionStatus, (status) => {
         :current-assistant-content="currentAssistantContent"
         :current-thinking="currentThinking"
         :tool-executions="toolExecutions"
-        :status-text="statusText"
-        :session-name="sessionName"
-        :model-name="modelId"
-        :sidebar-collapsed="!sidebarOpen"
         @send="handleSend"
         @restart-pi="restartPi"
-        @toggle-sidebar="toggleSidebar"
-      >
-        <template #header-extra>
-          <ModelSelector
-            :model-id="modelId"
-            :session-status="sessionStatus"
-            @select-model="handleModelSelect"
-          />
-          <LanShare :mobile-mode="mobileMode" />
-        </template>
-      </ChatPane>
+      />
     </main>
   </div>
 </template>

@@ -29,7 +29,7 @@ export interface SessionInfo {
   preview: string;
   cwd: string;
   instanceId?: string;
-  state?: "active" | "idle" | "unloaded";
+  state?: "idle" | "busy" | "waiting_review" | "unloaded";
   model?: string;
   thinkingLevel?: string;
   messageCount?: number;
@@ -41,6 +41,12 @@ export interface ProjectGroup {
   path: string;
   name: string;
   sessions: SessionInfo[];
+}
+
+/** Model reference (id + provider pair) used for model switching */
+export interface ModelRef {
+  id: string;
+  provider?: string;
 }
 
 /** Model metadata from the backend */

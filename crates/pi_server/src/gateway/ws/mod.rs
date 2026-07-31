@@ -4,7 +4,7 @@
 //! Real session file paths are internal to the backend.
 
 mod helper;
-
+mod broker;
 
 use std::sync::Arc;
 
@@ -14,10 +14,10 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use super::GatewayState;
-use crate::broker::types::PROTOCOL_VERSION;
-use pi_rpc::command::Command;
-use helper::{extract_cwd, resolve_command_instance};
+use crate::{broker::types::PROTOCOL_VERSION, gateway::ws::broker::dispatch_control};
+use super::{GatewayState, helper::{notify_undeliverable, forward_to_instance}};
+use helper::resolve_command_instance;
+
 
 pub async fn ws_handler(
     ws: axum::extract::WebSocketUpgrade,
@@ -47,7 +47,7 @@ async fn handle_ws(socket: ws::WebSocket, state: Arc<GatewayState>) {
     );
 
     // Send sessions list (DB-backed, auto-link already done at DB open)
-    let sessions = super::build_project_session_tree(&state);
+    let sessions = super::state::build_project_session_tree(&state);
     if let Ok(json) = serde_json::to_string(&sessions) {
         let _ = client_tx.send(format!(r#"{{"type":"sessions_list","projects":{}}}"#, json));
     }
@@ -115,256 +115,19 @@ fn route_ui_message(
         return;
     }
 
-    let effective_type = if msg_type == "broker_command" {
-        value.pointer("/payload/type").and_then(Value::as_str).unwrap_or("")
-    } else {
-        msg_type
-    };
-
-    // ── new_session: spawn pi, return instanceId ──────────────────────
-    if effective_type == "new_session" {
-        let Some(cwd) = extract_cwd(&value) else {
-            notify_undeliverable(client_tx, &value, "missing_or_invalid_cwd");
-            return;
-        };
-        let name = value.pointer("/payload/name").and_then(Value::as_str)
-            .or_else(|| value.get("name").and_then(Value::as_str))
-            .unwrap_or("New Project");
-
-        match super::session_manager::SessionManager::create_session(
-            &state.session_manager, state, &cwd, name, client_id,
-        ) {
-            Ok(instance_id) => {
-                // Immediately push updated sessions list
-                super::push_sessions_list_to_clients(state);
-
-                // Fire-and-forget get_state so we learn sessionId/sessionFile/model ASAP.
-                // The response is handled by the event loop (mod.rs §1c).
-                {
-                    let instances = state.inner.instances.lock();
-                    if let Some(inst) = instances.get(&instance_id) {
-                        if let Some(tx) = &inst.stdin_tx {
-                            let _ = tx.send(Command::GetState.to_json_line());
-                        }
-                    }
-                }
-
-                // Send snapshot (empty for new session)
-                let snapshot = json!({
-                    "type": "session_snapshot",
-                    "instanceId": instance_id,
-                    "messages": [],
-                    "messageSeq": 0,
-                });
-                let _ = client_tx.send(snapshot.to_string());
-                // Also send the new_session response with instanceId
-                let _ = client_tx.send(json!({
-                    "type": "response",
-                    "command": "new_session",
-                    "success": true,
-                    "instanceId": instance_id,
-                }).to_string());
-            }
-            Err(e) => {
-                log::error!("[gateway] create_session failed: {}", e);
-                notify_undeliverable(client_tx, &value, "session_create_failed");
-            }
-        }
-        return;
-    }
-
-    // ── switch_session: by instanceId ────────────────────────────────
-    if effective_type == "switch_session" {
-        let iid = value
-            .get("instanceId")
-            .and_then(Value::as_str)
-            .or_else(|| value.pointer("/payload/instanceId").and_then(Value::as_str));
-
-        log::debug!("[gateway] switch_session: raw value={}", value);
-        log::debug!("[gateway] switch_session: resolved iid={:?}", iid);
-
-        let Some(iid) = iid else {
-            log::warn!("[gateway] switch_session: missing_instanceId");
-            notify_undeliverable(client_tx, &value, "missing_instanceId");
-            return;
-        };
-
-        let result = super::session_manager::SessionManager::switch_session(
-            &state.session_manager, iid, client_id,
-        );
-
-        match result {
-            super::session_manager::SessionResult::Switched {
-                instance_id, messages, message_seq, ..
-            } => {
-                log::debug!("[gateway] switch_session: Switched to {}", instance_id);
-                send_snapshot(client_tx, &instance_id, &messages, message_seq);
-                // Forward switch_session to pi
-                let (text, value, state, client_tx) = (text.to_string(), value.clone(), state.clone(), client_tx.clone());
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    forward_to_instance(&text, &value, &instance_id, &state, &client_tx);
-                });
-            }
-            super::session_manager::SessionResult::NeedSpawn { .. } => {
-                // Session exists in DB but not running — spawn with persisted instance_id
-                log::info!("[gateway] switch_session: instance {} not running, spawning", iid);
-                // Get cwd and session_path from DB
-                let db_session = state.db.all_sessions().into_iter()
-                    .find(|s| s.instance_id == iid);
-                let cwd = extract_cwd(&value).or_else(|| db_session.as_ref().map(|s| s.cwd.clone()));
-                let Some(cwd) = cwd else {
-                    log::warn!("[gateway] switch_session: no cwd for instance {}", iid);
-                    notify_undeliverable(client_tx, &value, "missing_cwd");
-                    return;
-                };
-                let session_path = db_session.and_then(|s| s.session_path);
-                let extensions = super::project::resolve_project_extensions(&state.db, &cwd, &cwd);
-                // Load existing messages from session file (if it exists)
-                let existing_messages: Vec<Value> = session_path.as_ref()
-                    .map(|sp| super::handlers::session::load_session(sp))
-                    .unwrap_or_default();
-                let msg_seq = existing_messages.len() as u64;
-                // Reuse the persisted instance_id, resume existing session file
-                let mut builder = state.spawn().cwd(&cwd).extensions(&extensions).id(iid);
-                if let Some(ref sp) = session_path {
-                    builder = builder.session_path(sp);
-                }
-                match builder.run() {
-                    Ok(new_iid) => {
-                        // Register in routing table
-                        state.inner.routes.lock().insert(new_iid.clone(), new_iid.clone());
-                        // Register in session manager with existing messages
-                        super::session_manager::SessionManager::register_instance(
-                            &state.session_manager, &new_iid, &cwd, client_id,
-                        );
-                        // Inject loaded messages into the managed session
-                        {
-                            let mut mgr = state.session_manager.lock();
-                            if let Some(session) = mgr.sessions.get_mut(&new_iid) {
-                                session.messages = existing_messages.clone();
-                                session.message_seq = msg_seq;
-                            }
-                        }
-                        // Immediately push updated sessions list
-                        super::push_sessions_list_to_clients(state);
-                        // Tell frontend the instance is ready with loaded messages
-                        let snapshot = serde_json::json!({
-                            "type": "session_snapshot",
-                            "instanceId": new_iid,
-                            "messages": existing_messages,
-                            "messageSeq": msg_seq,
-                        });
-                        let _ = client_tx.send(snapshot.to_string());
-                        // Forward switch_session after pi starts
-                        let (text, value, state, client_tx) = (text.to_string(), value.clone(), state.clone(), client_tx.clone());
-                        tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                            forward_to_instance(&text, &value, &new_iid, &state, &client_tx);
-                        });
-                    }
-                    Err(e) => {
-                        log::error!("[gateway] spawn for switch_session failed: {}", e);
-                        notify_undeliverable(client_tx, &value, "spawn_failed");
-                    }
-                }
-            }
-        }
+    if msg_type == "broker_command" {
+        broker::handler_broker_command(&state, text, &value, client_tx, client_id);
         return;
     }
 
     // ── Normal routing (by instanceId) ────────────────────────────────
     let Some(instance_id) = resolve_command_instance(&value, state) else {
-        log::warn!("[gateway] no route for command: {}", effective_type);
         notify_undeliverable(client_tx, &value, "no_route");
         return;
     };
 
     forward_to_instance(text, &value, &instance_id, state, client_tx);
 }
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-fn send_snapshot(
-    client_tx: &mpsc::UnboundedSender<String>,
-    instance_id: &str,
-    messages: &[Value],
-    message_seq: u64,
-) {
-    let msg = json!({
-        "type": "session_snapshot",
-        "instanceId": instance_id,
-        "messages": messages,
-        "messageSeq": message_seq,
-    });
-    log::info!("[gateway] send_snapshot: iid={}, msgs={}, seq={}", instance_id, messages.len(), message_seq);
-    if client_tx.send(msg.to_string()).is_err() {
-        log::warn!("[gateway] send_snapshot: client_tx send FAILED — channel closed");
-    }
-}
-
-fn forward_to_instance(
-    text: &str,
-    value: &Value,
-    instance_id: &str,
-    state: &Arc<GatewayState>,
-    client_tx: &mpsc::UnboundedSender<String>,
-) {
-    let msg_type = value.get("type").and_then(Value::as_str).unwrap_or("");
-    let forward_text = if msg_type == "broker_command" {
-        value.get("payload")
-            .and_then(|p| serde_json::to_string(p).ok())
-            .unwrap_or_else(|| text.to_string())
-    } else {
-        text.to_string()
-    };
-
-    let instances = state.inner.instances.lock();
-    if let Some(instance) = instances.get(instance_id) {
-        if let Some(tx) = &instance.stdin_tx {
-            if tx.send(forward_text).is_err() {
-                drop(instances);
-                notify_undeliverable(client_tx, value, "upstream_unavailable");
-            }
-        }
-    } else {
-        drop(instances);
-        notify_undeliverable(client_tx, value, "upstream_unavailable");
-    }
-}
-
-fn notify_undeliverable(client_tx: &mpsc::UnboundedSender<String>, value: &Value, reason: &str) {
-    let request_id = value.get("id").and_then(Value::as_str).unwrap_or("");
-    let command = value
-        .pointer("/payload/type")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("type").and_then(Value::as_str))
-        .unwrap_or("");
-    let _ = client_tx.send(json!({
-        "type": "command_undeliverable",
-        "protocolVersion": PROTOCOL_VERSION,
-        "requestId": request_id,
-        "command": command,
-        "reason": reason,
-    }).to_string());
-}
-
-async fn dispatch_control(value: Value, client_tx: &mpsc::UnboundedSender<String>) {
-    let request_id = value.get("requestId").and_then(Value::as_str).unwrap_or("").to_string();
-    let command = value.get("command").and_then(Value::as_str).unwrap_or("").to_string();
-
-    let response = match command.as_str() {
-        "ping" => json!({"type": "control_response", "requestId": request_id, "ok": true, "result": {"pong": true}}),
-        "info" => json!({"type": "control_response", "requestId": request_id, "ok": true, "result": {
-            "version": env!("CARGO_PKG_VERSION"),
-            "features": ["rpc", "ws", "lan", "health", "multi_instance"],
-        }}),
-        _ => json!({"type": "control_response", "requestId": request_id, "ok": false, "error": format!("Unknown command: {}", command)}),
-    };
-
-    let _ = client_tx.send(response.to_string());
-}
-
 
 
 
@@ -413,7 +176,7 @@ fn dispatch_gateway_command(
             Ok(json!({}))
         }
         "list_sessions" => {
-            let projects = super::build_project_session_tree(state);
+            let projects = super::state::build_project_session_tree(state);
             Ok(serde_json::json!({ "projects": projects }))
         }
         "delete_session" => {
@@ -445,7 +208,7 @@ fn dispatch_gateway_command(
         "get_active_sessions" => {
             let mgr = state.session_manager.lock();
             let active: Vec<_> = mgr.sessions.values()
-                .filter(|s| matches!(s.state, super::session_manager::SessionState::Active | super::session_manager::SessionState::Idle { .. }))
+                .filter(|s| s.activity != super::session_manager::SessionActivity::Unloaded)
                 .map(|s| json!({
                     "instanceId": s.instance_id,
                     "cwd": s.cwd,

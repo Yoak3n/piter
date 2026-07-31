@@ -39,6 +39,7 @@ pub struct SpawnBuilder {
     cwd: Option<String>,
     session_path: Option<String>,
     extensions: Vec<String>,
+    model: Option<String>,
     persistent: bool,
     id: Option<String>,
 }
@@ -61,6 +62,7 @@ impl SpawnBuilder {
             cwd: None,
             session_path: None,
             extensions: Vec::new(),
+            model: None,
             persistent,
             id: None,
         }
@@ -98,6 +100,12 @@ impl SpawnBuilder {
         self
     }
 
+    /// Set the model for the pi process (format: "provider/modelId").
+    pub fn model(mut self, model: &str) -> Self {
+        self.model = Some(model.to_string());
+        self
+    }
+
     /// Execute the spawn and register the instance in the broker.
     ///
     /// Returns the `instance_id` (UUID).
@@ -128,6 +136,11 @@ impl SpawnBuilder {
                 args.push("-e".into());
                 args.push(ext.clone());
             }
+        }
+
+        if let Some(ref m) = self.model {
+            args.push("--model".into());
+            args.push(m.clone());
         }
 
         log::info!(

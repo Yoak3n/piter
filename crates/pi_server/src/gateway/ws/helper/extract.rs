@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use serde_json::Value;
 
 use crate::GatewayState;
@@ -20,11 +18,9 @@ pub fn extract_cwd(value: &Value) -> Option<String> {
     }
 }
 
-
-
 /// Resolve instance by instanceId (from message payload). Returns None if
 /// not provided or not found in the running instances table.
-pub fn resolve_command_instance(value: &Value, state: &Arc<GatewayState>) -> Option<String> {
+pub fn resolve_command_instance(value: &Value, state: &GatewayState) -> Option<String> {
     let direct_id = value
         .get("instanceId")
         .and_then(Value::as_str)

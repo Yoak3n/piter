@@ -465,7 +465,7 @@ fn extract_archive(archive_path: &Path, target_dir: &Path, is_zip: bool) -> Resu
 }
 
 /// Download a pi release from GitHub and extract to `target_dir`.
-fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
+pub fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
     let asset = detect_platform()?;
     let url = format!(
         "https://github.com/earendil-works/pi/releases/download/v{}/{}",
@@ -537,6 +537,70 @@ fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
 
     info!("pi {} installed to {}", version, target_dir.display());
     Ok(())
+}
+
+/// Resolve the pi binary path using only local sources (already-existing at
+/// target or found at known install locations). Does NOT download from GitHub.
+///
+/// Returns the path to the pi executable inside `target_dir`, or an error
+/// if no local copy can be found.
+pub fn resolve_pi_binary_local(target_dir: &Path) -> Result<PathBuf, String> {
+    let bin_path = target_dir.join(pi_binary_name());
+    let mut log_msgs: Vec<String> = Vec::new();
+
+    log_msgs.push(format!(
+        "[pi resolver/local] target={}",
+        bin_path.display()
+    ));
+
+    // ① Fast path: binary already exists at target
+    if bin_path.is_file() {
+        log_msgs.push("  ✓ Found at target".into());
+        for l in &log_msgs { info!("{}", l); }
+        return Ok(bin_path);
+    }
+
+    // ② Search known install locations
+    log_msgs.push("  → Searching known installation locations".into());
+    let candidates = find_candidates();
+    let valid: Vec<(PathBuf, String)> = candidates
+        .into_iter()
+        .filter(|(path, _)| is_valid_pi_dir(path))
+        .collect();
+    let mut scored: Vec<(u32, PathBuf, String)> = valid
+        .into_iter()
+        .map(|(path, source)| {
+            let score = score_pi_dir(&path);
+            (score, path, source)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
+
+    if let Some((_score, best_path, source)) = scored.first() {
+        log_msgs.push(format!(
+            "    ✓ Best candidate: {} (source={})",
+            best_path.display(), source
+        ));
+
+        if let Some(parent) = target_dir.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match link_or_copy(best_path, target_dir) {
+            Ok(()) => {
+                if bin_path.is_file() {
+                    for l in &log_msgs { info!("{}", l); }
+                    return Ok(bin_path);
+                }
+            }
+            Err(e) => {
+                log_msgs.push(format!("    ✗ Link/copy failed: {}", e));
+            }
+        }
+    }
+
+    for l in &log_msgs { warn!("{}", l); }
+    Err("No local pi installation found. Use the Versions tab in Settings to download pi.".into())
 }
 
 /// Resolve the pi binary path. Searches known install locations, copies/links

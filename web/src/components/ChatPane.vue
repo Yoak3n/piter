@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from "vue";
-import { Menu, ChevronRight, Brain, Copy, Check } from "lucide-vue-next";
+import { ChevronRight, Brain, Copy, Check } from "lucide-vue-next";
 import { marked } from "marked";
 import type { Message, ToolExecution } from "../types";
 
@@ -21,16 +21,11 @@ const props = defineProps<{
   currentAssistantContent: string;
   currentThinking?: string;
   toolExecutions?: ToolExecution[];
-  statusText: string;
-  sessionName?: string;
-  modelName?: string;
-  sidebarCollapsed: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "send", text: string): void;
   (e: "restart-pi"): void;
-  (e: "toggle-sidebar"): void;
 }>();
 
 const inputText = ref("");
@@ -154,21 +149,6 @@ function copyToClipboard(text: string, id: string) {
 
 <template>
   <div class="chat">
-    <!-- Header -->
-    <header class="chat-header">
-      <button class="btn btn-ghost btn-icon btn-sm hamburger" @click="$emit('toggle-sidebar')" :title="sidebarCollapsed ? 'Show sessions' : 'Hide sessions'">
-        <Menu :size="16" />
-      </button>
-      <div class="header-info">
-        <span v-if="sessionName" class="session-label">{{ sessionName }}</span>
-      </div>
-      <div class="header-right">
-        <slot name="header-extra" />
-        <span class="status-dot" :class="{ connected: isRunning, disconnected: !isRunning }" :title="isRunning ? 'Connected' : 'Disconnected'" />
-        <span v-if="!isRunning" class="status-label disconnected-label">{{ statusText }}</span>
-      </div>
-    </header>
-
     <!-- Timeline -->
     <div ref="timelineRef" class="timeline">
       <div v-if="turns.length === 0" class="empty-state">
@@ -317,24 +297,6 @@ function copyToClipboard(text: string, id: string) {
 
 <style scoped>
 .chat { display:flex; flex-direction:column; height:100%; overflow:hidden; }
-
-.chat-header {
-  display:flex; align-items:center; justify-content:space-between;
-  padding:0 12px; height:44px; flex-shrink:0;
-  border-bottom:1px solid var(--color-border-subtle);
-  background:var(--color-bg-panel);
-}
-.hamburger { display:none; }
-.header-info { display:flex; align-items:center; gap:8px; min-width:0; flex:1; }
-.session-label { font-size:12px; font-weight:500; color:var(--color-text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px; }
-.header-right { display:flex; align-items:center; gap:6px; }
-.status-dot { width:7px; height:7px; border-radius:50%; background:#999; flex-shrink:0; }
-.status-dot.connected { background:var(--color-accent); box-shadow:0 0 4px var(--color-accent); }
-.status-dot.disconnected { background:var(--color-danger); }
-.status-label { font-size:10px; color:var(--color-text-tertiary); }
-.disconnected-label { color:var(--color-danger); }
-.btn-ghost-sm { font-size:11px; color:var(--color-accent); cursor:pointer; background:none; border:none; padding:2px 6px; }
-
 .timeline { flex:1; overflow-y:auto; padding:16px 12px; display:flex; flex-direction:column; gap:12px; }
 .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:var(--color-text-tertiary); text-align:center; gap:4px; }
 .empty-icon { font-size:2.5rem; }
@@ -468,9 +430,7 @@ function copyToClipboard(text: string, id: string) {
 .markdown-body :deep(blockquote){ margin:0.3em 0; padding-left:10px; border-left:2px solid var(--color-border-strong); color:var(--color-text-secondary); }
 
 @media (max-width: 640px) {
-  .hamburger { display:flex; }
   .msg { max-width:95%; }
-  .session-label { max-width:120px; }
   .composer-input { font-size:16px; }  /* prevent iOS zoom */
   .tool-args-preview { max-width:140px; }
 }

@@ -9,7 +9,7 @@ use axum::response::Json;
 use serde_json::Value;
 
 use super::SessionsResponse;
-use crate::gateway::GatewayState;
+use crate::gateway::{GatewayState, state::build_project_session_tree};
 
 // ─── Shared logic (callable from WS) ───────────────────────────────────────
 
@@ -107,7 +107,7 @@ pub fn session_dir_for(cwd: &str) -> String {
 pub async fn sessions_handler(
     axum::extract::State(state): axum::extract::State<Arc<GatewayState>>,
 ) -> Json<SessionsResponse> {
-    let projects = super::super::build_project_session_tree(&state);
+    let projects = build_project_session_tree(&state);
     Json(SessionsResponse { projects })
 }
 

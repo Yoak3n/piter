@@ -46,10 +46,11 @@ const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 600;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SessionState {
-    Active,
-    Idle { since: Instant },
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum SessionActivity {
+    Idle,
+    Busy,
+    WaitingReview,
     Unloaded,
 }
 
@@ -73,7 +74,8 @@ pub struct PiSessionState {
 pub struct ManagedSession {
     pub instance_id: String,
     pub cwd: String,
-    pub state: SessionState,
+    pub activity: SessionActivity,
+    pub disconnected_since: Option<Instant>,
     pub messages: Vec<Value>,
     pub partial_message: Option<Value>,
     pub subscribers: HashSet<u64>,
@@ -161,6 +163,7 @@ impl SessionManager {
         cwd: &str,
         name: &str,
         client_id: u64,
+        model: Option<&str>,
     ) -> Result<String, String> {
         // Resolve project: reuse existing (cwd, name) or create a new one
         let effective_project_id = if let Some(existing) = gw.db.find_project_by_cwd_and_name(cwd, name) {
@@ -180,7 +183,7 @@ impl SessionManager {
 
         let extensions = super::project::resolve_project_extensions(&gw.db, &effective_project_id, cwd);
 
-        let instance_id = super::handlers::pi::spawn_persistent_for_gateway(gw, cwd, &extensions)?;
+        let instance_id = super::handlers::pi::spawn_persistent_for_gateway(gw, cwd, &extensions, model)?;
 
         // Register session in DB (session_path filled later by get_state response)
         let _ = gw.db.register_session(&instance_id, cwd, Some(effective_project_id.as_str()));
@@ -195,7 +198,8 @@ impl SessionManager {
                 ManagedSession {
                     instance_id: instance_id.clone(),
                     cwd: cwd.to_string(),
-                    state: SessionState::Active,
+                    activity: SessionActivity::Idle,
+                    disconnected_since: None,
                     messages: Vec::new(),
                     partial_message: None,
                     subscribers: {
@@ -233,15 +237,15 @@ impl SessionManager {
         let existing = {
             let mgr = sm.lock();
             mgr.sessions.get(instance_id).map(|s| {
-                (s.state.clone(), s.messages.clone(), s.message_seq)
+                (s.activity.clone(), s.messages.clone(), s.message_seq)
             })
         };
 
         match existing {
-            Some((SessionState::Active | SessionState::Idle { .. }, messages, seq)) => {
+            Some((activity, messages, seq)) if activity != SessionActivity::Unloaded => {
                 sm.lock().sessions.get_mut(instance_id).map(|s| {
                     s.subscribers.insert(client_id);
-                    s.state = SessionState::Active;
+                    s.disconnected_since = None;
                     s.last_active = Instant::now();
                     s.last_active_epoch = now_epoch();
                 });
@@ -274,7 +278,8 @@ impl SessionManager {
                 ManagedSession {
                     instance_id: instance_id.to_string(),
                     cwd: cwd.to_string(),
-                    state: SessionState::Active,
+                    activity: SessionActivity::Idle,
+                    disconnected_since: None,
                     messages: Vec::new(),
                     partial_message: None,
                     subscribers: {
@@ -304,14 +309,14 @@ impl SessionManager {
         let now = Instant::now();
 
         match self.sessions.get_mut(instance_id) {
-            Some(session) if matches!(session.state, SessionState::Active | SessionState::Idle { .. }) => {
-                let was_idle = matches!(session.state, SessionState::Idle { .. });
+            Some(session) if session.activity != SessionActivity::Unloaded => {
+                let was_disconnected = session.disconnected_since.is_some();
                 session.subscribers.insert(client_id);
+                session.disconnected_since = None;
                 session.last_active = now;
                 session.last_active_epoch = now_epoch();
-                session.state = SessionState::Active;
 
-                if was_idle {
+                if was_disconnected {
                     self.dirty = true;
                 }
 
@@ -330,10 +335,8 @@ impl SessionManager {
     pub fn deactivate(&mut self, instance_id: &str, client_id: u64) {
         if let Some(session) = self.sessions.get_mut(instance_id) {
             session.subscribers.remove(&client_id);
-            if session.subscribers.is_empty() && matches!(session.state, SessionState::Active) {
-                session.state = SessionState::Idle {
-                    since: Instant::now(),
-                };
+            if session.subscribers.is_empty() && session.disconnected_since.is_none() {
+                session.disconnected_since = Some(Instant::now());
                 self.dirty = true;
             }
         }
@@ -342,10 +345,8 @@ impl SessionManager {
     pub fn deactivate_all_for_client(&mut self, client_id: u64) {
         for session in self.sessions.values_mut() {
             session.subscribers.remove(&client_id);
-            if session.subscribers.is_empty() && matches!(session.state, SessionState::Active) {
-                session.state = SessionState::Idle {
-                    since: Instant::now(),
-                };
+            if session.subscribers.is_empty() && session.disconnected_since.is_none() {
+                session.disconnected_since = Some(Instant::now());
                 self.dirty = true;
             }
         }
@@ -356,6 +357,11 @@ impl SessionManager {
         let d = self.dirty;
         self.dirty = false;
         d
+    }
+
+    /// Mark session manager as dirty (state changed).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 
     /// Drain pending session names that need to be persisted to DB.
@@ -369,7 +375,7 @@ impl SessionManager {
     /// Returns `Some(message_seq)` if this event belongs to a tracked session.
     pub fn on_event(&mut self, event: &Value, instance_id: &str) -> Option<u64> {
         let session = self.sessions.get_mut(instance_id)?;
-        if matches!(session.state, SessionState::Unloaded) {
+        if session.activity == SessionActivity::Unloaded {
             return Some(0);
         }
 
@@ -389,6 +395,7 @@ impl SessionManager {
                     "role": role,
                     "content": "",
                 }));
+                session.activity = SessionActivity::Busy;
             }
 
             TrackedEvent::MessageUpdate { message } => {
@@ -402,10 +409,13 @@ impl SessionManager {
                 if let Some(ref m) = msg {
                     // Capture user messages for auto-title
                     let role = m.get("role").and_then(Value::as_str).unwrap_or("");
-                    if role == "user" && !session.title_set {
-                        let text = extract_message_text(m);
-                        if text.len() >= 10 {
-                            session.title_candidates.push(text);
+                    if role == "user" {
+                        session.activity = SessionActivity::Busy;
+                        if !session.title_set {
+                            let text = extract_message_text(m);
+                            if text.len() >= 10 {
+                                session.title_candidates.push(text);
+                            }
                         }
                     }
                     session.messages.push(m.clone());
@@ -422,6 +432,14 @@ impl SessionManager {
             }
 
             TrackedEvent::TurnEnd | TrackedEvent::AgentEnd => {
+                // If someone is viewing this session, go directly to Idle;
+                // otherwise mark WaitingReview until the user switches to it.
+                if session.subscribers.is_empty() {
+                    session.activity = SessionActivity::WaitingReview;
+                } else {
+                    session.activity = SessionActivity::Idle;
+                }
+
                 if let Some(msg) = session.partial_message.take() {
                     session.messages.push(msg);
                     session.message_seq += 1;
@@ -495,7 +513,7 @@ impl SessionManager {
         self.sessions
             .values()
             .filter_map(|s| {
-                if let SessionState::Idle { since } = &s.state {
+                if let Some(since) = &s.disconnected_since {
                     if now.duration_since(*since) > self.idle_timeout {
                         return Some(s.instance_id.clone());
                     }
@@ -508,7 +526,7 @@ impl SessionManager {
     pub fn mark_unloaded(&mut self, instance_ids: &[String]) {
         for iid in instance_ids {
             if let Some(session) = self.sessions.get_mut(iid) {
-                session.state = SessionState::Unloaded;
+                session.activity = SessionActivity::Unloaded;
                 session.messages.clear();
                 session.partial_message = None;
                 self.dirty = true;

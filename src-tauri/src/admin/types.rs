@@ -84,6 +84,7 @@ pub struct AdminStatus {
     pub active_sessions: Vec<SessionInfo>,
     pub pi_version: String,
     pub app_version: String,
+    pub pi_binary_missing: bool,
     pub broker_ws_url: String,
     pub broker_http_url: String,
     pub uptime_secs: u64,

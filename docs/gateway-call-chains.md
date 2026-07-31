@@ -334,7 +334,7 @@ ws/mod.rs :: route_ui_message()
 │  ├─ 有 subscribers → broadcast_to_subscribers()                 — 仅发给订阅者
 │  └─ 无 subscribers → broadcast_to_clients()                     — 发给所有客户端
 │
-├─ 特定事件（session_start/shutdown/agent_end/turn_end）→ push_sessions_list_to_clients()
+├─ 特定事件（agent_end/turn_end）→ push_sessions_list_to_clients()
 └─ dirty 或 pending_names 非空 → push_sessions_list_to_clients()
 ```
 

@@ -57,6 +57,7 @@ pub struct BrokerInner {
 // ─── Pi Agent Settings ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PiAgentSettings {
     #[serde(default)]
     pub default_provider: String,

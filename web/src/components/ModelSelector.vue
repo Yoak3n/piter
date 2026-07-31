@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { ChevronDown } from "lucide-vue-next";
-import type { ModelInfo } from "../types";
+import type { ModelInfo, ModelRef } from "../types";
 
 const props = defineProps<{
   modelId?: string;
@@ -9,7 +9,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: "select-model", modelId: string): void;
+  (e: "select-model", model: ModelRef): void;
 }>();
 
 const isOpen = ref(false);
@@ -17,7 +17,6 @@ const searchText = ref("");
 const models = ref<ModelInfo[]>([]);
 const loading = ref(false);
 const unavailable = ref(false);
-const triedOnce = ref(false);
 const dropdownRef = ref<HTMLDivElement | null>(null);
 
 const displayName = computed(() => {
@@ -50,7 +49,7 @@ function close() {
 }
 
 function select(model: ModelInfo) {
-  emit("select-model", model.id);
+  emit("select-model", { id: model.id, provider: model.provider });
   close();
 }
 
@@ -75,65 +74,27 @@ async function fetchModels() {
   unavailable.value = true;
 }
 
-let fetchModelTimer: ReturnType<typeof setTimeout> | null = null;
-let fetchModelAttempts = 0;
-const MAX_FETCH_ATTEMPTS = 8;
-
-async function fetchCurrentModel(retry = true) {
-  if (fetchModelTimer) {
-    clearTimeout(fetchModelTimer);
-    fetchModelTimer = null;
-  }
-  fetchModelAttempts = 0;
-
-  // First try reading Pi settings from disk — no Pi process needed
+async function fetchCurrentModel() {
   try {
     const res = await fetch("/api/pi/settings");
     const data = await res.json();
+    console.log("[model] fetchCurrentModel:", data);
     if (data.success && data.default_model) {
-      emit("select-model", data.default_model);
-      return;
+      emit("select-model", { id: data.default_model, provider: data.default_provider });
     }
   } catch {
-    // fall through to RPC method
+    // non-critical
   }
-
-  // Fallback: ask running Pi process via RPC
-  const attempt = async () => {
-    try {
-      const res = await fetch("/api/rpc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "get_state" }),
-      });
-      const data = await res.json();
-      if (data.success && data.data?.model?.id) {
-        emit("select-model", data.data.model.id);
-        unavailable.value = false;
-        return;
-      }
-    } catch {
-      // ignore
-    }
-    fetchModelAttempts++;
-    if (retry && fetchModelAttempts < MAX_FETCH_ATTEMPTS) {
-      fetchModelTimer = setTimeout(attempt, 800 * fetchModelAttempts);
-    }
-  };
-  await attempt();
 }
 
-// When session becomes active (pi starts responding), retry fetching current model
-// (in case initial mount failed because no pi was running yet)
+// When session status changes, clear stale model list so it refetches on next open
 watch(() => props.sessionStatus, (status, oldStatus) => {
   if (status === "running" && oldStatus !== "running") {
     unavailable.value = false;
-    triedOnce.value = false;
     models.value = [];
     fetchCurrentModel();
   }
   if (status === "idle" && oldStatus === "running") {
-    // Also retry on idle — model info should be available after agent finishes
     if (!props.modelId) {
       fetchCurrentModel();
     }
@@ -152,10 +113,6 @@ onMounted(() => {
 });
 onUnmounted(() => {
   document.removeEventListener("click", handleClickOutside);
-  if (fetchModelTimer) {
-    clearTimeout(fetchModelTimer);
-    fetchModelTimer = null;
-  }
 });
 </script>
 

@@ -254,8 +254,10 @@ onMounted(fetchSessions);
                   <span
                     class="session-status-dot"
                     :class="{
-                      'status-active': session.state === 'active',
                       'status-idle': session.state === 'idle',
+                      'status-busy': session.state === 'busy',
+                      'status-review': session.state === 'waiting_review',
+                      'status-unloaded': session.state === 'unloaded',
                     }"
                     :title="session.state || 'unloaded'"
                   />
@@ -603,14 +605,25 @@ onMounted(fetchSessions);
   opacity: 0.3;
 }
 
-.session-status-dot.status-active {
-  background: #22c55e;
+.session-status-dot.status-idle {
+  background: #34d399;
   opacity: 1;
 }
 
-.session-status-dot.status-idle {
+.session-status-dot.status-busy {
   background: #f59e0b;
-  opacity: 0.7;
+  opacity: 1;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+.session-status-dot.status-review {
+  background: #60a5fa;
+  opacity: 1;
+}
+
+.session-status-dot.status-unloaded {
+  background: var(--color-text-tertiary);
+  opacity: 0.3;
 }
 
 .session-meta {

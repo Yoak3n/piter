@@ -207,6 +207,43 @@ pub enum Event {
     Unknown,
 }
 
+/// All known lifecycle event type strings, used by the gateway for envelope wrapping.
+/// Keep in sync with the `Event` enum variants above (excluding `Unknown`).
+pub const LIFECYCLE_EVENT_TYPES: &[&str] = &[
+    // Lifecycle
+    "agent_start",
+    "agent_end",
+    "agent_settled",
+    // Turn
+    "turn_start",
+    "turn_end",
+    // Message
+    "message_start",
+    "message_update",
+    "message_end",
+    // Bash
+    "bash_execution_update",
+    // Tool
+    "tool_execution_start",
+    "tool_execution_update",
+    "tool_execution_end",
+    // Queue
+    "queue_update",
+    // Compaction
+    "compaction_start",
+    "compaction_end",
+    // Retry
+    "auto_retry_start",
+    "auto_retry_end",
+    // Summarization retry
+    "summarization_retry_scheduled",
+    "summarization_retry_attempt_start",
+    "summarization_retry_finished",
+    // Extension
+    "extension_error",
+    "extension_ui_request",
+];
+
 impl Event {
     /// Parse an event from a JSON line string.
     pub fn from_json_line(s: &str) -> Result<Self, serde_json::Error> {

@@ -1,5 +1,5 @@
 import { ref, reactive, computed, onUnmounted } from "vue";
-import type { Message, ToolExecution, ProjectGroup } from "../types";
+import type { Message, ToolExecution, ProjectGroup, ModelRef } from "../types";
 import {
   extractTextContent,
   extractThinkingContent,
@@ -16,7 +16,7 @@ interface SessionState {
   currentAssistantContent: string;
   currentThinking: string;
   toolExecutions: ToolExecution[];
-  currentModel: string;
+  currentModel: ModelRef | null;
 }
 
 function createSessionState(sessionId: string): SessionState {
@@ -28,7 +28,7 @@ function createSessionState(sessionId: string): SessionState {
     currentAssistantContent: "",
     currentThinking: "",
     toolExecutions: [],
-    currentModel: "",
+    currentModel: null,
   });
 }
 
@@ -170,7 +170,7 @@ export function usePiConnection() {
           for (const m of msgs) {
             const modelId = m.model as string | undefined;
             if (modelId) {
-              s.currentModel = modelId;
+              s.currentModel = { id: modelId, provider: s.currentModel?.provider };
               break;
             }
           }
@@ -205,7 +205,7 @@ export function usePiConnection() {
         if (!s) break;
         const msg = data.message as Record<string, unknown> | undefined;
         if (msg?.model) {
-          s.currentModel = msg.model as string;
+          s.currentModel = { id: msg.model as string, provider: s.currentModel?.provider };
         }
         if (msg?.role === "assistant") {
           const content = extractTextContent(msg);
@@ -298,7 +298,7 @@ export function usePiConnection() {
           const model = d?.model as Record<string, unknown> | undefined;
           if (model?.id) {
             const s = getState(instanceId);
-            if (s) s.currentModel = model.id as string;
+            if (s) s.currentModel = { id: model.id as string, provider: model.provider as string | undefined };
           }
         }
         if ((cmd === "set_model" || cmd === "cycle_model") && data.success) {
@@ -306,7 +306,7 @@ export function usePiConnection() {
           const model = (d?.model as Record<string, unknown>) || (d as Record<string, unknown> | undefined);
           if (model?.id) {
             const s = getState(instanceId);
-            if (s) s.currentModel = model.id as string;
+            if (s) s.currentModel = { id: model.id as string, provider: model.provider as string | undefined };
           }
         }
         break;
@@ -362,6 +362,10 @@ export function usePiConnection() {
       isRunning.value = true;
       statusText.value = "Connected";
       reconnectAttempts = 0;
+      // Re-acknowledge current session after reconnect
+      if (activeInstanceId.value) {
+        ackReview(activeInstanceId.value);
+      }
     };
     ws.onmessage = (e) => {
       try {
@@ -394,7 +398,7 @@ export function usePiConnection() {
 
   // ─── Commands ───────────────────────────────────────────────────────
 
-  function sendPrompt(text: string) {
+  function sendPrompt(text: string, desiredModel?: ModelRef | null) {
     if (!text.trim()) return;
     const s = getOrCreateState(activeInstanceId.value);
     addMessage(s, "user", text);
@@ -404,10 +408,12 @@ export function usePiConnection() {
         addMessage(s, "system", "No active session yet — please wait for the session to be ready.");
         return;
       }
+      const payload: Record<string, unknown> = { type: "prompt", message: text };
+      if (desiredModel) payload.desiredModel = desiredModel;
       ws.send(JSON.stringify({
         type: "broker_command",
         instanceId: iid,
-        payload: { type: "prompt", message: text },
+        payload,
       }));
     }
   }
@@ -429,19 +435,42 @@ export function usePiConnection() {
     return false;
   }
 
+  function newSession(cwd: string, name: string, model?: ModelRef | null) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const payload: Record<string, unknown> = { type: "new_session", cwd, name };
+      if (model) payload.model = model;
+      ws.send(JSON.stringify({
+        type: "broker_command",
+        payload,
+      }));
+    }
+  }
+
+  function ackReview(instanceId: string) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "broker_command",
+        instanceId,
+        payload: { type: "ack_review", instanceId },
+      }));
+    }
+  }
+
   function switchSession(instanceId: string, initialMessages?: Message[]) {
-    // Save current session state (already saved in the Map)
-    // Restore (or init) target session state
     if (initialMessages) {
       const s = getOrCreateState(instanceId);
       s.messages = initialMessages;
       s.msgId = initialMessages.length;
     }
     activeInstanceId.value = instanceId;
-    // Send directly — NOT via sendCommand, which wraps in broker_command
-    // with the OLD activeInstanceId, overwriting the target
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "switch_session", instanceId }));
+      ws.send(JSON.stringify({
+        type: "broker_command",
+        instanceId,
+        payload: { type: "switch_session", instanceId },
+      }));
+      // Acknowledge review so WaitingReview → Idle
+      ackReview(instanceId);
     }
   }
 
@@ -487,7 +516,9 @@ export function usePiConnection() {
     connectWebSocket,
     sendPrompt,
     sendCommand,
+    newSession,
     switchSession,
+    ackReview,
     setActiveInstanceId: (id: string | null) => { activeInstanceId.value = id; },
     restartPi,
     disconnect,

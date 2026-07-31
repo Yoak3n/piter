@@ -13,7 +13,15 @@ use super::PiStatusResponse;
 use crate::broker::types::PendingRpc;
 use crate::gateway::GatewayState;
 
-// ─── Shared logic (callable from WS) ───────────────────────────────────────
+use crate::gateway::session_manager::SessionActivity;
+
+// Commands allowed to run without an explicit instanceId (no-arg fallback).
+const RPC_FALLBACK_WHITELIST: &[&str] = &[
+    "get_available_models",
+    "get_state",
+    "set_model",
+    "cycle_model",
+];
 
 pub fn get_pi_status(state: &GatewayState) -> PiStatusResponse {
     let instances = state.inner.instances.lock();
@@ -48,22 +56,39 @@ pub fn stop_pi_instance(state: &GatewayState, instance_id: &str) -> bool {
 }
 
 pub fn restart_pi_instance(state: &GatewayState, instance_id: &str) -> Result<String, String> {
-    let cwd = {
+    // Gather all state from memory before killing the process
+    let (cwd, instance_session_path, model_id, model_provider, session_file) = {
         let instances = state.inner.instances.lock();
-        instances
-            .get(instance_id)
-            .map(|i| i.cwd.clone())
+        let mgr = state.session_manager.lock();
+        let inst = instances.get(instance_id);
+        let ps = mgr.sessions.get(instance_id).and_then(|s| s.pi_state.as_ref());
+        (
+            inst.map(|i| i.cwd.clone()),
+            inst.and_then(|i| i.session_path.clone()),
+            ps.and_then(|p| p.model_id.clone()),
+            ps.and_then(|p| p.model_provider.clone()),
+            ps.and_then(|p| p.session_file.clone()),
+        )
     };
 
     let Some(cwd) = cwd else {
         return Err("instance not found".into());
     };
 
+    let extensions = crate::gateway::project::resolve_project_extensions(&state.db, &cwd, &cwd);
+    let effective_session_path = instance_session_path.or(session_file);
+    let model_str = format_model_arg(&model_id, &model_provider);
+
     kill_instance_for_gateway(state, instance_id);
 
-    // Restart: use empty extensions (project context would need to be looked up)
-    let extensions = Vec::new();
-    spawn_persistent_for_gateway(state, &cwd, &extensions)
+    resume_session(
+        state,
+        instance_id,
+        &cwd,
+        effective_session_path.as_deref(),
+        model_str.as_deref(),
+        &extensions,
+    )
 }
 
 // ─── REST handlers ──────────────────────────────────────────────────────────
@@ -105,11 +130,8 @@ pub async fn rpc_ephemeral_handler(
     );
 
     {
-        let instances = state.inner.instances.lock();
-        if let Some(inst) = instances.get(&instance_id) {
-            if let Some(stdin_tx) = &inst.stdin_tx {
-                let _ = stdin_tx.send(command.to_string());
-            }
+        if let Some(tx) = state.instance_stdin_tx(&instance_id) {
+            let _ = tx.send(command.to_string());
         }
     }
 
@@ -195,14 +217,53 @@ async fn rpc_to_instance(state: &Arc<GatewayState>, mut body: Value) -> Json<Val
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let target_id = if let Some(ref id) = instance_id {
+    // Resolve target: explicit instanceId → any running instance → spawn ephemeral
+    let (target_id, ephemeral) = if let Some(ref id) = instance_id {
         if state.inner.instances.lock().contains_key(id) {
-            id.clone()
+            (id.clone(), false)
         } else {
+            // If an instance is specified but not actually running, an error is returned
             return Json(serde_json::json!({"success": false, "error": "instance not found"}));
         }
     } else {
-        return Json(serde_json::json!({"success": false, "error": "instanceId required"}));
+        // No instanceId — check whitelist first
+        let cmd_type = body.get("type").and_then(Value::as_str).unwrap_or("");
+        if !RPC_FALLBACK_WHITELIST.contains(&cmd_type) {
+            return Json(serde_json::json!({
+                "success": false,
+                "error": format!("instanceId required for '{}' command", cmd_type)
+            }));
+        }
+
+        // Prefer an Idle instance; fall back to any non-Unloaded; spawn ephemeral as last resort
+        let preferred = {
+            let mgr = state.session_manager.lock();
+            let instances = state.inner.instances.lock();
+            // First pass: prefer Idle activity (pi is not busy)
+            let idle = mgr.sessions.iter()
+                .find(|(_, s)| s.activity == SessionActivity::Idle && instances.contains_key(&s.instance_id))
+                .map(|(id, _)| id.clone());
+            idle.or_else(|| {
+                // Second pass: any non-Unloaded instance
+                mgr.sessions.iter()
+                    .find(|(_, s)| s.activity != SessionActivity::Unloaded && instances.contains_key(&s.instance_id))
+                    .map(|(id, _)| id.clone())
+            })
+        };
+
+        if let Some(id) = preferred {
+            log::info!("[gateway] rpc: no instanceId, reusing instance {}", id);
+            (id, false)
+        } else {
+            // No suitable instances — spawn ephemeral
+            match spawn_ephemeral_for_gateway(state, ".") {
+                Ok(id) => {
+                    log::info!("[gateway] rpc: no instanceId, spawned ephemeral {}", id);
+                    (id, true)
+                }
+                Err(e) => return Json(serde_json::json!({"success": false, "error": e})),
+            }
+        }
     };
 
     let request_id = body
@@ -222,42 +283,56 @@ async fn rpc_to_instance(state: &Arc<GatewayState>, mut body: Value) -> Json<Val
     );
 
     {
-        let instances = state.inner.instances.lock();
-        let Some(instance) = instances.get(&target_id) else {
+        let Some(tx) = state.instance_stdin_tx(&target_id) else {
             state.inner.pending_rpc.lock().remove(&request_id);
+            if ephemeral { kill_instance_for_gateway(&state, &target_id); }
             return Json(serde_json::json!({"success": false, "error": "instance gone"}));
         };
-        if let Some(tx) = &instance.stdin_tx {
-            let cmd_str = body.to_string();
-            if tx.send(cmd_str).is_err() {
-                state.inner.pending_rpc.lock().remove(&request_id);
-                return Json(serde_json::json!({"success": false, "error": "failed to send command"}));
-            }
+        if tx.send(body.to_string()).is_err() {
+            state.inner.pending_rpc.lock().remove(&request_id);
+            if ephemeral { kill_instance_for_gateway(&state, &target_id); }
+            return Json(serde_json::json!({"success": false, "error": "failed to send command"}));
         }
     }
 
-    match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+    let result = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
         Ok(Ok(response)) => Json(serde_json::to_value(response).unwrap_or_default()),
         Ok(Err(_)) => Json(serde_json::json!({"success": false, "error": "response channel closed"})),
         Err(_) => {
             state.inner.pending_rpc.lock().remove(&request_id);
             Json(serde_json::json!({"success": false, "error": "timeout waiting for pi response"}))
         }
-    }
+    };
+
+    if ephemeral { kill_instance_for_gateway(&state, &target_id); }
+    result
 }
 
 // ─── Instance management ───────────────────────────────────────────────────
+
+/// Format model_id + model_provider into "provider/id" for `--model` CLI arg.
+pub fn format_model_arg(model_id: &Option<String>, model_provider: &Option<String>) -> Option<String> {
+    match (model_id, model_provider) {
+        (Some(id), Some(provider)) => Some(format!("{}/{}", provider, id)),
+        (Some(id), None) => Some(id.clone()),
+        _ => None,
+    }
+}
 
 pub fn spawn_persistent_for_gateway(
     state: &GatewayState,
     cwd: &str,
     extensions: &[String],
+    model: Option<&str>,
 ) -> Result<String, String> {
-    let instance_id = state
+    let mut builder = state
         .spawn()
         .cwd(cwd)
-        .extensions(extensions)
-        .run()?;
+        .extensions(extensions);
+    if let Some(m) = model {
+        builder = builder.model(m);
+    }
+    let instance_id = builder.run()?;
 
     {
     // Register instance_id as a route immediately (sessionFile/sessionId added later by get_state)
@@ -282,6 +357,30 @@ pub fn spawn_persistent_for_gateway(
     let _ = state.event_tx.send(pi_started.to_string());
 
     Ok(instance_id)
+}
+
+/// Resume an existing session: spawn pi with the persisted instance_id, session file, and model.
+/// Used by `restart_pi_instance` and `switch_session` (NeedSpawn path).
+pub fn resume_session(
+    state: &GatewayState,
+    instance_id: &str,
+    cwd: &str,
+    session_path: Option<&str>,
+    model: Option<&str>,
+    extensions: &[String],
+) -> Result<String, String> {
+    let mut builder = state
+        .spawn()
+        .cwd(cwd)
+        .extensions(extensions)
+        .id(instance_id);
+    if let Some(sp) = session_path {
+        builder = builder.session_path(sp);
+    }
+    if let Some(m) = model {
+        builder = builder.model(m);
+    }
+    builder.run()
 }
 
 fn spawn_ephemeral_for_gateway(

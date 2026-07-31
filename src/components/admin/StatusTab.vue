@@ -1,19 +1,39 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { Activity, RefreshCw } from "lucide-vue-next";
 import type { AdminStatus } from "../../composables/useAdmin";
+
+const props = defineProps<{
+  status: AdminStatus | null;
+  loading: boolean;
+}>();
 
 const emit = defineEmits<{
   (e: "refresh"): void;
   (e: "restart-pi"): void;
   (e: "stop-pi"): void;
+  (e: "open-path", path: string): void;
 }>();
 
 const actionLabel = ref("");
 
-defineProps<{
-  status: AdminStatus | null;
-  loading: boolean;
-}>();
+// Track when we last fetched uptime, so we can add elapsed seconds locally
+let refreshTime = Date.now();
+let baseUptime = 0;
+const now = ref(Date.now());
+
+// Sync baseUptime when status changes (new fetch)
+watch(() => props.status?.uptime_secs, (u) => {
+  if (u !== undefined) {
+    baseUptime = u;
+    refreshTime = Date.now();
+  }
+}, { immediate: true });
+
+const liveUptime = computed(() => {
+  if (!props.status) return 0;
+  return baseUptime + Math.floor((now.value - refreshTime) / 1000);
+});
 
 function fmtUptime(secs: number): string {
   const h = Math.floor(secs / 3600);
@@ -36,14 +56,23 @@ function handleStop() {
   setTimeout(() => (actionLabel.value = ""), 3000);
 }
 
-onMounted(() => emit("refresh"));
+let timer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  emit("refresh");
+  timer = setInterval(() => { now.value = Date.now(); }, 1000);
+});
+onUnmounted(() => { if (timer) clearInterval(timer); });
 </script>
 
 <template>
   <div class="tab-content">
-    <div class="status-header">
-      <h3 class="tab-title">System Status</h3>
-      <button class="btn btn-sm btn-ghost" :disabled="loading" @click="emit('refresh')">
+    <div class="tab-header">
+      <div class="tab-header-info">
+        <h3 class="tab-title">System Status</h3>
+        <p class="tab-desc">Pi runtime and application overview</p>
+      </div>
+      <button class="btn btn-sm" :disabled="loading" @click="emit('refresh')">
+        <RefreshCw :size="12" :class="{ 'spin': loading }" />
         {{ loading ? "Refreshing..." : "Refresh" }}
       </button>
     </div>
@@ -59,15 +88,39 @@ onMounted(() => emit("refresh"));
           >
             {{ status.pi_running ? "Running" : "Stopped" }}
           </span>
-          <span v-else class="status-card-muted">—</span>
+          <span v-else class="status-card-muted">&mdash;</span>
         </div>
       </div>
 
       <div class="status-card">
         <div class="status-card-label">Uptime</div>
         <div class="status-card-value">
-          <span v-if="status" class="status-card-mono">{{ fmtUptime(status.uptime_secs) }}</span>
-          <span v-else class="status-card-muted">—</span>
+          <span v-if="status" class="status-card-mono">{{ fmtUptime(liveUptime) }}</span>
+          <span v-else class="status-card-muted">&mdash;</span>
+        </div>
+      </div>
+
+      <div class="status-card">
+        <div class="status-card-label">App Version</div>
+        <div class="status-card-value">
+          <span v-if="status" class="status-card-mono">{{ status.app_version }}</span>
+          <span v-else class="status-card-muted">&mdash;</span>
+        </div>
+      </div>
+
+      <div class="status-card">
+        <div class="status-card-label">Pi Version</div>
+        <div class="status-card-value">
+          <span v-if="status" class="status-card-mono">{{ status.pi_version }}</span>
+          <span v-else class="status-card-muted">&mdash;</span>
+        </div>
+      </div>
+
+      <div class="status-card status-card-wide clickable-card" @click="status && emit('open-path', status.data_dir)">
+        <div class="status-card-label">Data Directory</div>
+        <div class="status-card-value">
+          <span v-if="status" class="status-card-path">{{ status.data_dir }}</span>
+          <span v-else class="status-card-muted">&mdash;</span>
         </div>
       </div>
 
@@ -82,50 +135,28 @@ onMounted(() => emit("refresh"));
         </div>
         <div v-else class="status-card-muted">No active sessions</div>
       </div>
+    </div>
 
-      <div class="status-card">
-        <div class="status-card-label">App Version</div>
-        <div class="status-card-value">
-          <span v-if="status" class="status-card-mono">{{ status.app_version }}</span>
-          <span v-else class="status-card-muted">—</span>
-        </div>
-      </div>
-
-      <div class="status-card">
-        <div class="status-card-label">Pi Version</div>
-        <div class="status-card-value">
-          <span v-if="status" class="status-card-mono">{{ status.pi_version }}</span>
-          <span v-else class="status-card-muted">—</span>
-        </div>
-      </div>
-
-      <div class="status-card">
-        <div class="status-card-label">Data Directory</div>
-        <div class="status-card-value">
-          <span v-if="status" class="status-card-path">{{ status.data_dir }}</span>
-          <span v-else class="status-card-muted">—</span>
-        </div>
+    <div class="section">
+      <h3 class="tab-title">Pi Controls</h3>
+      <div class="control-row">
+        <button class="btn" @click="handleRestart">Restart Pi</button>
+        <button class="btn btn-danger" @click="handleStop">Stop Pi</button>
+        <span v-if="actionLabel" class="action-feedback">{{ actionLabel }}</span>
       </div>
     </div>
 
-    <h3 class="tab-title">Pi Controls</h3>
-
-    <div class="control-row">
-      <button class="btn" @click="handleRestart">Restart Pi</button>
-      <button class="btn btn-danger" @click="handleStop">Stop Pi</button>
-      <span v-if="actionLabel" class="action-feedback">{{ actionLabel }}</span>
-    </div>
-
-    <h3 class="tab-title">Broker URLs</h3>
-
-    <div class="info-block" v-if="status">
-      <div class="info-row">
-        <span class="info-key">WebSocket</span>
-        <code class="info-value">{{ status.broker_ws_url }}</code>
-      </div>
-      <div class="info-row">
-        <span class="info-key">HTTP</span>
-        <code class="info-value">{{ status.broker_http_url }}</code>
+    <div class="section">
+      <h3 class="tab-title">Broker URLs</h3>
+      <div class="info-block" v-if="status">
+        <div class="info-row">
+          <span class="info-key">WebSocket</span>
+          <code class="info-value">{{ status.broker_ws_url }}</code>
+        </div>
+        <div class="info-row">
+          <span class="info-key">HTTP</span>
+          <code class="info-value">{{ status.broker_http_url }}</code>
+        </div>
       </div>
     </div>
   </div>
@@ -134,14 +165,20 @@ onMounted(() => emit("refresh"));
 <style scoped>
 .tab-content {
   padding: var(--space-xl);
-  max-width: 600px;
+  max-width: 620px;
 }
 
-.status-header {
+.tab-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.tab-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .tab-title {
@@ -150,7 +187,7 @@ onMounted(() => emit("refresh"));
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin: 0 0 var(--space-md) 0;
+  margin: 0;
   padding-top: var(--space-lg);
 }
 
@@ -158,9 +195,26 @@ onMounted(() => emit("refresh"));
   padding-top: 0;
 }
 
-.status-header .tab-title {
-  margin-bottom: 0;
+.tab-header .tab-title {
   padding-top: 0;
+  margin: 0;
+}
+
+.tab-desc {
+  font-size: var(--font-size-caption);
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.section {
+  margin-top: var(--space-sm);
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .status-grid {
@@ -174,6 +228,14 @@ onMounted(() => emit("refresh"));
   padding: var(--space-md);
   background: var(--bg-muted);
   border-radius: var(--radius-md);
+}
+
+.clickable-card {
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease);
+}
+.clickable-card:hover {
+  background: var(--bg-hover);
 }
 
 .status-card-label {

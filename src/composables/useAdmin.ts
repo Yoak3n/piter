@@ -30,6 +30,7 @@ export interface AdminStatus {
   active_sessions: SessionInfo[];
   pi_version: string;
   app_version: string;
+  pi_binary_missing: boolean;
   broker_ws_url: string;
   broker_http_url: string;
   uptime_secs: number;
@@ -37,17 +38,28 @@ export interface AdminStatus {
 }
 
 export interface PiAgentSettings {
-  default_provider: string;
-  default_model: string;
-  default_thinking_level: string;
+  defaultProvider: string;
+  defaultModel: string;
+  defaultThinkingLevel: string;
   packages: string[];
+  skills?: string[];
+}
+
+export type PiOrigin = "downloaded" | "linked" | "missing";
+
+export interface PiInstallInfo {
+  version: string | null;
+  origin: PiOrigin;
+  binary_present: boolean;
+  locked_version: string;
 }
 
 export function useAdmin() {
   const config = ref<AdminConfig | null>(null);
   const status = ref<AdminStatus | null>(null);
   const piSettings = ref<PiAgentSettings | null>(null);
-  const loading = reactive({ config: false, status: false, piSettings: false });
+  const piInstall = ref<PiInstallInfo | null>(null);
+  const loading = reactive({ config: false, status: false, piSettings: false, piInstall: false, downloading: false, uninstalling: false });
   const error = ref("");
 
   async function fetchConfig() {
@@ -126,10 +138,78 @@ export function useAdmin() {
     }
   }
 
+  async function savePiAgentSettings(settings: PiAgentSettings): Promise<boolean> {
+    loading.piSettings = true;
+    error.value = "";
+    try {
+      await invoke("save_pi_agent_settings", { settings });
+      piSettings.value = settings;
+      return true;
+    } catch (e) {
+      error.value = `Failed to save Pi settings: ${e}`;
+      return false;
+    } finally {
+      loading.piSettings = false;
+    }
+  }
+
+  async function openPath(path: string) {
+    try {
+      await invoke("open_path", { path });
+    } catch (e) {
+      error.value = `Failed to open path: ${e}`;
+    }
+  }
+
+  async function fetchPiInstallInfo() {
+    loading.piInstall = true;
+    error.value = "";
+    try {
+      piInstall.value = await invoke<PiInstallInfo>("get_pi_install_info");
+    } catch (e) {
+      error.value = `Failed to get Pi install info: ${e}`;
+    } finally {
+      loading.piInstall = false;
+    }
+  }
+
+  async function downloadPiVersion(version: string): Promise<boolean> {
+    loading.downloading = true;
+    error.value = "";
+    try {
+      await invoke("download_pi_version", { version });
+      await fetchPiInstallInfo();
+      await fetchStatus();
+      return true;
+    } catch (e) {
+      error.value = `Failed to download Pi ${version}: ${e}`;
+      return false;
+    } finally {
+      loading.downloading = false;
+    }
+  }
+
+  async function uninstallPi(): Promise<boolean> {
+    loading.uninstalling = true;
+    error.value = "";
+    try {
+      await invoke("uninstall_pi");
+      await fetchPiInstallInfo();
+      await fetchStatus();
+      return true;
+    } catch (e) {
+      error.value = `Failed to uninstall Pi: ${e}`;
+      return false;
+    } finally {
+      loading.uninstalling = false;
+    }
+  }
+
   return {
     config,
     status,
     piSettings,
+    piInstall,
     loading,
     error,
     fetchConfig,
@@ -138,5 +218,10 @@ export function useAdmin() {
     restartPi,
     stopPi,
     fetchPiAgentSettings,
+    savePiAgentSettings,
+    openPath,
+    fetchPiInstallInfo,
+    downloadPiVersion,
+    uninstallPi,
   };
 }

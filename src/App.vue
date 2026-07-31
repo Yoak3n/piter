@@ -1,7 +1,6 @@
 <script setup lang="ts">
-// Piter — Tauri desktop frontend.
-// / and /chat → ChatView (shared WS chat)
-// /desktop → DesktopView (placeholder for future desktop UI)
+// Piter — Tauri desktop admin panel.
+// / and /admin → AdminView
 </script>
 
 <template>
