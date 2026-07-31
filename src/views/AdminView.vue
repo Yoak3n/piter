@@ -7,6 +7,7 @@ import StatusTab from "../components/admin/StatusTab.vue";
 import PiConfigTab from "../components/admin/PiConfigTab.vue";
 import PiVersionsTab from "../components/admin/PiVersionsTab.vue";
 import ExtensionsTab from "../components/admin/ExtensionsTab.vue";
+import MarketplaceTab from "../components/admin/MarketplaceTab.vue";
 import AppearanceTab from "../components/admin/AppearanceTab.vue";
 
 const { config, status, piSettings, piInstall, loading, error,
@@ -37,7 +38,7 @@ const appSettings = computed<AppSettings>(() =>
 );
 
 const piSettingsVal = computed<PiSettings>(() =>
-  config.value?.pi ?? { default_model: "", request_timeout_secs: 300, auto_restart_on_crash: true }
+  config.value?.pi ?? { request_timeout_secs: 300, auto_restart_on_crash: true }
 );
 
 const piMissing = computed(() => status.value?.pi_binary_missing ?? false);
@@ -50,6 +51,11 @@ function handleAppUpdate(settings: AppSettings) {
 function handlePiUpdate(settings: PiSettings) {
   if (!config.value) return;
   saveConfig({ ...config.value, pi: settings });
+}
+
+function handlePackagesChanged(packages: string[]) {
+  if (!piSettings.value) return;
+  savePiAgentSettings({ ...piSettings.value, packages });
 }
 </script>
 
@@ -94,11 +100,12 @@ function handlePiUpdate(settings: PiSettings) {
         @uninstall="uninstallPi"
       />
 
-      <ExtensionsTab
-        v-if="activeTab === 'extensions'"
-        :piAgentSettings="piSettings"
-        :disabled="loading.piSettings"
-        @save-agent="savePiAgentSettings"
+      <ExtensionsTab v-if="activeTab === 'extensions'" />
+
+      <MarketplaceTab
+        v-if="activeTab === 'market'"
+        :packages="piSettings?.packages ?? []"
+        @packages-changed="handlePackagesChanged"
       />
 
       <AppearanceTab

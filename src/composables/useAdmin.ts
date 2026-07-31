@@ -8,7 +8,6 @@ export interface AppSettings {
 }
 
 export interface PiSettings {
-  default_model: string;
   request_timeout_secs: number;
   auto_restart_on_crash: boolean;
 }
@@ -52,6 +51,28 @@ export interface PiInstallInfo {
   origin: PiOrigin;
   binary_present: boolean;
   locked_version: string;
+}
+
+export interface ProjectBrief {
+  id: string;
+  name: string;
+  cwd: string;
+}
+
+export interface ExtensionEntry {
+  name: string;
+  path: string | null;
+}
+
+export interface ProjectExtensionState extends ProjectBrief {
+  extensions: ExtensionEntry[];
+  enabled: string[];
+}
+
+export interface ExtensionOverview {
+  global_extensions: ExtensionEntry[];
+  enabled_global: string[];
+  projects: ProjectExtensionState[];
 }
 
 export function useAdmin() {
@@ -205,6 +226,38 @@ export function useAdmin() {
     }
   }
 
+  async function fetchExtensionOverview(): Promise<ExtensionOverview | null> {
+    error.value = "";
+    try {
+      return await invoke<ExtensionOverview>("get_extension_overview");
+    } catch (e) {
+      error.value = `Failed to load extension overview: ${e}`;
+      return null;
+    }
+  }
+
+  async function saveGlobalExtensions(extensions: string[]): Promise<boolean> {
+    error.value = "";
+    try {
+      await invoke("set_global_extensions", { extensions });
+      return true;
+    } catch (e) {
+      error.value = `Failed to save global extensions: ${e}`;
+      return false;
+    }
+  }
+
+  async function saveProjectExtensions(projectId: string, extensions: string[]): Promise<boolean> {
+    error.value = "";
+    try {
+      await invoke("set_project_extensions", { projectId, extensions });
+      return true;
+    } catch (e) {
+      error.value = `Failed to save project extensions: ${e}`;
+      return false;
+    }
+  }
+
   return {
     config,
     status,
@@ -223,5 +276,8 @@ export function useAdmin() {
     fetchPiInstallInfo,
     downloadPiVersion,
     uninstallPi,
+    fetchExtensionOverview,
+    saveGlobalExtensions,
+    saveProjectExtensions,
   };
 }

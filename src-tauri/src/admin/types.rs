@@ -6,9 +6,6 @@ fn default_theme() -> String {
 fn default_true() -> bool {
     true
 }
-fn default_model() -> String {
-    String::new()
-}
 fn default_timeout() -> u64 {
     300
 }
@@ -52,8 +49,6 @@ impl Default for AppSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiSettings {
-    #[serde(default = "default_model")]
-    pub default_model: String,
     #[serde(default = "default_timeout")]
     pub request_timeout_secs: u64,
     #[serde(default = "default_true")]
@@ -63,7 +58,6 @@ pub struct PiSettings {
 impl Default for PiSettings {
     fn default() -> Self {
         Self {
-            default_model: default_model(),
             request_timeout_secs: default_timeout(),
             auto_restart_on_crash: true,
         }

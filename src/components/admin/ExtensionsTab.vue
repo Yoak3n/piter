@@ -1,54 +1,190 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { Package, Trash2, Puzzle } from "lucide-vue-next";
-import type { PiAgentSettings } from "../../composables/useAdmin";
+import { ref, computed, onMounted } from "vue";
+import {
+  Globe, FolderKanban, Loader2, RefreshCw, Inbox, Puzzle,
+} from "lucide-vue-next";
+import {
+  useAdmin,
+  type ExtensionOverview,
+} from "../../composables/useAdmin";
 
-const props = defineProps<{
-  piAgentSettings: PiAgentSettings | null;
-  disabled?: boolean;
-}>();
+const { fetchExtensionOverview, saveGlobalExtensions, saveProjectExtensions } = useAdmin();
 
-const emit = defineEmits<{
-  (e: "save-agent", settings: PiAgentSettings): void;
-}>();
+const overview = ref<ExtensionOverview | null>(null);
+const loading = ref(false);
+const selectedProjectId = ref("");
 
-const packages = computed(() => props.piAgentSettings?.packages ?? []);
+// Mutable enabled sets (preserve extra DB entries not shown as toggles)
+const globalEnabled = ref<Set<string>>(new Set());
+const projectEnabled = ref<Map<string, Set<string>>>(new Map());
 
-function removePackage(pkg: string) {
-  if (!props.piAgentSettings) return;
-  emit("save-agent", {
-    ...props.piAgentSettings,
-    packages: props.piAgentSettings.packages.filter((p) => p !== pkg),
+const selectedProject = computed(() =>
+  overview.value?.projects.find((p) => p.id === selectedProjectId.value)
+);
+
+async function loadOverview() {
+  loading.value = true;
+  overview.value = await fetchExtensionOverview();
+  globalEnabled.value = new Set(overview.value?.enabled_global ?? []);
+  projectEnabled.value = new Map(
+    (overview.value?.projects ?? []).map((p) => [p.id, new Set(p.enabled)])
+  );
+  if (!selectedProjectId.value && overview.value?.projects.length) {
+    selectedProjectId.value = overview.value.projects[0].id;
+  }
+  loading.value = false;
+}
+
+// Serialize saves: `set_*_extensions` replaces the whole list, so concurrent
+// toggles must not race each other. Each queued save reads the latest state.
+let saveQueue: Promise<void> = Promise.resolve();
+function enqueueSave(fn: () => Promise<void>) {
+  saveQueue = saveQueue.then(fn).catch(() => {});
+  return saveQueue;
+}
+
+async function toggleGlobal(name: string, checked: boolean) {
+  const next = new Set(globalEnabled.value);
+  if (checked) next.add(name);
+  else next.delete(name);
+  globalEnabled.value = next;
+  enqueueSave(async () => {
+    await saveGlobalExtensions([...globalEnabled.value]);
   });
 }
+
+async function toggleProject(name: string, checked: boolean) {
+  const projectId = selectedProjectId.value;
+  if (!projectId) return;
+  const next = new Set(projectEnabled.value.get(projectId) ?? []);
+  if (checked) next.add(name);
+  else next.delete(name);
+  projectEnabled.value.set(projectId, next);
+  projectEnabled.value = new Map(projectEnabled.value);
+  enqueueSave(async () => {
+    const current = projectEnabled.value.get(projectId) ?? new Set<string>();
+    await saveProjectExtensions(projectId, [...current]);
+  });
+}
+
+function isProjectEnabled(name: string): boolean {
+  return projectEnabled.value.get(selectedProjectId.value)?.has(name) ?? false;
+}
+
+onMounted(loadOverview);
 </script>
 
 <template>
   <div class="tab-content">
-    <h3 class="tab-title">Installed Extensions</h3>
-    <p class="tab-desc">Pi agent extensions (npm packages and skills).</p>
-
-    <div v-if="packages.length === 0" class="empty-state">
-      <Puzzle :size="32" class="empty-icon" />
-      <p>No extensions installed</p>
-      <span class="empty-hint">Extensions are npm packages that extend Pi's capabilities.</span>
+    <div class="tab-header">
+      <div class="tab-header-info">
+        <h3 class="tab-title">Extensions</h3>
+        <p class="tab-desc">
+          Enable the extensions Pi uses. Checked extensions are persisted to the
+          gateway database. Installing/uninstalling packages is done in the Market tab.
+        </p>
+      </div>
+      <button class="btn btn-sm" :disabled="loading" @click="loadOverview">
+        <RefreshCw :size="12" :class="{ spin: loading }" />
+        {{ loading ? "Loading..." : "Refresh" }}
+      </button>
     </div>
 
-    <div v-else class="ext-list">
-      <div v-for="pkg in packages" :key="pkg" class="ext-item">
-        <div class="ext-info">
-          <Package :size="14" class="ext-icon" />
-          <span class="ext-name">{{ pkg.replace(/^npm:/, "") }}</span>
+    <!-- Global extensions -->
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title">
+          <Globe :size="14" class="section-icon" />
+          <span>Global Extensions</span>
         </div>
-        <button
-          class="btn btn-ghost btn-icon btn-sm"
-          title="Uninstall"
-          :disabled="disabled"
-          @click="removePackage(pkg)"
-        >
-          <Trash2 :size="12" />
-        </button>
+        <p class="section-desc">Discovered in ~/.pi/agent/extensions/ and from installed packages. Enabled for every Pi session.</p>
       </div>
+
+      <div v-if="loading" class="loading-row">
+        <Loader2 :size="12" class="spin" />
+        <span>Loading...</span>
+      </div>
+
+      <template v-else>
+        <div v-if="!overview || overview.global_extensions.length === 0" class="empty-row">
+          <Inbox :size="20" class="empty-icon" />
+          <span>No extensions or packages found</span>
+        </div>
+
+        <div v-else class="ext-list">
+          <div v-for="ext in overview.global_extensions" :key="ext.name" class="ext-item">
+            <div class="ext-info">
+              <Puzzle :size="13" class="ext-icon" />
+              <span class="ext-name">{{ ext.name }}</span>
+            </div>
+            <label class="toggle" :class="{ on: globalEnabled.has(ext.name) }">
+              <input
+                type="checkbox"
+                :checked="globalEnabled.has(ext.name)"
+                @change="toggleGlobal(ext.name, ($event.target as HTMLInputElement).checked)"
+              />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Project extensions -->
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title">
+          <FolderKanban :size="14" class="section-icon" />
+          <span>Project Extensions</span>
+        </div>
+        <p class="section-desc">Includes globally available and project-local extensions. Enabled only for this project.</p>
+      </div>
+
+      <div v-if="loading" class="loading-row">
+        <Loader2 :size="12" class="spin" />
+        <span>Loading...</span>
+      </div>
+
+      <template v-else>
+        <div v-if="!overview || overview.projects.length === 0" class="empty-row">
+          <Inbox :size="20" class="empty-icon" />
+          <span>No projects found</span>
+        </div>
+
+        <template v-else>
+          <select
+            class="input project-select"
+            :value="selectedProjectId"
+            @change="selectedProjectId = ($event.target as HTMLSelectElement).value"
+          >
+            <option v-for="p in overview.projects" :key="p.id" :value="p.id">
+              {{ p.name }} — {{ p.cwd }}
+            </option>
+          </select>
+
+          <div v-if="selectedProject && selectedProject.extensions.length === 0" class="empty-row">
+            <Inbox :size="20" class="empty-icon" />
+            <span>No extensions or packages found for this project</span>
+          </div>
+
+          <div v-else-if="selectedProject" class="ext-list">
+            <div v-for="ext in selectedProject.extensions" :key="ext.name" class="ext-item">
+              <div class="ext-info">
+                <Puzzle :size="13" class="ext-icon" />
+                <span class="ext-name">{{ ext.name }}</span>
+              </div>
+              <label class="toggle" :class="{ on: isProjectEnabled(ext.name) }">
+                <input
+                  type="checkbox"
+                  :checked="isProjectEnabled(ext.name)"
+                  @change="toggleProject(ext.name, ($event.target as HTMLInputElement).checked)"
+                />
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+          </div>
+        </template>
+      </template>
     </div>
   </div>
 </template>
@@ -56,7 +192,22 @@ function removePackage(pkg: string) {
 <style scoped>
 .tab-content {
   padding: var(--space-xl);
-  max-width: 540px;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.tab-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.tab-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .tab-title {
@@ -65,36 +216,64 @@ function removePackage(pkg: string) {
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin: 0 0 var(--space-xs) 0;
+  margin: 0;
 }
 
 .tab-desc {
   font-size: var(--font-size-caption);
   color: var(--text-tertiary);
-  margin: 0 0 var(--space-lg) 0;
+  margin: 0;
+  line-height: var(--line-height-caption);
 }
 
-.empty-state {
+.section-card {
+  background: var(--bg-muted);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
   display: flex;
   flex-direction: column;
+  gap: var(--space-md);
+}
+
+.section-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-size-body);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.section-icon {
+  color: var(--accent);
+}
+
+.section-desc {
+  font-size: var(--font-size-caption);
+  color: var(--text-tertiary);
+  margin: 0;
+  line-height: var(--line-height-caption);
+}
+
+.loading-row,
+.empty-row {
+  display: flex;
   align-items: center;
   gap: var(--space-sm);
   color: var(--text-tertiary);
-  padding: var(--space-xxl) 0;
-  text-align: center;
+  font-size: var(--font-size-caption);
+  padding: var(--space-sm) 0;
 }
+
 .empty-icon {
   opacity: 0.4;
-  margin-bottom: var(--space-xs);
-}
-.empty-state p {
-  margin: 0;
-  font-size: var(--font-size-body);
-  color: var(--text-secondary);
-}
-.empty-hint {
-  font-size: var(--font-size-caption);
-  color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 
 .ext-list {
@@ -111,18 +290,19 @@ function removePackage(pkg: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-sm) var(--space-md);
+  padding: var(--space-xs) var(--space-md);
   background: var(--bg-panel);
   transition: background var(--duration-fast) var(--ease);
 }
 .ext-item:hover {
-  background: var(--bg-muted);
+  background: var(--bg-hover);
 }
 
 .ext-info {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+  min-width: 0;
 }
 
 .ext-icon {
@@ -134,5 +314,19 @@ function removePackage(pkg: string) {
   font-family: var(--font-mono);
   font-size: var(--font-size-caption);
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-select {
+  font-size: var(--font-size-caption);
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

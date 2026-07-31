@@ -30,7 +30,13 @@ pub fn generate_handlers(
         open_path,
         get_pi_install_info,
         download_pi_version,
-        uninstall_pi
+        uninstall_pi,
+        list_pi_packages,
+        install_pi_package,
+        remove_pi_package,
+        get_extension_overview,
+        set_global_extensions,
+        set_project_extensions
     ]
 }
 

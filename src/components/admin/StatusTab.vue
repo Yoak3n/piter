@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { Activity, RefreshCw } from "lucide-vue-next";
+import { RefreshCw } from "lucide-vue-next";
 import type { AdminStatus } from "../../composables/useAdmin";
 
 const props = defineProps<{

@@ -1,5 +1,8 @@
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use pi_server::broker::util::{build_augmented_path, configure_child_process_for_windows, strip_verbatim_prefix};
 use pi_server::gateway::GatewayState;
 use pi_server::gateway::handlers::pi::restart_pi_instance;
 
@@ -58,4 +61,141 @@ pub fn save_pi_agent_settings(settings: pi_server::PiAgentSettings) -> Result<()
         .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
     log::info!("[admin] pi agent settings saved to {}", path.display());
     Ok(())
+}
+
+// ─── Package management (extension marketplace) ─────────────────────────────
+
+/// Run `pi <args...>` with the bundled binary and return trimmed stdout.
+fn run_pi_command(bin: &Path, args: &[String]) -> Result<String, String> {
+    let bin_str = strip_verbatim_prefix(&bin.to_string_lossy());
+    let augmented_path = build_augmented_path();
+    let mut command = Command::new(&bin_str);
+    configure_child_process_for_windows(&mut command);
+    command
+        .args(args)
+        .env("PATH", augmented_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = command
+        .output()
+        .map_err(|e| format!("Failed to run embedded pi command ({} {:?}): {}", bin_str, args, e))?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("exit status {}", output.status)
+    };
+    Err(format!("pi command failed ({} {:?}): {}", bin_str, args, details))
+}
+
+/// Parse `pi list` output and extract package sources.
+fn parse_list_output(output: &str) -> Vec<String> {
+    let mut sources = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("No packages installed.") {
+            continue;
+        }
+        if trimmed.ends_with(':') {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix('-') {
+            let value = rest.trim();
+            if !value.is_empty() {
+                sources.push(value.to_string());
+            }
+            continue;
+        }
+        // `pi list` may emit entries prefixed with two spaces.
+        if let Some(value) = trimmed.strip_prefix("npm:") {
+            sources.push(format!("npm:{}", value));
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("git:") {
+            sources.push(format!("git:{}", value));
+            continue;
+        }
+        if trimmed.starts_with('/') || trimmed.starts_with("./") || trimmed.starts_with("../") {
+            sources.push(trimmed.to_string());
+        }
+    }
+    sources
+}
+
+/// List packages currently installed via `pi list`.
+#[tauri::command]
+pub async fn list_pi_packages(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let bin = crate::pi::try_resolve_pi_binary(&app)?;
+        let output = run_pi_command(&bin, &["list".to_string()])?;
+        Ok(parse_list_output(&output))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Install a pi package via `pi install <source>`.
+/// On success the package source is registered in the global extensions table.
+#[tauri::command]
+pub async fn install_pi_package(
+    app: tauri::AppHandle,
+    gw: tauri::State<'_, Option<Arc<GatewayState>>>,
+    source: String,
+) -> Result<(), String> {
+    if source.trim().is_empty() {
+        return Err("Package source is empty".into());
+    }
+    let source = source.trim().to_string();
+    let gw_opt = gw.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let bin = crate::pi::try_resolve_pi_binary(&app)?;
+        run_pi_command(&bin, &["install".to_string(), source.clone()])?;
+        if let Some(gw) = gw_opt.as_ref() {
+            if let Err(e) = gw.db.add_global_extension(&source) {
+                log::warn!("[admin] failed to register {} in DB: {}", source, e);
+            }
+        }
+        log::info!("[admin] installed pi package {}", source);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Remove a pi package via `pi remove <source>`.
+/// On success the package source is removed from the global extensions table.
+#[tauri::command]
+pub async fn remove_pi_package(
+    app: tauri::AppHandle,
+    gw: tauri::State<'_, Option<Arc<GatewayState>>>,
+    source: String,
+) -> Result<(), String> {
+    if source.trim().is_empty() {
+        return Err("Package source is empty".into());
+    }
+    let source = source.trim().to_string();
+    let gw_opt = gw.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let bin = crate::pi::try_resolve_pi_binary(&app)?;
+        run_pi_command(&bin, &["remove".to_string(), source.clone()])?;
+        if let Some(gw) = gw_opt.as_ref() {
+            if let Err(e) = gw.db.remove_global_extension(&source) {
+                log::warn!("[admin] failed to remove {} from DB: {}", source, e);
+            }
+        }
+        log::info!("[admin] removed pi package {}", source);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }

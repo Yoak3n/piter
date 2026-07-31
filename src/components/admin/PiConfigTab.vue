@@ -101,14 +101,6 @@ function handleSaveAgent() {
 
       <div class="settings-row">
         <div class="settings-label">
-          <span class="settings-label-title">Override default model</span>
-          <span class="settings-label-desc">If set, passed to Pi on session start</span>
-        </div>
-        <input class="input model-input" type="text" v-model="local.default_model" placeholder="Use Pi default" :disabled="disabled" />
-      </div>
-
-      <div class="settings-row">
-        <div class="settings-label">
           <span class="settings-label-title">Request timeout</span>
           <span class="settings-label-desc">Seconds before a request is cancelled</span>
         </div>

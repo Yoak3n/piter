@@ -464,18 +464,85 @@ impl Db {
 
     pub fn set_global_extensions(&self, extensions: &[String]) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM global_extensions", [])
-            .map_err(|e| format!("clear global exts: {}", e))?;
+        // Clear existing rows, but preserve installed package sources
+        // (npm:/git:/path-like) that the Market tab registered in the DB.
+        conn.execute(
+            "DELETE FROM global_extensions
+             WHERE extension_name NOT LIKE 'npm:%'
+               AND extension_name NOT LIKE 'git:%'
+               AND extension_name NOT LIKE '/%'
+               AND extension_name NOT LIKE './%'
+               AND extension_name NOT LIKE '../%'",
+            [],
+        )
+        .map_err(|e| format!("clear global exts: {}", e))?;
         let mut stmt = conn
             .prepare("INSERT INTO global_extensions (extension_name, extension_path) VALUES (?1, ?2)")
             .map_err(|e| format!("prepare global ext insert: {}", e))?;
-        let global_dir = crate::broker::util::get_pi_agent_dir().join("extensions");
+        let agent_dir = crate::broker::util::get_pi_agent_dir();
         for ext in extensions {
             let path = super::project::resolve_extension_name(ext, "")
-                .filter(|p| p.starts_with(&global_dir))
+                .filter(|p| p.starts_with(&agent_dir))
                 .map(|p| p.to_string_lossy().to_string());
             stmt.execute(params![ext, path])
                 .map_err(|e| format!("insert global ext: {}", e))?;
+        }
+        Ok(())
+    }
+
+    /// Add a single global extension entry (insert-or-ignore).
+    pub fn add_global_extension(&self, name: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let agent_dir = crate::broker::util::get_pi_agent_dir();
+        let path = super::project::resolve_extension_name(name, "")
+            .filter(|p| p.starts_with(&agent_dir))
+            .map(|p| p.to_string_lossy().to_string());
+        conn.execute(
+            "INSERT OR IGNORE INTO global_extensions (extension_name, extension_path) VALUES (?1, ?2)",
+            params![name, path],
+        )
+        .map_err(|e| format!("add global ext: {}", e))?;
+        Ok(())
+    }
+
+    /// Remove a single global extension entry.
+    pub fn remove_global_extension(&self, name: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM global_extensions WHERE extension_name = ?1",
+            params![name],
+        )
+        .map_err(|e| format!("remove global ext: {}", e))?;
+        Ok(())
+    }
+
+    /// Replace a project's extension list, re-resolving extension paths.
+    pub fn set_project_extensions(
+        &self,
+        project_id: &str,
+        extensions: &[String],
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM project_extensions WHERE project_id = ?1",
+            params![project_id],
+        )
+        .map_err(|e| format!("clear project extensions: {}", e))?;
+        let cwd: String = conn
+            .query_row(
+                "SELECT cwd FROM projects WHERE id = ?1",
+                params![project_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let mut stmt = conn
+            .prepare("INSERT INTO project_extensions (project_id, extension_name, extension_path) VALUES (?1, ?2, ?3)")
+            .map_err(|e| format!("prepare project ext insert: {}", e))?;
+        for ext in extensions {
+            let path = super::project::resolve_extension_name(ext, &cwd)
+                .map(|p| p.to_string_lossy().to_string());
+            stmt.execute(params![project_id, ext, path])
+                .map_err(|e| format!("insert project ext: {}", e))?;
         }
         Ok(())
     }

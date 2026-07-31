@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Settings, Cpu, Activity, Puzzle, Globe, GitBranch } from "lucide-vue-next";
+import { Settings, Cpu, Activity, Puzzle, Globe, GitBranch, Store } from "lucide-vue-next";
 
 defineProps<{
   activeTab: string;
@@ -16,6 +16,7 @@ const tabs = [
   { key: "pi", label: "Pi Config", icon: Cpu },
   { key: "versions", label: "Versions", icon: GitBranch },
   { key: "extensions", label: "Extensions", icon: Puzzle },
+  { key: "market", label: "Market", icon: Store },
 ];
 
 const bottomTabs = [
