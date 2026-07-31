@@ -12,4 +12,4 @@ pub mod types;
 pub mod util;
 
 pub use types::PiAgentSettings;
-pub use util::{get_pi_agent_dir, piter_data_dir, read_pi_settings};
+pub use util::{get_pi_agent_dir, read_pi_settings};

@@ -1,6 +1,7 @@
 use once_cell::sync::OnceCell;
 use std::fs;
 use std::path::PathBuf;
+use tauri::Manager;
 
 use super::types::AdminConfig;
 
@@ -9,23 +10,30 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
+    /// Initialize the manager with the app's data directory. Must be called
+    /// once during app setup.
+    pub fn init(app: &tauri::AppHandle) -> &'static Self {
+        let config_path = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| fallback_config_path())
+            .join("config.json");
+        Self::get_or_init(config_path)
+    }
+
     pub fn global() -> &'static Self {
+        Self::get_or_init(fallback_config_path())
+    }
+
+    fn get_or_init(config_path: PathBuf) -> &'static Self {
         static INSTANCE: OnceCell<ConfigManager> = OnceCell::new();
         INSTANCE.get_or_init(|| {
-            let config_path = dirs::data_dir()
-                .unwrap_or_default()
-                .join("piter")
-                .join("config.json");
             let mgr = Self { config_path };
             if !mgr.config_path.exists() {
                 let _ = mgr.write_defaults();
             }
             mgr
         })
-    }
-
-    pub fn init() {
-        let _ = Self::global();
     }
 
     pub fn get_config(&self) -> AdminConfig {
@@ -61,4 +69,12 @@ impl ConfigManager {
             .map_err(|e| format!("Failed to write defaults: {}", e))?;
         Ok(())
     }
+}
+
+/// Fallback config path used when the app handle is not yet available.
+/// Uses the same `%APPDATA%\<identifier>` location as the app data dir.
+fn fallback_config_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_default()
+        .join(crate::identifier())
 }

@@ -51,10 +51,7 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
                 Target::new(TargetKind::Stdout),
                 Target::new(TargetKind::Webview),
                 Target::new(TargetKind::Folder {
-                    path: dirs::data_dir()
-                        .unwrap_or_default()
-                        .join("piter")
-                        .join("logs"),
+                    path: app_data_dir_path(),
                     file_name: Some("app".into()),
                 }),
             ])
@@ -74,7 +71,7 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
     builder.setup(|app| {
         let pi_version = locked_pi_version().to_string();
 
-        crate::admin::config::ConfigManager::init();
+        crate::admin::config::ConfigManager::init(&app.handle());
 
         // Try to resolve pi from local sources (no auto-download).
         // If pi is not available, the app still starts — the user can
@@ -93,6 +90,11 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
 
         // 获取资源路径
         let dist_path = get_dist_path(app.handle());
+
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| app_data_dir_path());
 
         let dev_port = std::env::var("TAURI_ENV_DEBUG")
             .ok()
@@ -114,7 +116,12 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
                     .join(pi_server::pi_binary_name())
             };
             match pi_server::gateway::GatewayState::start_gateway(
-                resources_pi, pi_version.clone(), dist_path, dev_port, None,
+                resources_pi,
+                pi_version.clone(),
+                dist_path,
+                dev_port,
+                None,
+                app_data_dir,
             ) {
                 Ok((gw, _port)) => {
                     log::info!("Pi gateway: WS={} HTTP={}", gw.ws_url(), gw.http_url());
@@ -181,6 +188,14 @@ fn get_dist_path(app: &AppHandle) -> PathBuf {
         .resource_dir()
         .map(|p| p.join("web-frontend"))
         .unwrap_or(dev_path)
+}
+
+/// Piter's app data directory: `%APPDATA%\<identifier>` (e.g.
+/// `C:\Users\<user>\AppData\Roaming\com.yoa.piter`).
+fn app_data_dir_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_default()
+        .join(crate::identifier())
 }
 
 pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {

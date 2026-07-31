@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use pi_server::gateway::GatewayState;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::super::types::{AdminStatus, SessionInfo};
 use crate::pi;
@@ -46,9 +46,10 @@ pub fn get_admin_status(
         broker_ws_url,
         broker_http_url,
         uptime_secs,
-        data_dir: dirs::data_dir()
-            .unwrap_or_default()
-            .join("piter")
+        data_dir: app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| dirs::data_dir().unwrap_or_default().join("piter"))
             .display()
             .to_string(),
     }

@@ -67,6 +67,7 @@ impl GatewayState {
         dist_path: PathBuf,
         port: Option<u16>,
         idle_timeout_secs: Option<u64>,
+        data_dir: PathBuf,
     ) -> Result<(Arc<GatewayState>, u16), String> {
         let bind_port = port.unwrap_or(0);
         let std_listener = std::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], bind_port)))
@@ -92,7 +93,7 @@ impl GatewayState {
             session_manager::SessionManager::new(idle_timeout_secs),
         ));
 
-        let db = db::Db::open().map_err(|e| format!("[gateway] db open failed: {}", e))?;
+        let db = db::Db::open(&data_dir).map_err(|e| format!("[gateway] db open failed: {}", e))?;
 
         let state = Arc::new(GatewayState {
             event_tx: event_tx.clone(),

@@ -8,7 +8,7 @@
 //! - `sessions` — session_path → project_id mapping
 //! - `global_extensions` — global extension names
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
@@ -20,9 +20,9 @@ pub struct Db {
 }
 
 impl Db {
-    /// Open (or create) the database.
-    pub fn open() -> Result<Arc<Self>, String> {
-        let path = db_path();
+    /// Open (or create) the database inside `data_dir`.
+    pub fn open(data_dir: &Path) -> Result<Arc<Self>, String> {
+        let path = db_path(data_dir);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create db dir: {}", e))?;
@@ -573,6 +573,6 @@ pub struct SessionRow {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-fn db_path() -> PathBuf {
-    crate::broker::util::piter_data_dir().join("piter.db")
+fn db_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("piter.db")
 }

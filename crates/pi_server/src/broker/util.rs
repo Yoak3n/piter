@@ -132,19 +132,6 @@ pub fn log_child_path_diagnostics(context: &str, path: &str) {
     );
 }
 
-// ─── Piter Data Directory ───────────────────────────────────────────────────
-
-/// Returns piter's own data directory.
-///
-/// - Windows: `%LOCALAPPDATA%/piter/`
-/// - macOS: `~/Library/Application Support/piter/`
-/// - Linux: `~/.local/share/piter/`
-pub fn piter_data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".local").join("share"))
-        .join("piter")
-}
-
 // ─── Pi Agent Config Readers ──────────────────────────────────────────────
 
 /// Returns the Pi agent config directory (`~/.pi/agent/`).
