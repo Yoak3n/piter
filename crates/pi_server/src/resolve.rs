@@ -464,6 +464,59 @@ fn extract_archive(archive_path: &Path, target_dir: &Path, is_zip: bool) -> Resu
     Ok(())
 }
 
+/// Build the HTTP client used for downloads.
+///
+/// Proxy resolution priority:
+///   1. Explicit proxy env vars (HTTPS_PROXY / HTTP_PROXY / ALL_PROXY,
+///      incl. lowercase) — matched first, e.g. Clash 等工具的终端代理。
+///   2. Windows/macOS system proxy (enabled via reqwest's `system-proxy`
+///      feature) — covers apps that only set the system proxy, such as
+///      Clash Verge Rev 的「系统代理」模式。
+fn build_download_client() -> Result<reqwest::blocking::Client, String> {
+    let mut builder = reqwest::blocking::Client::builder().user_agent("piter/0.1.0");
+
+    if let Some(proxy) = proxy_from_env() {
+        info!("Downloading via proxy: {}", proxy);
+        builder = builder.proxy(
+            reqwest::Proxy::all(&proxy)
+                .map_err(|e| format!("Invalid proxy URL '{}': {}", proxy, e))?,
+        );
+    }
+
+    builder
+        .build()
+        .map_err(|e| format!("Build HTTP client: {}", e))
+}
+
+/// Read the first available proxy URL from common proxy environment
+/// variables. Windows env vars are case-insensitive, but lowercase variants
+/// are checked too for portability (macOS/Linux shells).
+fn proxy_from_env() -> Option<String> {
+    const NAMES: [&str; 6] = [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
+    for name in NAMES {
+        if let Ok(raw) = std::env::var(name) {
+            let val = raw.trim().to_string();
+            if val.is_empty() {
+                continue;
+            }
+            // reqwest requires a scheme; default to http:// if missing
+            return Some(if val.contains("://") {
+                val
+            } else {
+                format!("http://{}", val)
+            });
+        }
+    }
+    None
+}
+
 /// Download a pi release from GitHub and extract to `target_dir`.
 pub fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
     let asset = detect_platform()?;
@@ -478,10 +531,7 @@ pub fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
     let tmp_dir = tempfile::tempdir().map_err(|e| format!("Create temp dir: {}", e))?;
     let archive_path = tmp_dir.path().join(&asset.archive_name);
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("piter/0.1.0")
-        .build()
-        .map_err(|e| format!("Build HTTP client: {}", e))?;
+    let client = build_download_client()?;
 
     let response = client
         .get(&url)

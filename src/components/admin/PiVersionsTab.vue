@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { Download, Check, RotateCcw, Trash2, Loader2, HardDrive, Link } from "lucide-vue-next";
+import { invoke } from "@tauri-apps/api/core";
 import type { PiInstallInfo } from "../../composables/useAdmin";
+
+const PI_RELEASES_URL = "https://github.com/earendil-works/pi/releases";
+const PI_HOMEPAGE_URL = "https://pi.dev";
 
 const props = defineProps<{
   installInfo: PiInstallInfo | null;
@@ -18,6 +22,30 @@ const emit = defineEmits<{
 
 const downloadInput = ref("");
 const actionFeedback = ref("");
+
+async function openLink(url: string) {
+  try {
+    await invoke("open_path", { path: url });
+  } catch {
+    window.open(url, "_blank");
+  }
+}
+
+function openReleases() {
+  openLink(PI_RELEASES_URL);
+}
+
+// Pre-fill the download input with the pinned version when pi is installed,
+// so users can switch back to it (or edit to any other version).
+watch(
+  () => props.installInfo,
+  (info) => {
+    if (info?.binary_present && info.locked_version && !downloadInput.value) {
+      downloadInput.value = info.locked_version;
+    }
+  },
+  { immediate: true }
+);
 
 async function handleDownload() {
   const v = downloadInput.value.trim();
@@ -87,7 +115,8 @@ const busy = () => props.downloading || props.uninstalling;
 
         <div class="install-card-body" v-else>
           <p class="install-hint">
-            Download Pi to enable runtime features. Pinned version: <code>v{{ installInfo.locked_version }}</code>
+            Download Pi to enable runtime features. For available versions, check the
+            <a class="text-link" href="#" @click.prevent="openReleases">pi releases on GitHub</a>.
           </p>
         </div>
 
@@ -141,6 +170,29 @@ const busy = () => props.downloading || props.uninstalling;
         </div>
       </div>
     </template>
+
+    <div class="help-card">
+      <h4 class="help-title">Installation tips</h4>
+      <ul class="help-list">
+        <li>
+          <strong>Find a version:</strong> version numbers change frequently — check the
+          <a class="text-link" href="#" @click.prevent="openReleases">official pi releases</a>
+          page for the latest version.
+        </li>
+        <li>
+          <strong>Network issues:</strong> downloads from GitHub can be slow or fail in China.
+          Enable a proxy (e.g. Clash Verge's System Proxy or TUN mode) and retry — Piter
+          automatically uses your system proxy and
+          <code>HTTPS_PROXY</code>/<code>HTTP_PROXY</code> environment variables.
+        </li>
+        <li>
+          <strong>Manual install:</strong> prefer to install pi yourself? Use the official installer
+          (<a class="text-link" href="#" @click.prevent="openLink(PI_HOMEPAGE_URL)">pi.dev</a>)
+          or <code>npm i -g @earendil-works/pi-coding-agent</code>. Piter auto-detects pi from PATH
+          / npm globals and links it here — no download needed.
+        </li>
+      </ul>
+    </div>
 
     <div v-if="actionFeedback" class="action-feedback">{{ actionFeedback }}</div>
   </div>
@@ -295,5 +347,54 @@ const busy = () => props.downloading || props.uninstalling;
   margin-top: var(--space-md);
   font-size: var(--font-size-caption);
   color: var(--text-secondary);
+}
+
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.text-link:hover {
+  text-decoration: underline;
+}
+
+.help-card {
+  margin-top: var(--space-lg);
+  background: var(--bg-panel);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md) var(--space-lg);
+}
+
+.help-title {
+  margin: 0 0 var(--space-sm) 0;
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.help-list {
+  margin: 0;
+  padding-left: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--text-secondary);
+}
+.help-list strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.help-list code {
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: transparent;
 }
 </style>

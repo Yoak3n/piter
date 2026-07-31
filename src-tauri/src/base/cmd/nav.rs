@@ -21,7 +21,9 @@ pub fn do_navigate_to_admin() -> Result<(), String> {
     let admin_url = if cfg!(debug_assertions) {
         "http://localhost:1420/"
     } else if cfg!(target_os = "windows") {
-        "https://tauri.localhost/"
+        // Tauri v2 on Windows serves assets over WebView2's virtual host
+        // mapping: `http://tauri.localhost` (not https).
+        "http://tauri.localhost/"
     } else {
         "tauri://localhost/"
     };
