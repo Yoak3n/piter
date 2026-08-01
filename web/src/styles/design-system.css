@@ -2,7 +2,10 @@
 /* Inspired by Picot's sophistication: muted palette, generous spacing,
    glass-morphism depth, consistent rhythm. */
 
-:root {
+/* Light theme (explicit). The `system` preference falls back to these
+   values until JS applies `data-theme`. */
+:root,
+[data-theme="light"] {
 	color-scheme: light;
 
 	/* ─── Backgrounds — warm off-white ─── */
@@ -197,6 +200,55 @@
 	--shadow-drawer: -4px 0 12px rgba(0, 0, 0, 0.2);
 	--focus-ring: 0 0 0 3px rgba(138, 154, 170, 0.2);
 	--overlay-backdrop: rgba(0, 0, 0, 0.55);
+}
+
+/* Dark theme via the OS preference, used before JS applies `data-theme`
+   (e.g. initial render, JS-disabled clients). `:where()` keeps specificity
+   at zero so an explicit `data-theme` always wins. */
+@media (prefers-color-scheme: dark) {
+	:where(:root:not([data-theme="light"])) {
+		color-scheme: dark;
+
+		--bg: #1a1a1e;
+		--bg-sidebar: #202024;
+		--bg-panel: #28282c;
+		--bg-muted: #303034;
+		--bg-hover: #38383c;
+		--bg-active: #404044;
+		--bg-glass: rgba(255, 255, 255, 0.04);
+		--bg-glass-strong: rgba(255, 255, 255, 0.06);
+
+		--text: rgba(255, 255, 255, 0.88);
+		--text-secondary: rgba(255, 255, 255, 0.5);
+		--text-tertiary: rgba(255, 255, 255, 0.3);
+
+		--border: rgba(255, 255, 255, 0.06);
+		--border-strong: rgba(255, 255, 255, 0.1);
+		--border-hover: rgba(255, 255, 255, 0.14);
+
+		--accent: #8a9aaa;
+		--accent-soft: rgba(138, 154, 170, 0.1);
+		--accent-strong: #7a8a9a;
+		--accent-glow: rgba(138, 154, 170, 0.15);
+
+		--danger: #f87171;
+		--danger-soft: rgba(248, 113, 113, 0.1);
+		--success: #5aaa7a;
+		--success-soft: rgba(90, 170, 122, 0.1);
+		--warning: #dba040;
+		--warning-soft: rgba(219, 160, 64, 0.1);
+		--code-bg: #1a1a1e;
+		--code-text: rgba(255, 255, 255, 0.88);
+
+		--shadow-sm: none;
+		--shadow-md: none;
+		--shadow-lg: none;
+		--shadow-composer: none;
+		--shadow-modal: 0 8px 40px rgba(0, 0, 0, 0.4);
+		--shadow-drawer: -4px 0 12px rgba(0, 0, 0, 0.2);
+		--focus-ring: 0 0 0 3px rgba(138, 154, 170, 0.2);
+		--overlay-backdrop: rgba(0, 0, 0, 0.55);
+	}
 }
 
 /* ─── Reset & Base ─── */

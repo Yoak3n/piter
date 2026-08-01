@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { Settings, Cpu, Activity, Puzzle, Globe, GitBranch, Store } from "lucide-vue-next";
+import { ref, watch } from "vue";
+import { Settings, Cpu, Activity, Puzzle, Globe, GitBranch, Store, ChevronDown } from "lucide-vue-next";
 
-defineProps<{
+const props = defineProps<{
   activeTab: string;
+  chatAvailable: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -15,13 +17,31 @@ const tabs = [
   { key: "status", label: "Status", icon: Activity },
   { key: "pi", label: "Pi Config", icon: Cpu },
   { key: "versions", label: "Versions", icon: GitBranch },
-  { key: "extensions", label: "Extensions", icon: Puzzle },
+];
+
+// Extensions is a parent group: "Installed" (enabled list) + "Market" (browse).
+const extensionTabs = [
+  { key: "extensions", label: "Installed", icon: Puzzle },
   { key: "market", label: "Market", icon: Store },
 ];
 
 const bottomTabs = [
   { key: "settings", label: "Appearance", icon: Settings },
 ];
+
+const extensionGroupKeys = ["extensions", "market"];
+
+const extensionsOpen = ref(extensionGroupKeys.includes(props.activeTab));
+watch(
+  () => props.activeTab,
+  (tab) => {
+    if (extensionGroupKeys.includes(tab)) extensionsOpen.value = true;
+  }
+);
+
+function toggleExtensions() {
+  extensionsOpen.value = !extensionsOpen.value;
+}
 
 async function openWebApp() {
   try {
@@ -52,6 +72,30 @@ async function openWebApp() {
       </button>
     </div>
 
+    <div class="admin-nav-group">
+      <button
+        class="admin-nav-item admin-nav-parent"
+        :class="{ active: extensionGroupKeys.includes(activeTab) }"
+        @click="toggleExtensions"
+      >
+        <Puzzle :size="15" />
+        <span>Extensions</span>
+        <ChevronDown :size="13" class="nav-chevron" :class="{ open: extensionsOpen }" />
+      </button>
+      <template v-if="extensionsOpen">
+        <button
+          v-for="tab in extensionTabs"
+          :key="tab.key"
+          class="admin-nav-item admin-nav-child"
+          :class="{ active: activeTab === tab.key }"
+          @click="emit('select', tab.key)"
+        >
+          <component :is="tab.icon" :size="15" />
+          <span>{{ tab.label }}</span>
+        </button>
+      </template>
+    </div>
+
     <div class="admin-nav-spacer"></div>
 
     <div class="admin-nav-group admin-nav-bottom">
@@ -71,6 +115,9 @@ async function openWebApp() {
       <button
         v-if="isTauri"
         class="admin-nav-action"
+        :class="{ ready: chatAvailable }"
+        :disabled="!chatAvailable"
+        :title="chatAvailable ? 'Open the Pi chat view' : 'Pi is not running — install Pi first (Settings > Versions)'"
         @click="openWebApp"
       >
         <Globe :size="13" />
@@ -151,6 +198,29 @@ async function openWebApp() {
   font-weight: 500;
 }
 
+/* Parent group item (e.g. Extensions) */
+.admin-nav-parent {
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.admin-nav-child {
+  padding-left: calc(var(--space-lg) + var(--space-xs));
+  font-size: var(--font-size-caption);
+  color: var(--text-tertiary);
+}
+
+.nav-chevron {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  transition: transform var(--duration-fast) var(--ease);
+  flex-shrink: 0;
+}
+
+.nav-chevron.open {
+  transform: rotate(180deg);
+}
+
 .admin-nav-spacer {
   flex: 1;
 }
@@ -175,5 +245,24 @@ async function openWebApp() {
 .admin-nav-action:hover {
   color: var(--text-secondary);
   background: var(--bg-hover);
+}
+
+/* Chat view reachable: make it stand out as the primary call-to-action. */
+.admin-nav-action.ready {
+  background: var(--accent);
+  color: var(--bg-panel);
+  font-weight: 600;
+}
+.admin-nav-action.ready:hover {
+  background: var(--accent-strong);
+  color: var(--bg-panel);
+}
+.admin-nav-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.admin-nav-action:disabled:hover {
+  background: transparent;
+  color: var(--text-tertiary);
 }
 </style>

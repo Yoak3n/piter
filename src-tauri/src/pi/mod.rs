@@ -108,7 +108,13 @@ pub fn try_resolve_pi_binary(app_handle: &AppHandle) -> Result<PathBuf, String> 
 /// - If resources/pi/ contains a linked install, the link is removed and replaced
 ///   with a fresh download.
 /// - After download, writes `.version` and `.origin` markers.
-pub fn download_and_install(app_handle: &AppHandle, version: &str) -> Result<(), String> {
+///
+/// `on_progress` is invoked with download/extract/install progress events.
+pub fn download_and_install(
+    app_handle: &AppHandle,
+    version: &str,
+    on_progress: impl Fn(pi_server::DownloadProgress) + Send + 'static,
+) -> Result<(), String> {
     let target_dir = bundle_pi_dir(app_handle);
 
     // Clear existing contents
@@ -120,7 +126,7 @@ pub fn download_and_install(app_handle: &AppHandle, version: &str) -> Result<(),
         .map_err(|e| format!("Failed to create pi directory: {}", e))?;
 
     // Download to the target directory directly
-    resolve::download_pi(version, &target_dir)?;
+    resolve::download_pi_with_progress(version, &target_dir, on_progress)?;
 
     // Write origin marker
     std::fs::write(target_dir.join(".origin"), "downloaded")

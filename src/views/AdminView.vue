@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, watch } from "vue";
 import { useAdmin } from "../composables/useAdmin";
 import type { AppSettings, PiSettings } from "../composables/useAdmin";
+import { applyTheme, darkMedia } from "../utils/theme";
 import AdminNav from "../components/admin/AdminNav.vue";
 import StatusTab from "../components/admin/StatusTab.vue";
 import PiConfigTab from "../components/admin/PiConfigTab.vue";
@@ -10,7 +11,7 @@ import ExtensionsTab from "../components/admin/ExtensionsTab.vue";
 import MarketplaceTab from "../components/admin/MarketplaceTab.vue";
 import AppearanceTab from "../components/admin/AppearanceTab.vue";
 
-const { config, status, piSettings, piInstall, loading, error,
+const { config, status, piSettings, piInstall, downloadProgress, loading, error,
   fetchConfig, saveConfig, fetchStatus, restartPi, stopPi,
   fetchPiAgentSettings, savePiAgentSettings, openPath,
   fetchPiInstallInfo, downloadPiVersion, uninstallPi,
@@ -18,14 +19,40 @@ const { config, status, piSettings, piInstall, loading, error,
 
 const activeTab = ref("status");
 
+const appSettings = computed<AppSettings>(() =>
+  config.value?.app ?? { theme: "system", auto_start: true, start_minimized: true }
+);
+
+// Theme currently in effect. Normally follows the saved config, but the
+// Appearance tab may preview an unsaved selection — system theme changes must
+// not override that preview.
+const activeTheme = ref(appSettings.value.theme);
+
+function syncTheme() {
+  applyTheme(activeTheme.value);
+}
+
 onMounted(() => {
-  document.documentElement.dataset.theme =
-    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  // Apply the saved theme once config loads (fall back to OS preference
+  // until then to avoid a flash of the wrong scheme).
+  syncTheme();
+  darkMedia.addEventListener("change", syncTheme);
   fetchConfig();
   fetchStatus();
   fetchPiAgentSettings();
   fetchPiInstallInfo();
 });
+
+// Follow the saved config, but only when nothing is being previewed.
+watch(appSettings, (s) => {
+  activeTheme.value = s.theme;
+  syncTheme();
+});
+
+// Appearance tab previews an unsaved theme selection.
+function handleThemePreview(theme: string) {
+  activeTheme.value = theme;
+}
 
 function handleTabSelect(tab: string) {
   activeTab.value = tab;
@@ -33,15 +60,14 @@ function handleTabSelect(tab: string) {
   if (tab === "versions") fetchPiInstallInfo();
 }
 
-const appSettings = computed<AppSettings>(() =>
-  config.value?.app ?? { theme: "system", auto_start: true, start_minimized: true }
-);
-
 const piSettingsVal = computed<PiSettings>(() =>
   config.value?.pi ?? { request_timeout_secs: 300, auto_restart_on_crash: true }
 );
 
 const piMissing = computed(() => status.value?.pi_binary_missing ?? false);
+
+// Chat view is reachable when the gateway is actually serving (pi available).
+const chatAvailable = computed(() => !!status.value?.broker_http_url);
 
 function handleAppUpdate(settings: AppSettings) {
   if (!config.value) return;
@@ -61,11 +87,11 @@ function handlePackagesChanged(packages: string[]) {
 
 <template>
   <div class="admin-view">
-    <AdminNav :activeTab="activeTab" @select="handleTabSelect" />
+    <AdminNav :activeTab="activeTab" :chatAvailable="chatAvailable" @select="handleTabSelect" />
     <main class="admin-main">
       <div v-if="error" class="admin-error">{{ error }}</div>
 
-      <div v-if="piMissing && activeTab !== 'versions'" class="admin-banner">
+      <div v-if="piMissing" class="admin-banner">
         <strong>Pi runtime not found.</strong>
         <span>Pi features are unavailable. Go to <a href="#" @click.prevent="activeTab = 'versions'">Versions</a> to download a Pi binary.</span>
       </div>
@@ -92,6 +118,7 @@ function handlePackagesChanged(packages: string[]) {
       <PiVersionsTab
         v-if="activeTab === 'versions'"
         :installInfo="piInstall"
+        :download-progress="downloadProgress"
         :loading="loading.piInstall"
         :downloading="loading.downloading"
         :uninstalling="loading.uninstalling"
@@ -113,6 +140,7 @@ function handlePackagesChanged(packages: string[]) {
         :settings="appSettings"
         :disabled="loading.config"
         @update="handleAppUpdate"
+        @preview="handleThemePreview"
       />
     </main>
   </div>
@@ -151,8 +179,8 @@ function handlePackagesChanged(packages: string[]) {
 .admin-banner {
   margin: var(--space-md) var(--space-xl);
   padding: var(--space-sm) var(--space-md);
-  background: var(--warning-soft);
-  color: var(--warning);
+  background: var(--danger-soft);
+  color: var(--danger);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-caption);
   display: flex;
@@ -163,7 +191,7 @@ function handlePackagesChanged(packages: string[]) {
   white-space: nowrap;
 }
 .admin-banner a {
-  color: var(--warning);
+  color: var(--danger);
   text-decoration: underline;
   font-weight: 600;
 }

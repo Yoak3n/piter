@@ -8,6 +8,27 @@ import { usePiConnection } from "./composables/usePiConnection";
 import { useSessions } from "./composables/useSessions";
 import type { ModelRef } from "./types";
 
+// ─── Theme ────────────────────────────────────────────────────────────────
+// This app is served by the gateway as a plain web page and must not depend
+// on the Tauri runtime. The desktop app injects the saved theme as a `theme`
+// query param when navigating here; otherwise we follow the OS preference.
+const darkMedia = window.matchMedia("(prefers-color-scheme: dark)");
+let currentTheme = "system";
+
+function applyTheme() {
+  const dark =
+    currentTheme === "dark" || (currentTheme === "system" && darkMedia.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+}
+
+function applySavedTheme() {
+  const urlTheme = new URLSearchParams(window.location.search).get("theme");
+  if (urlTheme === "light" || urlTheme === "dark" || urlTheme === "system") {
+    currentTheme = urlTheme;
+  }
+  applyTheme();
+}
+
 const {
   messages,
   isRunning,
@@ -98,11 +119,8 @@ function handleModelSelect(model: ModelRef) {
 }
 
 onMounted(() => {
-  document.documentElement.dataset.theme = window.matchMedia?.(
-    "(prefers-color-scheme: dark)",
-  ).matches
-    ? "dark"
-    : "light";
+  darkMedia.addEventListener("change", applyTheme);
+  applySavedTheme();
   connectWebSocket();
   fetchSessions();
 });

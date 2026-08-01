@@ -57,6 +57,32 @@ impl ConfigManager {
         Ok(config)
     }
 
+    /// Apply the OS-level side effect of the `auto_start` setting: register
+    /// or unregister the app for automatic launch at login.
+    pub fn apply_autostart(app: &tauri::AppHandle, auto_start: bool) {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            use tauri_plugin_autostart::ManagerExt;
+            let manager = app.autolaunch();
+            let result = if auto_start {
+                manager.enable()
+            } else {
+                manager.disable()
+            };
+            if let Err(e) = result {
+                log::warn!(
+                    "[config] failed to apply auto_start={}: {}",
+                    auto_start,
+                    e
+                );
+            }
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let _ = (app, auto_start);
+        }
+    }
+
     fn write_defaults(&self) -> Result<(), String> {
         if let Some(parent) = self.config_path.parent() {
             fs::create_dir_all(parent)

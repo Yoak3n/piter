@@ -1,5 +1,5 @@
 import { ref, reactive } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 
 export interface AppSettings {
   theme: string;
@@ -59,6 +59,15 @@ export interface ProjectBrief {
   cwd: string;
 }
 
+/** Progress events emitted by the `download_pi_version` command. */
+export interface DownloadProgressEvent {
+  stage: "downloading" | "extracting" | "verifying" | "done";
+  downloaded?: number;
+  total?: number;
+  current?: number;
+  total_entries?: number;
+}
+
 export interface ExtensionEntry {
   name: string;
   path: string | null;
@@ -80,6 +89,7 @@ export function useAdmin() {
   const status = ref<AdminStatus | null>(null);
   const piSettings = ref<PiAgentSettings | null>(null);
   const piInstall = ref<PiInstallInfo | null>(null);
+  const downloadProgress = ref<DownloadProgressEvent | null>(null);
   const loading = reactive({ config: false, status: false, piSettings: false, piInstall: false, downloading: false, uninstalling: false });
   const error = ref("");
 
@@ -197,8 +207,18 @@ export function useAdmin() {
   async function downloadPiVersion(version: string): Promise<boolean> {
     loading.downloading = true;
     error.value = "";
+    downloadProgress.value = null;
     try {
-      await invoke("download_pi_version", { version });
+      // Stream progress from the Rust command via a channel — scoped to this
+      // invoke call, no global event listeners needed.
+      const channel = new Channel<DownloadProgressEvent>();
+      channel.onmessage = (msg) => {
+        downloadProgress.value = msg;
+      };
+      await invoke("download_pi_version", { version, onProgress: channel });
+      // Pi is installed now — start the gateway so chat works without an app
+      // restart.
+      await startPiGateway();
       await fetchPiInstallInfo();
       await fetchStatus();
       return true;
@@ -206,7 +226,18 @@ export function useAdmin() {
       error.value = `Failed to download Pi ${version}: ${e}`;
       return false;
     } finally {
+      downloadProgress.value = null;
       loading.downloading = false;
+    }
+  }
+
+  /** Start the gateway (after pi has been installed mid-session). */
+  async function startPiGateway(): Promise<string | null> {
+    try {
+      return await invoke<string>("start_pi_gateway");
+    } catch (e) {
+      error.value = `Failed to start gateway: ${e}`;
+      return null;
     }
   }
 
@@ -263,6 +294,7 @@ export function useAdmin() {
     status,
     piSettings,
     piInstall,
+    downloadProgress,
     loading,
     error,
     fetchConfig,
@@ -275,6 +307,7 @@ export function useAdmin() {
     openPath,
     fetchPiInstallInfo,
     downloadPiVersion,
+    startPiGateway,
     uninstallPi,
     fetchExtensionOverview,
     saveGlobalExtensions,

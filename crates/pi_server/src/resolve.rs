@@ -339,6 +339,20 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 // ─── GitHub download fallback ────────────────────────────────────────────────
 
+/// Progress events emitted while downloading / extracting / installing pi.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum DownloadProgress {
+    /// Downloading the release archive.
+    Downloading { downloaded: u64, total: Option<u64> },
+    /// Extracting the archive (zip only reports per-entry progress).
+    Extracting { current: usize, total: usize },
+    /// Verifying the extracted binary.
+    Verifying,
+    /// Installation finished.
+    Done,
+}
+
 /// Platform-specific release asset descriptor.
 struct PlatformAsset {
     #[allow(dead_code)]
@@ -379,7 +393,12 @@ fn detect_platform() -> Result<PlatformAsset, String> {
 
 /// Extract and flatten the archive into `target_dir`.
 /// Handles the `pi/` wrapper dir that GitHub release archives contain.
-fn extract_archive(archive_path: &Path, target_dir: &Path, is_zip: bool) -> Result<(), String> {
+fn extract_archive(
+    archive_path: &Path,
+    target_dir: &Path,
+    is_zip: bool,
+    on_progress: &dyn Fn(DownloadProgress),
+) -> Result<(), String> {
     // Extract into a temp staging dir first
     let staging =
         tempfile::tempdir().map_err(|e| format!("Failed to create staging dir: {}", e))?;
@@ -390,7 +409,12 @@ fn extract_archive(archive_path: &Path, target_dir: &Path, is_zip: bool) -> Resu
             std::fs::File::open(archive_path).map_err(|e| format!("Failed to open zip: {}", e))?;
         let mut archive =
             zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip: {}", e))?;
+        let total_entries = archive.len();
         for i in 0..archive.len() {
+            on_progress(DownloadProgress::Extracting {
+                current: i + 1,
+                total: total_entries,
+            });
             let mut entry = archive
                 .by_index(i)
                 .map_err(|e| format!("Zip entry {}: {}", i, e))?;
@@ -519,6 +543,16 @@ fn proxy_from_env() -> Option<String> {
 
 /// Download a pi release from GitHub and extract to `target_dir`.
 pub fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
+    download_pi_with_progress(version, target_dir, |_| {})
+}
+
+/// Download a pi release from GitHub and extract to `target_dir`,
+/// reporting progress through `on_progress`.
+pub fn download_pi_with_progress(
+    version: &str,
+    target_dir: &Path,
+    on_progress: impl Fn(DownloadProgress),
+) -> Result<(), String> {
     let asset = detect_platform()?;
     let url = format!(
         "https://github.com/earendil-works/pi/releases/download/v{}/{}",
@@ -533,7 +567,7 @@ pub fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
 
     let client = build_download_client()?;
 
-    let response = client
+    let mut response = client
         .get(&url)
         .send()
         .map_err(|e| format!("HTTP request failed: {} (URL: {})", e, url))?;
@@ -546,20 +580,33 @@ pub fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
         ));
     }
 
-    // Write response body to file
-    let total = response.content_length().unwrap_or(0);
-    if total > 0 {
+    // Stream the response body to file, reporting download progress.
+    let total = response.content_length();
+    if let Some(total) = total {
         info!("  Download size: {} MB", total / 1024 / 1024);
     }
     let mut file =
         std::fs::File::create(&archive_path).map_err(|e| format!("Create temp file: {}", e))?;
-    let mut response = response;
-    std::io::copy(&mut response, &mut file).map_err(|e| format!("Download failed: {}", e))?;
+    let mut downloaded: u64 = 0;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        use std::io::{Read, Write};
+        let n = response
+            .read(&mut buf)
+            .map_err(|e| format!("Download failed: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n])
+            .map_err(|e| format!("Write temp file: {}", e))?;
+        downloaded += n as u64;
+        on_progress(DownloadProgress::Downloading { downloaded, total });
+    }
     drop(file);
     info!("Download complete. Extracting...");
 
     // Extract
-    extract_archive(&archive_path, target_dir, asset.is_zip)?;
+    extract_archive(&archive_path, target_dir, asset.is_zip, &on_progress)?;
 
     // Verify binary
     let bin = target_dir.join(&asset.binary_name);
@@ -569,6 +616,7 @@ pub fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
             bin.display()
         ));
     }
+    on_progress(DownloadProgress::Verifying);
 
     // Set executable bit on Unix
     #[cfg(not(target_os = "windows"))]
@@ -584,6 +632,8 @@ pub fn download_pi(version: &str, target_dir: &Path) -> Result<(), String> {
     // Write version marker
     std::fs::write(target_dir.join(".version"), version)
         .map_err(|e| format!("Write .version: {}", e))?;
+
+    on_progress(DownloadProgress::Done);
 
     info!("pi {} installed to {}", version, target_dir.display());
     Ok(())

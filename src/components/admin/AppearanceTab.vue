@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, onBeforeUnmount } from "vue";
 import type { AppSettings } from "../../composables/useAdmin";
+import { applyTheme } from "../../utils/theme";
 
 const props = defineProps<{
   settings: AppSettings;
@@ -9,12 +10,26 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update", settings: AppSettings): void;
+  (e: "preview", theme: string): void;
 }>();
 
 const local = ref<AppSettings>({ ...props.settings });
 const saved = ref(false);
 
 watch(() => props.settings, (s) => { local.value = { ...s }; }, { immediate: true });
+
+// Preview the selected theme immediately; it persists on save. The parent
+// tracks the preview so system theme changes don't override it.
+watch(() => local.value.theme, (t) => {
+  applyTheme(t);
+  emit("preview", t);
+});
+
+// Leaving the tab restores the saved theme (an unsaved preview is transient).
+onBeforeUnmount(() => {
+  applyTheme(props.settings.theme);
+  emit("preview", props.settings.theme);
+});
 
 function handleSave() {
   saved.value = false;

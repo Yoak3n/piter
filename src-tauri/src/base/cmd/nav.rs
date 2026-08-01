@@ -2,6 +2,18 @@ use crate::base::window::{manager::Manager as WM, schema::WindowType};
 
 use super::broker::get_web_url;
 
+/// Append the saved theme as a query param so the web frontend can apply it
+/// on first load without relying on IPC (remote origins).
+pub fn web_url_with_theme(http_url: &str) -> String {
+    let theme = crate::admin::config::ConfigManager::global()
+        .get_config()
+        .app
+        .theme;
+    tauri::Url::parse_with_params(http_url, &[("theme", theme)])
+        .map(|u| u.to_string())
+        .unwrap_or_else(|_| http_url.to_string())
+}
+
 /// Navigate the main window to the Tauri admin panel (built-in frontend).
 #[tauri::command]
 pub fn navigate_to_admin() -> Result<(), String> {
@@ -42,9 +54,9 @@ pub fn do_navigate_to_web() -> Result<(), String> {
     let window = WM::global()
         .get_window(WindowType::Main)
         .ok_or("Main window not found")?;
-    let url = tauri::Url::parse(&http_url)
+    let url = tauri::Url::parse(&web_url_with_theme(&http_url))
         .map_err(|e| format!("Invalid web URL: {}", e))?;
-    log::info!("[nav] navigating to web: {}", http_url);
+    log::info!("[nav] navigating to web: {}", url);
     let _ = window.navigate(url);
     Ok(())
 }

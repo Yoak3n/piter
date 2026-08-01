@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, computed } from "vue";
 import { Download, Check, RotateCcw, Trash2, Loader2, HardDrive, Link } from "lucide-vue-next";
 import { invoke } from "@tauri-apps/api/core";
-import type { PiInstallInfo } from "../../composables/useAdmin";
+import type { PiInstallInfo, DownloadProgressEvent } from "../../composables/useAdmin";
 
 const PI_RELEASES_URL = "https://github.com/earendil-works/pi/releases";
 const PI_HOMEPAGE_URL = "https://pi.dev";
 
 const props = defineProps<{
   installInfo: PiInstallInfo | null;
+  downloadProgress: DownloadProgressEvent | null;
   loading: boolean;
   downloading: boolean;
   uninstalling: boolean;
@@ -35,13 +36,15 @@ function openReleases() {
   openLink(PI_RELEASES_URL);
 }
 
-// Pre-fill the download input with the pinned version when pi is installed,
-// so users can switch back to it (or edit to any other version).
+// Pre-fill the download input once pi is installed. Prefer the currently
+// installed version (e.g. right after a user-triggered download) and fall
+// back to the pinned version — otherwise the field would jump back to the
+// pinned version after the user downloads a different one.
 watch(
   () => props.installInfo,
   (info) => {
     if (info?.binary_present && info.locked_version && !downloadInput.value) {
-      downloadInput.value = info.locked_version;
+      downloadInput.value = info.version ?? info.locked_version;
     }
   },
   { immediate: true }
@@ -63,6 +66,54 @@ async function handleUninstall() {
 }
 
 const busy = () => props.downloading || props.uninstalling;
+
+// ─── Download progress helpers ────────────────────────────────────────────────
+
+const progressPercent = computed(() => {
+  const p = props.downloadProgress;
+  if (!p) return 0;
+  switch (p.stage) {
+    case "downloading":
+      return p.total
+        ? Math.min(100, Math.round(((p.downloaded ?? 0) / p.total) * 100))
+        : 0;
+    case "extracting":
+      return p.total_entries
+        ? Math.min(100, Math.round(((p.current ?? 0) / p.total_entries) * 100))
+        : 0;
+    case "verifying":
+    case "done":
+      return 100;
+    default:
+      return 0;
+  }
+});
+
+const progressText = computed(() => {
+  const p = props.downloadProgress;
+  if (!p) return "";
+  const mb = (n?: number) => (n !== undefined ? (n / 1024 / 1024).toFixed(1) : "?");
+  switch (p.stage) {
+    case "downloading": {
+      const pct = p.total
+        ? ` ${Math.round(((p.downloaded ?? 0) / p.total) * 100)}%`
+        : "";
+      return `Downloading ${mb(p.downloaded)} / ${mb(p.total)} MB${pct}`;
+    }
+    case "extracting": {
+      const pct = p.total_entries
+        ? ` ${Math.round(((p.current ?? 0) / p.total_entries) * 100)}%`
+        : "";
+      return `Extracting...${pct}`;
+    }
+    case "verifying":
+      return "Verifying...";
+    case "done":
+      return "Done";
+    default:
+      return "";
+  }
+});
 </script>
 
 <template>
@@ -167,6 +218,13 @@ const busy = () => props.downloading || props.uninstalling;
               <span>Refresh</span>
             </button>
           </template>
+        </div>
+
+        <div v-if="downloading" class="progress-wrap">
+          <div class="progress-track">
+            <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+          </div>
+          <span class="progress-label">{{ progressText }}</span>
         </div>
       </div>
     </template>
@@ -341,6 +399,36 @@ const busy = () => props.downloading || props.uninstalling;
 .download-input {
   flex: 1;
   font-family: var(--font-mono);
+}
+
+.progress-wrap {
+  margin-top: var(--space-md);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+.progress-label {
+  font-size: var(--font-size-caption);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .action-feedback {

@@ -1,14 +1,15 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 
 use pi_server::broker::util::{build_augmented_path, configure_child_process_for_windows, strip_verbatim_prefix};
-use pi_server::gateway::GatewayState;
 use pi_server::gateway::handlers::pi::restart_pi_instance;
+use tauri::Manager;
+
+use crate::base::state::GatewaySlot;
 
 #[tauri::command]
-pub fn restart_pi(gw: tauri::State<'_, Option<Arc<GatewayState>>>) -> Result<String, String> {
-    match gw.inner().as_ref() {
+pub fn restart_pi(gw: tauri::State<'_, GatewaySlot>) -> Result<String, String> {
+    match gw.inner().lock().as_ref() {
         Some(gw) => {
             // Collect all instance IDs first (to avoid holding lock during restart)
             let instance_ids: Vec<String> = {
@@ -35,14 +36,33 @@ pub fn restart_pi(gw: tauri::State<'_, Option<Arc<GatewayState>>>) -> Result<Str
 }
 
 #[tauri::command]
-pub fn stop_pi(gw: tauri::State<'_, Option<Arc<GatewayState>>>) -> Result<String, String> {
-    match gw.inner().as_ref() {
+pub fn stop_pi(gw: tauri::State<'_, GatewaySlot>) -> Result<String, String> {
+    match gw.inner().lock().as_ref() {
         Some(gw) => {
             log::info!("[admin] stopping all pi processes");
             gw.kill_all();
             Ok("pi processes stopped".into())
         }
         None => Err("Pi binary not available. Download it from Settings > Versions.".into()),
+    }
+}
+
+/// Start the gateway now that pi is installed (e.g. right after downloading
+/// it in this session — no app restart needed). Returns the gateway URL.
+#[tauri::command]
+pub fn start_pi_gateway(app: tauri::AppHandle) -> Result<String, String> {
+    let slot = app.state::<GatewaySlot>();
+    if slot.lock().is_some() {
+        return Ok("Gateway already running".into());
+    }
+    match crate::base::init::try_start_gateway(&app) {
+        Ok(Some((gw, web_url))) => {
+            *slot.lock() = Some(gw);
+            log::info!("[gateway] started on demand at {}", web_url);
+            Ok(web_url)
+        }
+        Ok(None) => Err("Pi binary not found. Download it from Settings > Versions.".into()),
+        Err(e) => Err(e),
     }
 }
 
@@ -149,14 +169,14 @@ pub async fn list_pi_packages(app: tauri::AppHandle) -> Result<Vec<String>, Stri
 #[tauri::command]
 pub async fn install_pi_package(
     app: tauri::AppHandle,
-    gw: tauri::State<'_, Option<Arc<GatewayState>>>,
+    gw: tauri::State<'_, GatewaySlot>,
     source: String,
 ) -> Result<(), String> {
     if source.trim().is_empty() {
         return Err("Package source is empty".into());
     }
     let source = source.trim().to_string();
-    let gw_opt = gw.inner().clone();
+    let gw_opt = gw.inner().lock().clone();
     tokio::task::spawn_blocking(move || {
         let bin = crate::pi::try_resolve_pi_binary(&app)?;
         run_pi_command(&bin, &["install".to_string(), source.clone()])?;
@@ -177,14 +197,14 @@ pub async fn install_pi_package(
 #[tauri::command]
 pub async fn remove_pi_package(
     app: tauri::AppHandle,
-    gw: tauri::State<'_, Option<Arc<GatewayState>>>,
+    gw: tauri::State<'_, GatewaySlot>,
     source: String,
 ) -> Result<(), String> {
     if source.trim().is_empty() {
         return Err("Package source is empty".into());
     }
     let source = source.trim().to_string();
-    let gw_opt = gw.inner().clone();
+    let gw_opt = gw.inner().lock().clone();
     tokio::task::spawn_blocking(move || {
         let bin = crate::pi::try_resolve_pi_binary(&app)?;
         run_pi_command(&bin, &["remove".to_string(), source.clone()])?;

@@ -1,8 +1,9 @@
 use crate::admin::cmd::*;
+use crate::admin::config::ConfigManager;
 use crate::base::cmd::*;
 use crate::base::{
     handle::Handle,
-    state::AppState,
+    state::{AppState, GatewaySlot},
     tray::create_tray_icon,
     window::{manager::Manager as WM, schema::WindowType},
 };
@@ -13,6 +14,8 @@ use tauri_plugin_log::{Target, TargetKind};
 
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 pub fn generate_handlers(
 ) -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
@@ -36,11 +39,23 @@ pub fn generate_handlers(
         remove_pi_package,
         get_extension_overview,
         set_global_extensions,
-        set_project_extensions
+        set_project_extensions,
+        start_pi_gateway
     ]
 }
 
 pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
+    // Single-instance: prevent duplicate launches by focusing the existing
+    // main window when a second instance is started.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(
+        |app, _args, _cwd| {
+            log::info!("[single-instance] second launch detected, focusing main window");
+            let _ = WM::global().show_window(WindowType::Main, None);
+            let _ = app;
+        },
+    ));
+
     let builder = builder.plugin(tauri_plugin_opener::init());
 
     let builder = builder.plugin(tauri_plugin_dialog::init());
@@ -71,85 +86,37 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
     builder.setup(|app| {
         let pi_version = locked_pi_version().to_string();
 
-        crate::admin::config::ConfigManager::init(&app.handle());
+        ConfigManager::init(&app.handle());
 
-        // Try to resolve pi from local sources (no auto-download).
-        // If pi is not available, the app still starts — the user can
-        // download it from the Versions tab in Settings.
-        let pi_available = match try_resolve_pi_binary(app.handle()) {
-            Ok(exe) => {
-                log::info!("[pi] binary resolved at {}", exe.display());
-                true
+        // Apply persisted app settings that have OS-level effects at startup.
+        let admin_config = ConfigManager::global().get_config();
+        ConfigManager::apply_autostart(&app.handle(), admin_config.app.auto_start);
+
+        // Gateway state lives in a replaceable slot so it can also be started
+        // on demand after pi is installed mid-session (see start_pi_gateway).
+        let gw_slot: GatewaySlot = Arc::new(Mutex::new(None));
+        let web_url = match try_start_gateway(app.handle()) {
+            Ok(Some((gw, url))) => {
+                *gw_slot.lock() = Some(gw);
+                url
+            }
+            Ok(None) => {
+                log::warn!("[gateway] skipped (pi binary not available)");
+                log::warn!("[gateway] start it from Settings > Versions after downloading pi");
+                String::new()
             }
             Err(e) => {
-                log::warn!("[pi] binary not found locally: {}", e);
-                log::warn!("[pi] pi features unavailable until downloaded from Settings > Versions");
-                false
+                log::error!("{}", e);
+                String::new()
             }
         };
-
-        // 获取资源路径
-        let dist_path = get_dist_path(app.handle());
-
-        let app_data_dir = app
-            .path()
-            .app_data_dir()
-            .unwrap_or_else(|_| app_data_dir_path());
-
-        let dev_port = std::env::var("TAURI_ENV_DEBUG")
-            .ok()
-            .and_then(|v| if v == "true" { Some(1421u16) } else { None });
-
-        // Only start the gateway if pi binary is available.
-        let gw_state: Option<Arc<pi_server::gateway::GatewayState>> = if pi_available {
-            let resources_pi = if cfg!(debug_assertions) {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("resources")
-                    .join("pi")
-                    .join(pi_server::pi_binary_name())
-            } else {
-                app.handle()
-                    .path()
-                    .resource_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                    .join("pi")
-                    .join(pi_server::pi_binary_name())
-            };
-            match pi_server::gateway::GatewayState::start_gateway(
-                resources_pi,
-                pi_version.clone(),
-                dist_path,
-                dev_port,
-                None,
-                app_data_dir,
-            ) {
-                Ok((gw, _port)) => {
-                    log::info!("Pi gateway: WS={} HTTP={}", gw.ws_url(), gw.http_url());
-                    Some(gw)
-                }
-                Err(e) => {
-                    log::error!("[gateway] failed to start: {}", e);
-                    None
-                }
-            }
-        } else {
-            log::warn!("[gateway] skipped (pi binary not available)");
-            None
-        };
-
-        // Derive web_url from gateway (or empty if not started).
-        let web_url = gw_state
-            .as_ref()
-            .map(|gw| gw.http_url())
-            .unwrap_or_default();
 
         app.manage(AppState {
             pi_version: pi_version.clone(),
             web_url: web_url.clone(),
             ..Default::default()
         });
-        // Manage as Option so commands can gracefully handle the missing case.
-        app.manage(gw_state);
+        app.manage(gw_slot);
 
         Handle::global().init(app.handle().clone());
         let _ = create_tray_icon(app, false);
@@ -166,28 +133,79 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
             }
         });
 
-        if dev_port.is_none() && !web_url.is_empty() {
-            let _ =
-                WM::global().show_window(WindowType::Main, Some(&format!("{}chat", web_url)));
+
+        
+        // "Start minimized": launch into the tray without showing the window.
+        if !admin_config.app.start_minimized {
+            let url = crate::base::cmd::web_url_with_theme(&format!("{}chat", web_url));
+            let _ = WM::global().show_window(WindowType::Main, Some(&url));
         }
 
         Ok(())
     })
 }
 
+/// Try to start the gateway if pi is installed. Returns the gateway instance
+/// and its HTTP URL, or `None` when pi isn't available yet (not an error —
+/// callers can retry via `start_pi_gateway` once pi is installed).
+pub fn try_start_gateway(app: &AppHandle) -> Result<Option<(Arc<pi_server::gateway::GatewayState>, String)>, String> {
+    let pi_exe = match try_resolve_pi_binary(app) {
+        Ok(exe) => {
+            log::info!("[pi] binary resolved at {}", exe.display());
+            exe
+        }
+        Err(e) => {
+            log::debug!("[pi] binary not found locally: {}", e);
+            return Ok(None);
+        }
+    };
+
+    let pi_version = locked_pi_version().to_string();
+    let dist_path = get_dist_path(app);
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| app_data_dir_path());
+    let dev_port = std::env::var("TAURI_ENV_DEBUG")
+        .ok()
+        .and_then(|v| if v == "true" { Some(1421u16) } else { None });
+
+    match pi_server::gateway::GatewayState::start_gateway(
+        pi_exe,
+        pi_version,
+        dist_path,
+        dev_port,
+        None,
+        app_data_dir,
+    ) {
+        Ok((gw, _port)) => {
+            let url = gw.http_url();
+            log::info!("Pi gateway: WS={} HTTP={}", gw.ws_url(), url);
+            Ok(Some((gw, url)))
+        }
+        Err(e) => Err(format!("[gateway] failed to start: {}", e)),
+    }
+}
+
 fn get_dist_path(app: &AppHandle) -> PathBuf {
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("web")
-        .join("dist");
-    if dev_path.exists() {
-        return dev_path;
+    // Dev builds serve the vite-built frontend from the workspace, but release
+    // builds must only use the resource dir bundled next to the executable —
+    // a compile-time path must never leak into a shipped binary.
+    #[cfg(debug_assertions)]
+    {
+        let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("web")
+            .join("dist");
+        if dev_path.exists() {
+            return dev_path;
+        }
     }
     app.path()
         .resource_dir()
         .map(|p| p.join("web-frontend"))
-        .unwrap_or(dev_path)
+        .unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Piter's app data directory: `%APPDATA%\<identifier>` (e.g.
@@ -202,8 +220,8 @@ pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {
     match event {
         tauri::RunEvent::Ready | tauri::RunEvent::Resumed => {}
         tauri::RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
-            if let Some(gw) = app_handle.try_state::<Option<Arc<crate::pi::GatewayState>>>() {
-                if let Some(gw) = gw.inner().as_ref() {
+            if let Some(slot) = app_handle.try_state::<GatewaySlot>() {
+                if let Some(gw) = slot.lock().as_ref() {
                     log::info!("[app] stopping all pi processes before exit");
                     gw.kill_all();
                 }

@@ -1,18 +1,16 @@
-use std::sync::Arc;
-
-use pi_server::gateway::GatewayState;
 use tauri::{AppHandle, Manager};
 
 use super::super::types::{AdminStatus, SessionInfo};
+use crate::base::state::GatewaySlot;
 use crate::pi;
 
 #[tauri::command]
 pub fn get_admin_status(
     app: AppHandle,
-    gw: tauri::State<'_, Option<Arc<GatewayState>>>,
+    gw: tauri::State<'_, GatewaySlot>,
 ) -> AdminStatus {
     let (pi_running, active_sessions, broker_ws_url, broker_http_url, uptime_secs) =
-        if let Some(gw) = gw.inner().as_ref() {
+        if let Some(gw) = gw.inner().lock().as_ref() {
             let sessions: Vec<SessionInfo> = {
                 let instances = gw.inner.instances.lock();
                 instances.iter().map(|(id, inst)| SessionInfo {

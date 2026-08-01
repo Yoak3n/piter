@@ -464,18 +464,11 @@ impl Db {
 
     pub fn set_global_extensions(&self, extensions: &[String]) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
-        // Clear existing rows, but preserve installed package sources
-        // (npm:/git:/path-like) that the Market tab registered in the DB.
-        conn.execute(
-            "DELETE FROM global_extensions
-             WHERE extension_name NOT LIKE 'npm:%'
-               AND extension_name NOT LIKE 'git:%'
-               AND extension_name NOT LIKE '/%'
-               AND extension_name NOT LIKE './%'
-               AND extension_name NOT LIKE '../%'",
-            [],
-        )
-        .map_err(|e| format!("clear global exts: {}", e))?;
+        // Full replace: the caller (Extensions tab) sends the complete enabled
+        // list, so a disabled extension (npm:/git:/path-backed included) must
+        // be removed — no special-cased "package source" preservation.
+        conn.execute("DELETE FROM global_extensions", [])
+            .map_err(|e| format!("clear global exts: {}", e))?;
         let mut stmt = conn
             .prepare("INSERT INTO global_extensions (extension_name, extension_path) VALUES (?1, ?2)")
             .map_err(|e| format!("prepare global ext insert: {}", e))?;
