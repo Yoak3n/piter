@@ -21,11 +21,10 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 
 | type | 处理方 | 说明 |
 |------|--------|------|
-| `broker_control` | `dispatch_control()` | 系统控制命令 |
+| `broker_control` | `dispatch_control()` | 系统控制命令（ping / info） |
 | `gateway_command` | `dispatch_gateway_command()` | 网关业务命令（项目/会话管理） |
-| `new_session` | `route_ui_message()` | 创建新会话（gateway 直接处理） |
-| `switch_session` | `route_ui_message()` | 切换到已有会话（gateway 直接处理） |
-| 其他类型 | `forward_to_instance()` | 透传给 pi 子进程 |
+| `broker_command` | `handler_broker_command()` | 会话级命令，按 `payload.type` 分发（new_session / switch_session / ack_review），其余带 `instanceId` 的命令透传给 pi |
+| 其他类型 | `forward_to_instance()` | 按 `instanceId` 路由透传给 pi 子进程 |
 
 ### 1.2 broker_control（系统控制）
 
@@ -87,18 +86,25 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 
 ### 1.4 new_session（创建会话）
 
+通过 `broker_command` 发送：
+
 ```json
 {
-  "type": "new_session",
-  "cwd": "/absolute/path",
-  "name": "Project Name"
+  "type": "broker_command",
+  "payload": {
+    "type": "new_session",
+    "cwd": "/absolute/path",
+    "name": "Project Name",
+    "model": { "id": "model-id", "provider": "provider-id" }
+  }
 }
 ```
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `cwd` | 是 | 绝对路径，项目工作目录 |
+| `cwd` | 是 | 绝对路径，项目工作目录（顶层或 `payload.cwd`） |
 | `name` | 否 | 项目名，默认 `"New Project"` |
+| `model` | 否 | 初始模型，`{id, provider?}` → `"provider/id"` 传给 pi |
 
 > `name` 和 `cwd` 组合用于查找或自动创建 project。
 
@@ -112,22 +118,39 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 
 ### 1.5 switch_session（切换会话）
 
+通过 `broker_command` 发送：
+
 ```json
 {
-  "type": "switch_session",
-  "instanceId": "target-instance-id"
+  "type": "broker_command",
+  "payload": {
+    "type": "switch_session",
+    "instanceId": "target-instance-id"
+  }
 }
 ```
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `instanceId` | 是 | 目标会话的实例 ID |
+| `instanceId` | 是 | 目标会话的实例 ID（顶层或 `payload.instanceId`） |
 
 **响应**：`{"type": "session_snapshot", "instanceId": "...", "messages": [...], "messageSeq": N}`
 
 如果目标会话处于 Unloaded 状态，会自动重新启动 pi 进程并加载历史消息（可能有数百毫秒延迟）。
 
-### 1.6 消息透传
+### 1.6 ack_review（评审确认）
+
+前端在用户查看/切换到等待评审的会话时发送，使会话从 `WaitingReview` 过渡为 `Idle`，以便 RPC fallback 可用。
+
+```json
+{
+  "type": "broker_command",
+  "instanceId": "xxx",
+  "payload": { "type": "ack_review" }
+}
+```
+
+### 1.7 消息透传
 
 不属于上述类型的其他消息，gateway 会原样转发给 pi 子进程的 stdin。
 
@@ -145,7 +168,7 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/health` | 健康检查：`{status, version, pi_version, lan_urls, uptime_secs}` |
+| GET | `/api/health` | 健康检查：`{status, version, pi_version, lan_urls, broker_url, uptime_secs}` |
 | GET | `/api/lan-info` | 局域网信息：`{broker_ws_url, http_url, lan_urls, qr_data}` |
 | GET | `/api/lan-qr` | LAN 二维码 SVG（Content-Type: image/svg+xml） |
 | GET | `/api/git-branch` | 当前 Git 分支：`{branch: Option<String>}` |
@@ -333,3 +356,56 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 |----|------|------|
 | extension_name | TEXT | PRIMARY KEY |
 | extension_path | TEXT | 可为 NULL（写入时自动解析存储） |
+
+---
+
+## 六、桌面管理命令（Tauri IPC）
+
+桌面管理面板通过 Tauri IPC 调用以下命令（非 REST/WS，仅供 `src/` 管理面板使用）：
+
+| 命令 | 说明 |
+|------|------|
+| `get_admin_status` | 运行状态：pi_running、active_sessions、pi_version、broker URL、uptime、data_dir |
+| `get_admin_config` / `update_admin_config` | 应用配置（theme / auto_start / start_minimized / request_timeout_secs / auto_restart_on_crash） |
+| `get_cost_dashboard` | 使用统计（镜像 Picot `/api/cost-dashboard`） |
+| `get_pi_install_info` / `download_pi_version` / `uninstall_pi` | Pi 版本管理（下载走 progress Channel 流式进度） |
+| `list_pi_auth_status` / `set_pi_api_key` / `remove_pi_api_key` | Provider 认证管理（`~/.pi/agent/auth.json`） |
+| `get_pi_models_config` / `save_pi_models_config` | 自定义 Provider 配置（`~/.pi/agent/models.json`） |
+| `get_extension_overview` / `set_global_extensions` / `set_project_extensions` | 扩展管理（全局/项目级启用配置） |
+| `list_pi_packages` / `install_pi_package` / `remove_pi_package` | 包市场（`pi list/install/remove` + DB 注册） |
+| `restart_pi` / `stop_pi` / `start_pi_gateway` / `get_pi_agent_settings` / `save_pi_agent_settings` | Pi 进程与 agent 设置 |
+| `open_path` | 在系统文件管理器中打开路径 |
+
+### get_cost_dashboard 参数与响应
+
+| 参数 | 取值 | 默认 |
+|------|------|------|
+| `range` | `"7d"` / `"30d"` / `"90d"` | `"30d"` |
+| `granularity` | `"day"`（当前唯一支持） | — |
+| `scope` | `"all"` / `"current"` | `"all"` |
+
+响应结构 `UsageDashboard`：
+
+```json
+{
+  "range": { "range": "30d", "from": "2026-07-03", "to": "2026-08-02" },
+  "overview": {
+    "total_cost": 0.0, "sessions": 0, "messages": 0, "total_tokens": 0,
+    "active_days": 0, "current_streak": 0, "longest_streak": 0,
+    "input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_write": 0,
+    "tool_calls": 0
+  },
+  "usage": { "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
+             "cache_read": 0, "cache_write": 0, "tool_calls": 0,
+             "tools": [{ "name": "...", "count": 0, "cost": 0.0, "fraction": 0.0 }] },
+  "models": [{ "name": "...", "total_tokens": 0, "input_tokens": 0,
+               "output_tokens": 0, "cost": 0.0, "fraction": 0.0 }],
+  "projects": [{ "name": "...", "cwd": "...", "sessions": 0, "cost": 0.0, "fraction": 0.0 }],
+  "sessions": [{ "title": "...", "workspace": "...", "model": "...",
+                 "total_tokens": 0, "tool_calls": 0, "total_cost": 0.0, "time": "..." }],
+  "daily": [{ "key": "2026-07-03", "total": 0, "models": {} }],
+  "activity": [{ "key": "2026-07-03", "value": 0 }]
+}
+```
+
+> `scope = "current"` 时，仅聚合最近创建会话所在 cwd 的会话；聚合范围限定为 Piter DB 登记的会话文件（DB 不可读时回退为目录扫描）。

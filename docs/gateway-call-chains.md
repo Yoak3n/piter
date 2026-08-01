@@ -7,54 +7,59 @@
 ## A. 创建新会话 (new_session)
 
 ```
-客户端发送 {"type":"new_session", "cwd":"/...", "name":"..."}
+客户端发送 {"type":"broker_command","payload":{"type":"new_session","cwd":"/...","name":"...","model":{...}}}
 │
 ▼
 ws/mod.rs :: route_ui_message()
-├─ extract_cwd(&value)                    [ws/helper.rs]  — 从 payload/cwd 或顶层 cwd 取值，拒绝相对路径
-│  └─ 失败 → notify_undeliverable("missing_or_invalid_cwd") → return
+├─ msg_type == "broker_command" → ws/broker/command.rs :: handler_broker_command()
+│  ├─ effective_type = payload/type = "new_session"
+│  └─ → handle_new_session(state, value, client_tx, client_id)
 │
-├─ 取 name（默认 "New Project"）                           [ws/mod.rs:131]
-│
-▼
-session_manager.rs :: SessionManager::create_session(sm, gw, cwd, name, client_id)
-│
-├─ DB 查询: find_project_by_cwd_and_name(cwd, name)        [db.rs]
-│  ├─ 找到 → 复用已有 project.id
-│  └─ 未找到 →
-│     └─ project::create_project(db, name, cwd, [])         [project.rs]
-│        ├─ uuid::Uuid::new_v4() 生成 id
-│        ├─ db.create_project(id, name, cwd)                 [db.rs]  — INSERT projects
-│        └─ 返回 Project
-│
-├─ resolve_project_extensions(db, project_id, cwd)           [project.rs]
-│  └─ db.get_project_extensions_with_paths(pid)              [db.rs]  — 直接从 DB 读取已索引的 (name, path) 对
-│     ├─ path 有效且文件存在 → 直接使用
-│     └─ path 为空或文件丢失 → 重新 resolve_extension_name(name, cwd) 并回写 DB
-│
-├─ spawn_persistent_for_gateway(gw, cwd, &extensions)        [handlers/pi.rs]
-│  ├─ state.spawn().cwd(cwd).extensions(&exts).run()         [mod.rs]  — 启动 pi 子进程
-│  ├─ routes.lock().insert(instance_id, instance_id)         — 自映射注册
-│  ├─ event_tx 发送 {"type":"pi_started", "instanceId":..., "cwd":...}
-│  └─ 返回 instance_id
-│
-├─ db.register_session(instance_id, cwd, project_id)         [db.rs]  — INSERT sessions (session_path=NULL)
-│
-├─ mgr.pending_links.insert(instance_id, project_id)
-├─ 创建 ManagedSession（state=Active, messages=[], subscribers={client_id}, turn_count=0, title_set=false）
-├─ mgr.sessions.insert(instance_id, session)
-├─ mgr.dirty = true
-│
-▼ 回到 route_ui_message()
-│
-├─ push_sessions_list_to_clients(state)                      [mod.rs]
-│  ├─ build_project_session_tree(state)                      — 构建 project-session 树
-│  └─ broadcast_to_clients("sessions_list", projects)        — 推送给所有 WS 客户端
-│
-├─ 通过 instances 找到 pi → stdin_tx.send("get_state")       — 请求 pi 状态
-│
-├─ 发送给当前客户端: session_snapshot（messages=[], messageSeq=0）
-└─ 发送给当前客户端: response {command:"new_session", success:true, instanceId}
+│  ├─ extract_cwd(&value)                    [ws/helper.rs]  — 从 payload/cwd 或顶层 cwd 取值，拒绝相对路径
+│  │  └─ 失败 → notify_undeliverable("missing_or_invalid_cwd") → return
+│  │
+│  ├─ 取 name（默认 "New Project"）                            [ws/broker/command.rs]
+│  ├─ 解析 model：payload/model {id, provider?} → "provider/id"  [ws/broker/command.rs]
+│  │
+│  ▼
+│  session_manager.rs :: SessionManager::create_session(sm, gw, cwd, name, client_id, model)
+│  │
+│  ├─ DB 查询: find_project_by_cwd_and_name(cwd, name)        [db.rs]
+│  │  ├─ 找到 → 复用已有 project.id
+│  │  └─ 未找到 →
+│  │     └─ project::create_project(db, name, cwd, [])         [project.rs]
+│  │        ├─ uuid::Uuid::new_v4() 生成 id
+│  │        ├─ db.create_project(id, name, cwd)                 [db.rs]  — INSERT projects
+│  │        └─ 返回 Project
+│  │
+│  ├─ resolve_project_extensions(db, project_id, cwd)           [project.rs]
+│  │  └─ db.get_project_extensions_with_paths(pid)              [db.rs]  — 直接从 DB 读取已索引的 (name, path) 对
+│  │     ├─ path 有效且文件存在 → 直接使用
+│  │     └─ path 为空或文件丢失 → 重新 resolve_extension_name(name, cwd) 并回写 DB
+│  │
+│  ├─ spawn_persistent_for_gateway(gw, cwd, &extensions)        [handlers/pi.rs]
+│  │  ├─ state.spawn().cwd(cwd).extensions(&exts).run()         [mod.rs]  — 启动 pi 子进程
+│  │  ├─ routes.lock().insert(instance_id, instance_id)         — 自映射注册
+│  │  ├─ event_tx 发送 {"type":"pi_started", "instanceId":..., "cwd":...}
+│  │  └─ 返回 instance_id
+│  │
+│  ├─ db.register_session(instance_id, cwd, project_id)         [db.rs]  — INSERT sessions (session_path=NULL)
+│  │
+│  ├─ mgr.pending_links.insert(instance_id, project_id)
+│  ├─ 创建 ManagedSession（state=Active, messages=[], subscribers={client_id}, turn_count=0, title_set=false）
+│  ├─ mgr.sessions.insert(instance_id, session)
+│  ├─ mgr.dirty = true
+│  │
+│  ▼ 回到 handle_new_session()
+│  │
+│  ├─ push_sessions_list_to_clients(state)                      [broadcast.rs]
+│  │  ├─ build_project_session_tree(state)                      — 构建 project-session 树
+│  │  └─ broadcast_to_clients("sessions_list", projects)        — 推送给所有 WS 客户端
+│  │
+│  ├─ command::send_get_state(state, &instance_id)              [command.rs]  — 请求 pi 状态
+│  │
+│  ├─ 发送给当前客户端: session_snapshot（messages=[], messageSeq=0）
+│  └─ 发送给当前客户端: response {command:"new_session", success:true, instanceId}
 ```
 
 **后续异步（pi 响应 get_state）**：
@@ -76,12 +81,15 @@ session_manager.rs :: SessionManager::create_session(sm, gw, cwd, name, client_i
 ## B. 切换到已有会话 (switch_session)
 
 ```
-客户端发送 {"type":"switch_session", "instanceId":"xxx"}
+客户端发送 {"type":"broker_command","payload":{"type":"switch_session","instanceId":"xxx"}}
 │
 ▼
 ws/mod.rs :: route_ui_message()
-├─ 提取 instanceId
-│  └─ 缺失 → notify_undeliverable("missing_instanceId") → return
+├─ msg_type == "broker_command" → handler_broker_command()
+│  ├─ effective_type = "switch_session"
+│  └─ → handle_switch_session(state, raw_text, value, client_tx, client_id)
+│     ├─ 提取 instanceId（顶层或 payload/instanceId）
+│     │  └─ 缺失 → notify_undeliverable("missing_instanceId") → return
 │
 ▼
 session_manager.rs :: SessionManager::switch_session(sm, instance_id, client_id)
@@ -113,7 +121,7 @@ session_manager.rs :: SessionManager::switch_session(sm, instance_id, client_id)
 │  └─ 逐行读取 .jsonl → 筛选 type=="message" → 提取消息体
 │
 ├─ resolve_project_extensions(db, cwd, cwd)
-├─ state.spawn().cwd(&cwd).extensions(&exts).id(iid).session_path(sp).run()
+├─ resume_session(state, iid, cwd, session_path, None, &exts)    [handlers/pi.rs]
 │  └─ 使用持久化的 instance_id 和 session_path 恢复 pi
 │
 ├─ routes.lock().insert(new_iid, new_iid)
@@ -127,6 +135,26 @@ session_manager.rs :: SessionManager::switch_session(sm, instance_id, client_id)
 ├─ send_snapshot(client_tx, iid, messages, message_seq)          — 包含历史消息
 └─ tokio::spawn（延迟 800ms）
    └─ forward_to_instance(switch_session 命令给 pi stdin)
+```
+
+---
+
+## B2. 评审确认 (ack_review)
+
+```
+前端切换到/查看等待评审的会话
+│
+▼
+客户端发送 {"type":"broker_command","instanceId":"xxx","payload":{"type":"ack_review"}}
+│
+▼
+ws/mod.rs :: route_ui_message()
+└─ msg_type == "broker_command" → handler_broker_command()
+   └─ effective_type = "ack_review" → handle_ack_review(state, value, client_id)
+      ├─ 提取 instanceId（缺失则忽略）
+      ├─ 注册该客户端为订阅者，清除 disconnected_since
+      └─ 若 activity == WaitingReview →
+         └─ activity = Idle，mark_dirty()   — 会话可供 RPC fallback
 ```
 
 ---

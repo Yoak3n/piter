@@ -9,39 +9,51 @@ Piter 是一个 AI 编程助手客户端，以 Web UI 和 Tauri 桌面应用两�
 │   ├── pi_rpc/            # Pi RPC 协议类型定义（命令、事件、消息、模型）
 │   └── pi_server/         # 核心后端服务
 │       ├── src/
-│       │   ├── broker/    # Pi 进程管理（spawn、生命周期、子进程 I/O）
-│       │   ├── gateway/   # Gateway 核心
-│       │   │   ├── handlers/  # REST API 处理器
+│       │   ├── broker/    # Pi 进程管理（spawn、生命周期、子进程 I/O、PATH 增强）
+│       │   ├── gateway/   # Gateway 核心（axum HTTP + WebSocket）
+│       │   │   ├── handlers/    # REST API 处理器
 │       │   │   │   ├── extensions.rs
 │       │   │   │   ├── mod.rs
 │       │   │   │   ├── pi.rs
 │       │   │   │   ├── project.rs
 │       │   │   │   ├── session.rs
 │       │   │   │   └── system.rs
-│       │   │   ├── ws/        # WebSocket 消息路由
-│       │   │   ├── db.rs      # SQLite 数据库
-│       │   │   ├── mod.rs     # Gateway 状态定义与事件循环
-│       │   │   ├── project.rs # 项目管理
+│       │   │   ├── ws/         # WebSocket 消息路由（broker_control / gateway_command / broker_command）
+│       │   │   ├── broadcast.rs # 会话列表与事件广播
+│       │   │   ├── command.rs   # pi 命令封装
+│       │   │   ├── db.rs        # SQLite 数据库
+│       │   │   ├── mod.rs       # Gateway 状态定义、事件循环与路由注册
+│       │   │   ├── project.rs   # 项目管理与扩展发现
 │       │   │   └── session_manager.rs  # 会话内存管理、空闲清理、自动命名
+│       │   ├── stats/     # 使用统计/费用聚合（解析 pi 会话文件）
+│       │   │   ├── aggregate.rs  # 按维度聚合（模型/项目/会话/每日/活动热力图）
+│       │   │   ├── parse.rs      # 会话文件解析
+│       │   │   ├── state.rs      # 内部累积状态
+│       │   │   └── types.rs      # 查询参数与响应类型
 │       │   ├── lib.rs
-│       │   └── resolve.rs     # Pi 二进制文件查找与下载
+│       │   └── resolve.rs  # Pi 二进制文件查找与下载
 │       └── Cargo.toml
-├── web/                   # 独立 Web 前端（轻量版，无 Tauri 依赖）
+├── web/                   # 独立 Web 前端（聊天界面，轻量版，无 Tauri 依赖）
 │   └── src/
-│       ├── components/    # Vue 组件（ChatPane、SessionSidebar、ModelSelector 等）
+│       ├── components/    # Vue 组件（ChatPane、Composer、SessionSidebar、ModelSelector 等）
 │       ├── composables/   # Vue 组合式函数（usePiConnection、useSessions）
 │       ├── types/         # TypeScript 类型定义
 │       └── utils/         # 工具函数
-├── src/                   # Tauri 桌面前端（完整版，含 Admin 面板）
+├── src/                   # Tauri 桌面前端（管理面板）
 │   └── src/
-│       ├── components/    # Vue 组件（ChatPane、LanShare、Admin 子组件）
-│       ├── composables/   # Vue 组合式函数（useAdmin、usePiConnection）
-│       └── views/         # 页面视图（ChatView、AdminView、DesktopView）
+│       ├── components/    # Vue 组件（AdminNav、StatusTab、UsageTab、PiConfigTab 等）
+│       │   └── admin/     # 管理面板子组件
+│       ├── composables/   # Vue 组合式函数（useAdmin、useMarketplace）
+│       ├── router/        # Vue Router 配置
+│       ├── styles/        # 设计系统（design-system.css）
+│       ├── utils/         # 工具函数（theme.ts）
+│       └── views/         # 页面视图（AdminView.vue）
 ├── src-tauri/             # Tauri 后端
 │   └── src/
-│       ├── admin/         # 管理面板命令
-│       ├── base/          # 窗口管理、系统托盘、轻量模式、定时任务
-│       └── pi/            # Pi 二进制文件解析与 Tauri 集成
+│       ├── admin/         # 管理面板命令（auth/config/extensions/pi/stats/status/system/version）
+│       ├── base/          # 窗口管理、系统托盘、轻量模式、定时任务、单实例、启动初始化
+│       └── pi/            # Pi 二进制解析与版本管理
+├── docs/                  # 项目文档（API 参考、调用链、进度报告）
 ├── public/
 ├── scripts/
 │   └── pi-version.json    # 锁定的 pi 版本号
@@ -52,8 +64,8 @@ Piter 是一个 AI 编程助手客户端，以 Web UI 和 Tauri 桌面应用两�
 
 | 层 | 技术 |
 |----|------|
-| 桌面壳 | Tauri 2.x |
-| 前端 | Vue 3 + Vite + TypeScript |
+| 桌面壳 | Tauri 2.x（single-instance / autostart / dialog / opener / log 插件） |
+| 前端 | Vue 3 + Vite + TypeScript（lucide-vue-next 图标） |
 | 后端 | Rust (axum + tokio) |
 | 数据库 | SQLite (rusqlite) |
 | 通信 | WebSocket + REST API |
@@ -66,7 +78,7 @@ Piter 是一个 AI 编程助手客户端，以 Web UI 和 Tauri 桌面应用两�
 │                        客户端层                                  │
 │  ┌──────────────┐    ┌──────────────┐                           │
 │  │  Tauri 桌面   │    │   Web 前端    │                          │
-│  │  (src/)       │    │  (web/src/)   │                          │
+│  │  (管理面板)   │    │  (聊天界面)   │                          │
 │  └──────┬───────┘    └──────┬───────┘                           │
 │         │  HTTP / WS        │  HTTP / WS                        │
 ├─────────┼────────────────────┼───────────────────────────────────┤
@@ -84,10 +96,11 @@ Piter 是一个 AI 编程助手客户端，以 Web UI 和 Tauri 桌面应用两�
 │  │  │   (DB)    │  │  (内存会话状态、消息缓存、空闲清理)│      │    │
 │  │  └──────────┘  └──────────────────────────────────┘      │    │
 │  │                                                          │    │
-│  │  ┌──────────────────────────────────────────────────┐    │    │
-│  │  │              Broker (进程管理)                     │    │    │
-│  │  │  spawn → stdin_tx ──→ pi 子进程 ──→ stdout 事件流 │    │    │
-│  │  └──────────────────────────────────────────────────┘    │    │
+│  │  ┌──────────────┐  ┌────────────────────────────────┐    │    │
+│  │  │  Stats 聚合   │  │ Broker (进程管理)              │    │    │
+│  │  │ (会话文件 →  │  │  spawn → stdin_tx ──→ pi 子进程 │    │    │
+│  │  │  使用/费用)  │  │  ──→ stdout 事件流             │    │    │
+│  │  └──────────────┘  └────────────────────────────────┘    │    │
 │  └──────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -104,12 +117,36 @@ Gateway 负责管理多个 pi coding agent 进程实例，每个实例对应一�
 - **会话恢复**：从数据库和磁盘文件恢复历史会话（pi 进程按需重启）
 - **空闲清理**：超过空闲超时时间（默认 10 分钟）的会话自动卸载以节省资源
 - **自动命名**：根据用户消息内容自动生成会话标题
+- **评审等待**：`ack_review` 机制，会话等待用户评审时可过渡为 Idle 状态
 
 ### 项目管理
 
 - 项目与工作目录（cwd）绑定，支持 CRUD 操作
 - 支持项目置顶（pin）和归档（archive）
-- 每个项目可配置独立的扩展（extensions）
+- 每个项目可配置独立的扩展（extensions），支持从磁盘自动发现扩展
+
+### 使用统计面板
+
+- 聚合 pi 会话文件（`~/.pi/agent/sessions/**/*.jsonl`）中的 usage/cost 数据，镜像 Picot 的 `cost-dashboard` 载荷
+- 时间范围：`7d` / `30d` / `90d`
+- 作用域：全部会话（`all`）或最近活跃项目（`current`）
+- 统计维度：总览（费用/会话数/消息数/Token 数/连续活跃天数）、模型、项目、会话、每日趋势、365 天活动热力图、工具调用分布
+- 仅聚合 Piter 数据库登记的会话，忽略其他客户端产生的零散文件
+
+### Provider 认证管理
+
+- 读写 `~/.pi/agent/auth.json`（API Key，0600 权限），支持 30+ 已知 Provider 及 OAuth 订阅条目
+- 编辑 `~/.pi/agent/models.json`（自定义 Provider 配置）
+
+### Pi 版本管理
+
+- 锁定版本号（`scripts/pi-version.json`），支持下载指定版本、解压安装到 resources/pi/、卸载
+- 卸载后自动停止 gateway，可通过 `start_pi_gateway` 在会话中按需重新启动
+
+### 扩展与包市场
+
+- **Installed**：查看/启用/禁用全局与项目级扩展（DB 中 `global_extensions` / `project_extensions`）
+- **Market**：通过 `pi install <source>` / `pi remove <source>` 管理包，安装成功后自动注册为全局扩展
 
 ### WebSocket 实时通信
 
@@ -117,43 +154,56 @@ Gateway 负责管理多个 pi coding agent 进程实例，每个实例对应一�
 
 | 消息类型 | 说明 |
 |---------|------|
-| `broker_command` | 向 pi 进程发送命令（prompt、set_model 等） |
-| `switch_session` | 切换活跃会话 |
-| `new_session` | 创建新会话 |
+| `broker_control` | 系统控制（ping / info） |
+| `gateway_command` | 网关业务命令（项目/会话 CRUD、健康检查等） |
+| `broker_command` | 会话级命令，`payload.type` 决定行为（new_session / switch_session / ack_review），其余带 `instanceId` 的命令透传给 pi |
+| 其他类型 | 按 `instanceId` 路由透传给 pi 子进程（prompt、set_model 等） |
 
 后端推送以下事件：
 
 | 事件类型 | 说明 |
 |---------|------|
+| `capabilities` | 连接时协议能力与 client_id |
 | `session_snapshot` | 会话完整消息历史（切换时发送） |
 | `sessions_list` | 更新后的项目-会话列表 |
+| `gateway_response` | gateway_command 执行结果 |
+| `control_response` | broker_control 执行结果 |
 | `agent_start/end` | Agent 开始/结束处理 |
 | `message_update` | 流式文本更新（text_delta / thinking_delta） |
 | `tool_execution_*` | 工具调用状态更新 |
 | `turn_start/end` | 对话轮次开始/结束 |
 | `response` | 命令执行响应 |
 | `pi_started` | 新 pi 进程启动通知 |
+| `command_undeliverable` | 消息无法投递（缺失 instanceId / 无路由等） |
 
 ### REST API
 
 | 端点 | 说明 |
 |------|------|
+| `GET /api/health` | 健康检查（含 broker_url） |
+| `GET /api/lan-info` / `GET /api/lan-qr` | 局域网访问信息与二维码 |
+| `GET /api/git-branch` | 当前 Git 分支 |
 | `GET /api/sessions` | 项目-会话树 |
-| `GET /api/delete-session` | 删除会话 |
-| `POST /api/sessions/create` | 创建会话 |
-| `GET /api/pi/status` | Pi 运行状态 |
-| `POST /api/rpc` | 向活跃实例发送 RPC |
-| `GET/POST/PUT /api/projects` | 项目 CRUD |
+| `GET /api/load-session` / `GET /api/delete-session` | 加载/删除会话 |
+| `POST /api/sessions/create` / `POST /api/sessions/rename` | 创建/重命名会话 |
+| `GET /api/pi/status` / `GET /api/pi/settings` | Pi 状态与设置 |
+| `POST /api/pi/restart` / `POST /api/pi/stop` | 重启/停止 Pi 实例 |
+| `POST /api/rpc` / `POST /api/rpc/ephemeral` | 向活跃实例发送 RPC / 临时实例 RPC |
+| `GET/POST/PUT/DELETE /api/projects` | 项目 CRUD 与置顶/归档 |
 | `GET/PUT /api/global-extensions` | 全局扩展管理 |
-| `GET /api/health` | 健康检查 |
-| `GET /api/lan-info` | 局域网访问信息 |
-| `GET /ws` | WebSocket 端点 |
+| `GET/PUT /api/session-config` | 会话配置（空闲超时） |
+| `GET /ws` / `GET /ui-ws` | WebSocket 端点 |
+
+详细契约见 [docs/gateway-api-reference.md](docs/gateway-api-reference.md)。
 
 ### Tauri 桌面特有功能
 
+- **管理面板**：Status（运行状态）、Usage（使用统计）、Pi Config / Providers / Versions、Extensions Installed / Market、Appearance（主题）
 - **窗口管理**：多窗口支持、状态追踪、浮动定位、多显示器适配
-- **系统托盘**：显示/隐藏切换、开机自启、退出
-- **轻量模式**：窗口全部关闭后自动计时，超时后释放资源
+- **系统托盘**：显示/隐藏切换、开机自启、退出；关闭窗口时隐藏而非退出
+- **轻量模式**：窗口全部关闭后自动计时（10 分钟），超时后释放资源
+- **单实例**：二次启动时聚焦已有主窗口
+- **主题系统**：system / light / dark，前端设计系统变量驱动
 - **局域网分享**：生成 QR 码，支持局域网内其他设备通过浏览器访问
 
 ## 开发环境

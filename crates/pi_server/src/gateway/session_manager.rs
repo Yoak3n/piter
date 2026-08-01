@@ -395,7 +395,10 @@ impl SessionManager {
                     "role": role,
                     "content": "",
                 }));
-                session.activity = SessionActivity::Busy;
+                if session.activity != SessionActivity::Busy {
+                    session.activity = SessionActivity::Busy;
+                    self.dirty = true;
+                }
             }
 
             TrackedEvent::MessageUpdate { message } => {
@@ -417,7 +420,10 @@ impl SessionManager {
                     // Capture user messages for auto-title
                     let role = m.get("role").and_then(Value::as_str).unwrap_or("");
                     if role == "user" {
-                        session.activity = SessionActivity::Busy;
+                        if session.activity != SessionActivity::Busy {
+                            session.activity = SessionActivity::Busy;
+                            self.dirty = true;
+                        }
                         if !session.title_set {
                             let text = extract_message_text(m);
                             if text.len() >= 10 {
@@ -441,10 +447,14 @@ impl SessionManager {
             TrackedEvent::TurnEnd | TrackedEvent::AgentEnd => {
                 // If someone is viewing this session, go directly to Idle;
                 // otherwise mark WaitingReview until the user switches to it.
-                if session.subscribers.is_empty() {
-                    session.activity = SessionActivity::WaitingReview;
+                let next = if session.subscribers.is_empty() {
+                    SessionActivity::WaitingReview
                 } else {
-                    session.activity = SessionActivity::Idle;
+                    SessionActivity::Idle
+                };
+                if session.activity != next {
+                    session.activity = next;
+                    self.dirty = true;
                 }
 
                 if let Some(msg) = session.partial_message.take() {
