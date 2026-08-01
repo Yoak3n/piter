@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::PiStatusResponse;
 use crate::broker::types::PendingRpc;
+use crate::gateway::broadcast::push_sessions_list_to_clients;
 use crate::gateway::GatewayState;
 
 use crate::gateway::session_manager::SessionActivity;
@@ -188,6 +189,13 @@ pub async fn pi_stop_handler(
 
     if stop_pi_instance(&state, &instance_id) {
         log::info!("[gateway] pi instance {} stopped via API", instance_id);
+        // Mark the session unloaded (process is gone) and push the latest
+        // sessions list so clients see the stopped state immediately.
+        state
+            .session_manager
+            .lock()
+            .mark_unloaded(std::slice::from_ref(&instance_id));
+        push_sessions_list_to_clients(&state);
         Json(serde_json::json!({"success": true}))
     } else {
         Json(serde_json::json!({"success": false, "error": "instance not found"}))

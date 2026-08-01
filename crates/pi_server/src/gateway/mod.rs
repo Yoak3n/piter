@@ -41,7 +41,9 @@ use messages::command;
 pub struct GatewayState {
     pub event_tx: EventTx,
     pub inner: Arc<BrokerInner>,
-    pub lan_ips: Vec<String>,
+    /// Cached LAN IPs, lazily refreshed with a short TTL so addresses stay
+    /// accurate after network changes (e.g. switching WiFi).
+    pub lan_ips: Arc<parking_lot::Mutex<(std::time::Instant, Vec<String>)>>,
     pub http_port: u16,
     pub pi_version: String,
     pub pi_exe: PathBuf,
@@ -98,7 +100,10 @@ impl GatewayState {
         let state = Arc::new(GatewayState {
             event_tx: event_tx.clone(),
             inner: inner.clone(),
-            lan_ips: lan_ips.clone(),
+            lan_ips: Arc::new(parking_lot::Mutex::new((
+                std::time::Instant::now(),
+                lan_ips.clone(),
+            ))),
             http_port: actual_port,
             pi_version,
             pi_exe,
@@ -294,8 +299,21 @@ impl GatewayState {
         self.http_port
     }
 
+    /// Current LAN IPs, rediscovered at most once per TTL so the addresses
+    /// stay fresh after network changes without spawning a subprocess on
+    /// every call.
+    pub fn current_lan_ips(&self) -> Vec<String> {
+        const LAN_IPS_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+        let mut cache = self.lan_ips.lock();
+        if cache.0.elapsed() >= LAN_IPS_TTL {
+            cache.1 = discover_lan_ips();
+            cache.0 = std::time::Instant::now();
+        }
+        cache.1.clone()
+    }
+
     pub fn lan_urls(&self) -> Vec<String> {
-        self.lan_ips
+        self.current_lan_ips()
             .iter()
             .map(|ip| {
                 format!(
@@ -318,7 +336,19 @@ impl GatewayState {
             inst.running.store(false, Ordering::SeqCst);
             let _ = inst.child.kill();
         }
+        drop(instances);
         log::info!("[gateway] all pi instances stopped");
+
+        // Mark all tracked sessions unloaded (processes are gone) and push
+        // the updated sessions list so clients immediately see the stopped state.
+        {
+            let mut mgr = self.session_manager.lock();
+            let ids: Vec<String> = mgr.sessions.keys().cloned().collect();
+            if !ids.is_empty() {
+                mgr.mark_unloaded(&ids);
+            }
+        }
+        push_sessions_list_to_clients(self);
     }
 
     pub fn has_active_processes(&self) -> bool {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { ChevronDown } from "lucide-vue-next";
-import type { ModelInfo, ModelRef } from "../types";
+import type { ModelInfo, ModelRef } from "../../types";
 
 const props = defineProps<{
   modelId?: string;

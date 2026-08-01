@@ -8,6 +8,13 @@ import {
 
 // ─── Per-session state ─────────────────────────────────────────────
 
+/** A message queued locally (outbox) while the agent is streaming. */
+export interface PendingItem {
+  id: number;
+  text: string;
+  model?: ModelRef;
+}
+
 interface SessionState {
   sessionId: string;
   messages: Message[];
@@ -17,7 +24,17 @@ interface SessionState {
   currentThinking: string;
   toolExecutions: ToolExecution[];
   currentModel: ModelRef | null;
+  /** pi 原生 steer 队列（只读展示，无法取消） */
+  queue: { steering: string[] };
+  /** 本地 followUp 队列：流式中发送的消息先进这里，agent_end 后自动投递，可取消/升级 */
+  outbox: PendingItem[];
+  /** 用户点击停止后，等待 pi 停稳再投递 outbox 最新一条 */
+  abortFlushPending: boolean;
+  abortTimer: ReturnType<typeof setTimeout> | null;
 }
+
+/** 流式发送的显式行为：目前仅插队（steer）会走 pi 原生队列 */
+export type DeliveryBehavior = "steer";
 
 function createSessionState(sessionId: string): SessionState {
   return reactive({
@@ -29,6 +46,10 @@ function createSessionState(sessionId: string): SessionState {
     currentThinking: "",
     toolExecutions: [],
     currentModel: null,
+    queue: { steering: [] },
+    outbox: [],
+    abortFlushPending: false,
+    abortTimer: null,
   });
 }
 
@@ -76,14 +97,26 @@ export function usePiConnection() {
   const currentThinking = computed(() => activeSessionState.value.currentThinking);
   const toolExecutions = computed(() => activeSessionState.value.toolExecutions);
   const currentModel = computed(() => activeSessionState.value.currentModel);
+  const steeringQueue = computed(() => activeSessionState.value.queue.steering);
+  const outbox = computed(() => activeSessionState.value.outbox);
 
   // ── Message helpers (write to a specific session's state) ──
 
-  function addMessage(state: SessionState, role: Message["role"], content: string, extras?: Partial<Message>) {
+  /** Append a message and return its id (deduped against the last identical message). */
+  function addMessage(state: SessionState, role: Message["role"], content: string, extras?: Partial<Message>): number {
+    // Defensive dedup: skip if the identical (role, content) pair is already the
+    // last message. Guards against a final answer being appended twice via
+    // overlapping snapshot/event paths.
+    const last = state.messages[state.messages.length - 1];
+    if (last && last.role === role && last.content === content) {
+      return last.id;
+    }
+    const id = state.msgId++;
     state.messages = [
       ...state.messages,
-      { id: state.msgId++, role, content, timestamp: Date.now(), ...extras },
+      { id, role, content, timestamp: Date.now(), ...extras },
     ];
+    return id;
   }
 
   function getWsUrl(): string {
@@ -150,7 +183,24 @@ export function usePiConnection() {
 
       case "error": {
         const s = getOrCreateState(instanceId);
-        addMessage(s, "system", `[Error] ${data.error}`);
+        const errText = (data.error as string) || "";
+        const reason = (data.reason as string) || "";
+        // Aborted generation: keep the partial output, just reset streaming state.
+        if (/abort/i.test(errText) || reason === "aborted" || data.aborted === true) {
+          if (s.currentThinking || s.currentAssistantContent || s.toolExecutions.length > 0) {
+            addMessage(s, "assistant", s.currentAssistantContent, {
+              thinking: s.currentThinking || undefined,
+              toolExecutions: s.toolExecutions.length > 0 ? [...s.toolExecutions] : undefined,
+            });
+          }
+          s.currentAssistantContent = "";
+          s.currentThinking = "";
+          s.toolExecutions = [];
+          s.isStreaming = false;
+          handleRunSettled(s);
+        } else {
+          addMessage(s, "system", `[Error] ${errText}`);
+        }
         break;
       }
 
@@ -185,6 +235,8 @@ export function usePiConnection() {
           s.currentThinking = "";
           s.toolExecutions = [];
         }
+        // Agent is now idle — deliver queued outbox messages (or flush after abort).
+        handleRunSettled(s);
         break;
       }
 
@@ -233,6 +285,15 @@ export function usePiConnection() {
           s.currentThinking = "";
           s.toolExecutions = [];
         }
+        break;
+      }
+
+      case "queue_update": {
+        const s = getState(instanceId);
+        if (!s) break;
+        s.queue = {
+          steering: Array.isArray(data.steering) ? (data.steering as string[]) : [],
+        };
         break;
       }
 
@@ -319,25 +380,48 @@ export function usePiConnection() {
   function loadMessagesIntoSession(instanceId: string | null, msgs: Array<Record<string, unknown>>) {
     const s = getOrCreateState(instanceId);
     const parsed: Message[] = [];
+
+    // Tool results are persisted as separate role="toolResult" messages.
+    // Index them by toolCallId so we can fold output/status into the matching
+    // assistant toolCall block (mirroring the runtime tool_execution events).
+    const toolResults = new Map<string, { output: string; isError: boolean }>();
+    for (const m of msgs) {
+      if (m.role === "toolResult") {
+        const callId = (m.toolCallId as string) || "";
+        if (callId) {
+          toolResults.set(callId, {
+            output: formatToolOutput(m),
+            isError: (m.isError as boolean) || false,
+          });
+        }
+      }
+    }
+
     for (let i = 0; i < msgs.length; i++) {
       const m = msgs[i];
-      const role = (m.role as Message["role"]) || "assistant";
+      const role = (m.role as string) || "assistant";
+      // toolResult messages are folded into the assistant tool calls above.
+      if (role === "toolResult") continue;
       const toolExecs: ToolExecution[] = [];
       if (Array.isArray(m.content)) {
         for (const block of m.content as Record<string, unknown>[]) {
-          if (block.type === "tool_use") {
+          if (block.type === "toolCall") {
+            const callId = (block.id as string) || `tool-${i}`;
+            const res = toolResults.get(callId);
             toolExecs.push({
-              toolCallId: block.id as string || `tool-${i}`,
-              toolName: block.name as string || "Tool",
-              args: (block.input as Record<string, unknown>) || {},
-              status: "complete",
+              toolCallId: callId,
+              toolName: (block.name as string) || "Tool",
+              args: (block.arguments as Record<string, unknown>) || {},
+              status: res?.isError ? "error" : "complete",
+              output: res?.output,
+              isError: res?.isError,
             });
           }
         }
       }
       parsed.push({
         id: i,
-        role,
+        role: role as Message["role"],
         content: extractTextContent(m),
         thinking: extractThinkingContent(m) || undefined,
         toolExecutions: toolExecs.length > 0 ? toolExecs : undefined,
@@ -350,6 +434,11 @@ export function usePiConnection() {
     s.currentAssistantContent = "";
     s.currentThinking = "";
     s.toolExecutions = [];
+    s.queue = { steering: [] };
+    s.outbox = [];
+    s.abortFlushPending = false;
+    if (s.abortTimer) clearTimeout(s.abortTimer);
+    s.abortTimer = null;
   }
 
   // ─── WebSocket ──────────────────────────────────────────────────────
@@ -398,23 +487,128 @@ export function usePiConnection() {
 
   // ─── Commands ───────────────────────────────────────────────────────
 
-  function sendPrompt(text: string, desiredModel?: ModelRef | null) {
+  function sendPrompt(text: string, desiredModel?: ModelRef | null, behavior?: DeliveryBehavior) {
     if (!text.trim()) return;
     const s = getOrCreateState(activeInstanceId.value);
-    addMessage(s, "user", text);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      const iid = activeInstanceId.value;
+    const iid = activeInstanceId.value;
+    const streaming = s.isStreaming;
+
+    if (behavior === "steer") {
+      // 插队：流式中立即以 steer 投递（pi 原生队列，turn 边界生效）；空闲时直接发普通 prompt
+      addMessage(s, "user", text);
       if (!iid) {
         addMessage(s, "system", "No active session yet — please wait for the session to be ready.");
         return;
       }
       const payload: Record<string, unknown> = { type: "prompt", message: text };
       if (desiredModel) payload.desiredModel = desiredModel;
-      ws.send(JSON.stringify({
-        type: "broker_command",
-        instanceId: iid,
-        payload,
-      }));
+      if (streaming) payload.streamingBehavior = "steer";
+      sendCommand(payload);
+      return;
+    }
+
+    const id = addMessage(s, "user", text);
+    if (streaming) {
+      // 流式默认发送：进入本地 outbox，agent_end 后自动以普通 prompt 投递（等价 pi 原生 followUp）。
+      // 不调用 pi 的 follow_up 命令，这样投递前可以取消/升级为插队。
+      s.outbox = [...s.outbox, { id, text, model: desiredModel ?? undefined }];
+      return;
+    }
+
+    // 空闲：立即发送
+    if (!iid) {
+      addMessage(s, "system", "No active session yet — please wait for the session to be ready.");
+      return;
+    }
+    const payload: Record<string, unknown> = { type: "prompt", message: text };
+    if (desiredModel) payload.desiredModel = desiredModel;
+    sendCommand(payload);
+  }
+
+  // ── 本地 outbox 投递 ──────────────────────────────────────────────
+
+  /** 会话进入空闲（agent_end / error aborted）后：abort 场景投递最新一条，否则按序投递第一条 */
+  function handleRunSettled(s: SessionState) {
+    if (s.abortFlushPending) {
+      flushAfterAbort(s);
+    } else if (s.outbox.length > 0) {
+      deliverOutboxFirst(s);
+    }
+  }
+
+  /** 按序投递 outbox 第一条（one-at-a-time，等价 pi followUp 默认模式） */
+  function deliverOutboxFirst(s: SessionState) {
+    const iid = activeInstanceId.value;
+    if (!iid || s.outbox.length === 0) return;
+    const [first, ...rest] = s.outbox;
+    s.outbox = rest;
+    const payload: Record<string, unknown> = { type: "prompt", message: first.text };
+    if (first.model) payload.desiredModel = first.model;
+    sendCommand(payload);
+  }
+
+  /** 用户点击停止后：只停当前生成，投递 outbox 最新一条（当前意图），丢弃更早的排队消息 */
+  function flushAfterAbort(s: SessionState) {
+    if (s.abortTimer) clearTimeout(s.abortTimer);
+    s.abortTimer = null;
+    s.abortFlushPending = false;
+    s.isStreaming = false;
+    if (s.outbox.length === 0) return;
+    // 断线时不清理 outbox，等重连后由下一次 settle 处理
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const latest = s.outbox[s.outbox.length - 1];
+    const dropped = s.outbox.slice(0, -1);
+    s.outbox = [];
+    if (dropped.length > 0) {
+      const droppedIds = new Map(dropped.map((d) => [d.id, d.text]));
+      s.messages = s.messages.filter(
+        (m) => !(m.role === "user" && droppedIds.has(m.id) && m.content === droppedIds.get(m.id)),
+      );
+      addMessage(
+        s,
+        "system",
+        `[Aborted] Dropped ${dropped.length} queued message${dropped.length > 1 ? "s" : ""} — sent only the latest.`,
+      );
+    }
+    const payload: Record<string, unknown> = { type: "prompt", message: latest.text };
+    if (latest.model) payload.desiredModel = latest.model;
+    sendCommand(payload);
+  }
+
+  /** 取消一条本地排队消息（纯本地，pi 不感知） */
+  function cancelQueued(id: number) {
+    const s = getState(activeInstanceId.value);
+    if (!s) return;
+    const item = s.outbox.find((o) => o.id === id);
+    s.outbox = s.outbox.filter((o) => o.id !== id);
+    if (item) {
+      s.messages = s.messages.filter((m) => !(m.role === "user" && m.id === id && m.content === item.text));
+    }
+  }
+
+  /** 把一条本地排队消息升级为插队（立即投递，流式中走 steer，空闲时走普通 prompt） */
+  function upgradeQueued(id: number) {
+    const s = getState(activeInstanceId.value);
+    const iid = activeInstanceId.value;
+    if (!s || !iid) return;
+    const item = s.outbox.find((o) => o.id === id);
+    if (!item) return;
+    s.outbox = s.outbox.filter((o) => o.id !== id);
+    const payload: Record<string, unknown> = { type: "prompt", message: item.text };
+    if (item.model) payload.desiredModel = item.model;
+    if (s.isStreaming) payload.streamingBehavior = "steer";
+    sendCommand(payload);
+  }
+
+  /** 终止当前生成。pi 停稳后（agent_end/error 或兜底超时）投递 outbox 最新一条。 */
+  function abortGeneration() {
+    sendCommand({ type: "abort" });
+    const s = getState(activeInstanceId.value);
+    if (s) {
+      s.isStreaming = false;
+      s.abortFlushPending = true;
+      if (s.abortTimer) clearTimeout(s.abortTimer);
+      s.abortTimer = setTimeout(() => flushAfterAbort(s), 2000);
     }
   }
 
@@ -513,9 +707,14 @@ export function usePiConnection() {
     wsSessions,
     sessionStatus,
     currentModel,
+    steeringQueue,
+    outbox,
     connectWebSocket,
     sendPrompt,
     sendCommand,
+    abortGeneration,
+    cancelQueued,
+    upgradeQueued,
     newSession,
     switchSession,
     ackReview,

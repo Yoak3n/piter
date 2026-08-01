@@ -405,7 +405,14 @@ impl SessionManager {
             }
 
             TrackedEvent::MessageEnd { message } => {
-                let msg = message.or_else(|| session.partial_message.take());
+                // Eagerly consume the partial message. pi's message_end always
+                // carries the full message object, so `or_else` never executed
+                // `partial_message.take()`, leaving a residual copy that was
+                // pushed a second time on turn_end/agent_end (duplicate final
+                // answers). `Option::or` takes ownership of both, so the partial
+                // is gone regardless of which side wins.
+                let partial = session.partial_message.take();
+                let msg = message.or(partial);
                 if let Some(ref m) = msg {
                     // Capture user messages for auto-title
                     let role = m.get("role").and_then(Value::as_str).unwrap_or("");

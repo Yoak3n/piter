@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
 import { Trash2, Plus, Search, X, RefreshCw } from "lucide-vue-next";
-import type { ProjectGroup } from "../types";
+import type { ProjectGroup } from "../../types";
 
 const props = defineProps<{
   activeSessionId: string | null;

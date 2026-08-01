@@ -192,7 +192,6 @@ onMounted(loadOverview);
 <style scoped>
 .tab-content {
   padding: var(--space-xl);
-  max-width: 560px;
   display: flex;
   flex-direction: column;
   gap: var(--space-md);

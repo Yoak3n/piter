@@ -84,13 +84,115 @@ export interface ExtensionOverview {
   projects: ProjectExtensionState[];
 }
 
+export type PiAuthSource = "stored" | "environment" | "none";
+
+export interface PiProviderStatus {
+  provider: string;
+  display_name: string;
+  configured: boolean;
+  source: PiAuthSource;
+  /** True for auth.json entries that are not known API-key providers (e.g. OAuth subscriptions). */
+  custom: boolean;
+  /** Environment variable providing the key (only when source is "environment"). */
+  env_var: string | null;
+}
+
+// ─── Usage dashboard (get_cost_dashboard) ──────────────────────────────────
+
+export interface CostDashboardRange {
+  range: string;
+  from: string;
+  to: string;
+}
+
+export interface CostOverview {
+  total_cost: number;
+  sessions: number;
+  messages: number;
+  total_tokens: number;
+  active_days: number;
+  current_streak: number;
+  longest_streak: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read: number;
+  cache_write: number;
+  tool_calls: number;
+}
+
+export interface CostToolStat {
+  name: string;
+  count: number;
+  cost: number;
+  fraction: number;
+}
+
+export interface CostModelStat {
+  name: string;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+  fraction: number;
+}
+
+export interface CostProjectStat {
+  name: string;
+  cwd: string;
+  sessions: number;
+  cost: number;
+  fraction: number;
+}
+
+export interface CostSessionStat {
+  title: string;
+  workspace: string;
+  model: string;
+  total_tokens: number;
+  tool_calls: number;
+  total_cost: number;
+  time: string;
+}
+
+export interface CostDailyPoint {
+  key: string;
+  total: number;
+  models: Record<string, number>;
+}
+
+export interface CostDayActivity {
+  key: string;
+  value: number;
+}
+
+export interface CostDashboard {
+  range: CostDashboardRange;
+  overview: CostOverview;
+  usage: {
+    total_tokens: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read: number;
+    cache_write: number;
+    tool_calls: number;
+    tools: CostToolStat[];
+  };
+  models: CostModelStat[];
+  projects: CostProjectStat[];
+  sessions: CostSessionStat[];
+  daily: CostDailyPoint[];
+  activity: CostDayActivity[];
+}
+
 export function useAdmin() {
   const config = ref<AdminConfig | null>(null);
   const status = ref<AdminStatus | null>(null);
   const piSettings = ref<PiAgentSettings | null>(null);
   const piInstall = ref<PiInstallInfo | null>(null);
   const downloadProgress = ref<DownloadProgressEvent | null>(null);
-  const loading = reactive({ config: false, status: false, piSettings: false, piInstall: false, downloading: false, uninstalling: false });
+  const piAuthStatus = ref<PiProviderStatus[] | null>(null);
+  const piModelsConfig = ref("");
+  const loading = reactive({ config: false, status: false, piSettings: false, piInstall: false, downloading: false, uninstalling: false, authStatus: false, modelsConfig: false });
   const error = ref("");
 
   async function fetchConfig() {
@@ -289,12 +391,77 @@ export function useAdmin() {
     }
   }
 
+  async function fetchPiAuthStatus() {
+    loading.authStatus = true;
+    error.value = "";
+    try {
+      piAuthStatus.value = await invoke<PiProviderStatus[]>("list_pi_auth_status");
+    } catch (e) {
+      error.value = `Failed to read Pi credentials: ${e}`;
+    } finally {
+      loading.authStatus = false;
+    }
+  }
+
+  async function setPiApiKey(provider: string, apiKey: string): Promise<boolean> {
+    error.value = "";
+    try {
+      await invoke("set_pi_api_key", { provider, apiKey });
+      await fetchPiAuthStatus();
+      return true;
+    } catch (e) {
+      error.value = `Failed to save API key: ${e}`;
+      return false;
+    }
+  }
+
+  async function removePiApiKey(provider: string): Promise<boolean> {
+    error.value = "";
+    try {
+      await invoke("remove_pi_api_key", { provider });
+      await fetchPiAuthStatus();
+      return true;
+    } catch (e) {
+      error.value = `Failed to remove API key: ${e}`;
+      return false;
+    }
+  }
+
+  async function fetchPiModelsConfig() {
+    loading.modelsConfig = true;
+    error.value = "";
+    try {
+      piModelsConfig.value = await invoke<string>("get_pi_models_config");
+    } catch (e) {
+      error.value = `Failed to read models config: ${e}`;
+    } finally {
+      loading.modelsConfig = false;
+    }
+  }
+
+  async function savePiModelsConfig(content: string): Promise<boolean> {
+    loading.modelsConfig = true;
+    error.value = "";
+    try {
+      await invoke("save_pi_models_config", { content });
+      piModelsConfig.value = content;
+      return true;
+    } catch (e) {
+      error.value = `Failed to save models config: ${e}`;
+      return false;
+    } finally {
+      loading.modelsConfig = false;
+    }
+  }
+
   return {
     config,
     status,
     piSettings,
     piInstall,
     downloadProgress,
+    piAuthStatus,
+    piModelsConfig,
     loading,
     error,
     fetchConfig,
@@ -312,5 +479,10 @@ export function useAdmin() {
     fetchExtensionOverview,
     saveGlobalExtensions,
     saveProjectExtensions,
+    fetchPiAuthStatus,
+    setPiApiKey,
+    removePiApiKey,
+    fetchPiModelsConfig,
+    savePiModelsConfig,
   };
 }

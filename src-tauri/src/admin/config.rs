@@ -62,6 +62,12 @@ impl ConfigManager {
     pub fn apply_autostart(app: &tauri::AppHandle, auto_start: bool) {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
+            // In dev/debug builds, never touch the OS autostart registration:
+            // dev and release share the same registry entry and would
+            // overwrite each other's setting.
+            if cfg!(debug_assertions) {
+                return;
+            }
             use tauri_plugin_autostart::ManagerExt;
             let manager = app.autolaunch();
             let result = if auto_start {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { Settings, Cpu, Activity, Puzzle, Globe, GitBranch, Store, ChevronDown } from "lucide-vue-next";
+import { Settings, Cpu, Activity, Puzzle, Globe, GitBranch, Store, ChevronDown, KeyRound, ChartColumn } from "lucide-vue-next";
 
 const props = defineProps<{
   activeTab: string;
@@ -15,9 +15,16 @@ const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 const tabs = [
   { key: "status", label: "Status", icon: Activity },
-  { key: "pi", label: "Pi Config", icon: Cpu },
+  { key: "usage", label: "Usage", icon: ChartColumn },
+];
+
+// Pi is a parent group: everything here configures the Pi runtime itself.
+const piTabs = [
+  { key: "pi", label: "Config", icon: Cpu },
+  { key: "providers", label: "Providers", icon: KeyRound },
   { key: "versions", label: "Versions", icon: GitBranch },
 ];
+const piGroupKeys = ["pi", "providers", "versions"];
 
 // Extensions is a parent group: "Installed" (enabled list) + "Market" (browse).
 const extensionTabs = [
@@ -31,13 +38,19 @@ const bottomTabs = [
 
 const extensionGroupKeys = ["extensions", "market"];
 
+const piOpen = ref(piGroupKeys.includes(props.activeTab));
 const extensionsOpen = ref(extensionGroupKeys.includes(props.activeTab));
 watch(
   () => props.activeTab,
   (tab) => {
+    if (piGroupKeys.includes(tab)) piOpen.value = true;
     if (extensionGroupKeys.includes(tab)) extensionsOpen.value = true;
   }
 );
+
+function togglePi() {
+  piOpen.value = !piOpen.value;
+}
 
 function toggleExtensions() {
   extensionsOpen.value = !extensionsOpen.value;
@@ -70,6 +83,30 @@ async function openWebApp() {
         <component :is="tab.icon" :size="15" />
         <span>{{ tab.label }}</span>
       </button>
+    </div>
+
+    <div class="admin-nav-group">
+      <button
+        class="admin-nav-item admin-nav-parent"
+        :class="{ active: piGroupKeys.includes(activeTab) }"
+        @click="togglePi"
+      >
+        <Cpu :size="15" />
+        <span>Pi</span>
+        <ChevronDown :size="13" class="nav-chevron" :class="{ open: piOpen }" />
+      </button>
+      <template v-if="piOpen">
+        <button
+          v-for="tab in piTabs"
+          :key="tab.key"
+          class="admin-nav-item admin-nav-child"
+          :class="{ active: activeTab === tab.key }"
+          @click="emit('select', tab.key)"
+        >
+          <component :is="tab.icon" :size="15" />
+          <span>{{ tab.label }}</span>
+        </button>
+      </template>
     </div>
 
     <div class="admin-nav-group">

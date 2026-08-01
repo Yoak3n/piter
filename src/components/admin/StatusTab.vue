@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { RefreshCw } from "lucide-vue-next";
-import type { AdminStatus } from "../../composables/useAdmin";
+import type { AdminStatus, PiSettings } from "../../composables/useAdmin";
 
 const props = defineProps<{
   status: AdminStatus | null;
   loading: boolean;
+  piSettings: PiSettings;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -13,9 +15,24 @@ const emit = defineEmits<{
   (e: "restart-pi"): void;
   (e: "stop-pi"): void;
   (e: "open-path", path: string): void;
+  (e: "update-pi-settings", settings: PiSettings): void;
 }>();
 
 const actionLabel = ref("");
+
+// Editable copy of Piter's Pi process-management settings.
+const localPiSettings = ref<PiSettings>({ ...props.piSettings });
+const piSettingsSaved = ref(false);
+watch(() => props.piSettings, (s) => {
+  localPiSettings.value = { ...s };
+}, { immediate: true });
+
+function handleSavePiSettings() {
+  piSettingsSaved.value = false;
+  emit("update-pi-settings", { ...localPiSettings.value });
+  piSettingsSaved.value = true;
+  setTimeout(() => (piSettingsSaved.value = false), 2000);
+}
 
 // Track when we last fetched uptime, so we can add elapsed seconds locally
 let refreshTime = Date.now();
@@ -147,6 +164,36 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
     </div>
 
     <div class="section">
+      <h3 class="tab-title">Piter Settings</h3>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-label">
+            <span class="settings-label-title">Request timeout</span>
+            <span class="settings-label-desc">Seconds before a request is cancelled</span>
+          </div>
+          <input class="input number-input" type="number" v-model.number="localPiSettings.request_timeout_secs" min="30" max="3600" :disabled="disabled" />
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-label">
+            <span class="settings-label-title">Auto-restart on crash</span>
+            <span class="settings-label-desc">Restart Pi process if it exits unexpectedly</span>
+          </div>
+          <label class="toggle" :class="{ on: localPiSettings.auto_restart_on_crash }">
+            <input type="checkbox" v-model="localPiSettings.auto_restart_on_crash" :disabled="disabled" />
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+
+        <div class="settings-footer">
+          <button class="btn btn-primary" :disabled="disabled" @click="handleSavePiSettings">
+            {{ piSettingsSaved ? "Saved" : "Save Piter Settings" }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
       <h3 class="tab-title">Broker URLs</h3>
       <div class="info-block" v-if="status">
         <div class="info-row">
@@ -165,7 +212,6 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
 <style scoped>
 .tab-content {
   padding: var(--space-xl);
-  max-width: 620px;
 }
 
 .tab-header {
@@ -287,6 +333,49 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+}
+
+.settings-card {
+  background: var(--bg-muted);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-sm) 0;
+}
+
+.settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.settings-label-title {
+  font-size: var(--font-size-body);
+  color: var(--text);
+}
+
+.settings-label-desc {
+  font-size: var(--font-size-caption);
+  color: var(--text-tertiary);
+}
+
+.number-input {
+  width: 100px;
+  flex-shrink: 0;
+}
+
+.settings-footer {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border);
 }
 
 .action-feedback {

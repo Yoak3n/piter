@@ -19,6 +19,15 @@ export interface Message {
   timestamp: number;
 }
 
+/** A logical group of messages sharing a user turn */
+export interface ChatTurn {
+  id: number;
+  user: Message | null;
+  assistants: Message[];
+  tools: Message[];
+  system: Message | null;
+}
+
 /** Session metadata */
 export interface SessionInfo {
   id: string;

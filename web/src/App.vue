@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from "vue";
-import ChatPane from "./components/ChatPane.vue";
-import SessionSidebar from "./components/SessionSidebar.vue";
-import GlobalHeader from "./components/GlobalHeader.vue";
-import NewSessionPane from "./components/NewSessionPane.vue";
+import { ref, computed, watch, onMounted } from "vue";
+import ChatPane from "./components/chat/ChatPane.vue";
+import SessionSidebar from "./components/layout/SessionSidebar.vue";
+import GlobalHeader from "./components/layout/GlobalHeader.vue";
+import NewSessionPane from "./components/session/NewSessionPane.vue";
 import { usePiConnection } from "./composables/usePiConnection";
 import { useSessions } from "./composables/useSessions";
 import type { ModelRef } from "./types";
@@ -41,8 +41,13 @@ const {
   wsSessions,
   sessionStatus,
   currentModel,
+  steeringQueue,
+  outbox,
   connectWebSocket,
   sendPrompt,
+  abortGeneration,
+  cancelQueued,
+  upgradeQueued,
   newSession,
   switchSession,
   restartPi,
@@ -56,6 +61,19 @@ const sessionName = ref("");
 const modelId = ref<ModelRef | null>(null);
 const showNewSession = ref(true);
 const pendingFirstMessage = ref<string | null>(null);
+
+// Per-session input drafts, keyed by instanceId.
+const drafts = ref<Record<string, string>>({});
+
+const activeDraft = computed(() =>
+  activeInstanceId.value ? (drafts.value[activeInstanceId.value] ?? "") : "",
+);
+
+function handleDraftUpdate(text: string) {
+  if (activeInstanceId.value) {
+    drafts.value[activeInstanceId.value] = text;
+  }
+}
 
 // Sync model from WS events into the modelId ref
 watch(currentModel, (m) => {
@@ -79,6 +97,16 @@ function handleSend(text: string) {
   sendPrompt(text, modelId.value);
 }
 
+// 插队：在流式输出中立即投递（steer）
+function handleSteer(text: string) {
+  sendPrompt(text, modelId.value, "steer");
+}
+
+// 终止当前生成
+function handleAbort() {
+  abortGeneration();
+}
+
 async function handleSelectSession(instanceId: string) {
   showNewSession.value = false;
   const allProjects = wsSessions.value.length > 0 ? wsSessions.value : sessions.value;
@@ -93,10 +121,11 @@ async function handleSelectSession(instanceId: string) {
   if (mobileMode.value) closeSidebar();
 }
 
-function handleDeleteSession(_instanceId: string) {
+function handleDeleteSession(instanceId: string) {
   sessionName.value = "";
   clearMessages();
   showNewSession.value = true;
+  delete drafts.value[instanceId];
 }
 
 // Global "+" or per-project "+" — show the new session pane
@@ -197,7 +226,15 @@ watch(sessionStatus, (status) => {
         :current-assistant-content="currentAssistantContent"
         :current-thinking="currentThinking"
         :tool-executions="toolExecutions"
+        :draft="activeDraft"
+        :outbox="outbox"
+        :steering-queue="steeringQueue"
         @send="handleSend"
+        @steer="handleSteer"
+        @abort="handleAbort"
+        @cancel-queued="cancelQueued"
+        @upgrade-queued="upgradeQueued"
+        @update:draft="handleDraftUpdate"
         @restart-pi="restartPi"
       />
     </main>

@@ -105,7 +105,6 @@ const themes = [
 <style scoped>
 .tab-content {
   padding: var(--space-xl);
-  max-width: 540px;
   display: flex;
   flex-direction: column;
   gap: var(--space-md);

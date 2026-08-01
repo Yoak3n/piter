@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import {
-  Store, Search, Package, Download, ExternalLink,
+  Store, Search, Package, Download, ExternalLink, Globe,
   Loader2, RefreshCw, ChevronLeft, ChevronRight,
   Puzzle, Paintbrush, MessageSquare, Zap,
 } from "lucide-vue-next";
@@ -146,6 +146,16 @@ watch(() => props.packages, () => {
         <RefreshCw :size="12" :class="{ spin: loading }" />
         {{ loading ? "Loading..." : "Refresh" }}
       </button>
+    </div>
+
+    <!-- Network notice: only shown when a load/install has failed -->
+    <div v-if="error || installError" class="mp-proxy-note">
+      <Globe :size="14" class="mp-proxy-note-icon" />
+      <span>
+        This may be a network issue — check your connection first; enabling a
+        system proxy or TUN mode (e.g. Clash Verge), or configuring an npm
+        proxy (<code>npm config set proxy ...</code>) may help, then retry.
+      </span>
     </div>
 
     <!-- Loading state -->
@@ -361,6 +371,30 @@ watch(() => props.packages, () => {
   font-size: var(--font-size-caption);
   color: var(--text-tertiary);
   margin: 0;
+}
+
+/* Proxy notice */
+.mp-proxy-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+}
+
+.mp-proxy-note-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.mp-proxy-note code {
+  font-family: var(--font-mono);
+  background: transparent;
+  color: inherit;
 }
 
 /* Loading */

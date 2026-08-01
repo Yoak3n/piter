@@ -1,6 +1,7 @@
 pub mod broker;
 pub mod gateway;
 pub mod resolve;
+pub mod stats;
 
 pub use broker::PiAgentSettings;
 pub use broker::{get_pi_agent_dir, read_pi_settings};

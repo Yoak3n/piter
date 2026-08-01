@@ -1,10 +1,12 @@
 use anyhow::Result;
 use tauri::{
     AppHandle, Runtime, Wry,
-    menu::{CheckMenuItem, Menu, MenuItem},
+    menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(debug_assertions))]
+use tauri::menu::CheckMenuItem;
+#[cfg(all(not(debug_assertions), not(any(target_os = "android", target_os = "ios"))))]
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::base::window::schema::WindowType;
@@ -21,7 +23,7 @@ pub fn create_tray_icon<R: Runtime>(app: &tauri::App<R>, visible: bool) -> Resul
         None::<&str>,
     )?;
     let menu = Menu::with_items(app, &[ &show_i,&quit_i])?;
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(all(not(debug_assertions), not(any(target_os = "android", target_os = "ios"))))]
     {
         let auto_i = CheckMenuItem::with_id(
             app,
@@ -45,7 +47,7 @@ pub fn create_tray_icon<R: Runtime>(app: &tauri::App<R>, visible: bool) -> Resul
             "show" => {
                 WM::global().toggle_window(WindowType::Main);
             }
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            #[cfg(all(not(debug_assertions), not(any(target_os = "android", target_os = "ios"))))]
             "autostart" => {
                 let autostart_manager = app.autolaunch();
                 let currently_enabled = autostart_manager.is_enabled().unwrap_or(false);
@@ -95,7 +97,7 @@ fn create_tray_menu(app_handle: &AppHandle, visiable: bool) -> Result<Menu<Wry>>
     )?;
     let menu = Menu::with_items(app_handle, &[&show_i, &quit_i])?;
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(all(not(debug_assertions), not(any(target_os = "android", target_os = "ios"))))]
     {
         let auto_i = CheckMenuItem::with_id(
             app_handle,

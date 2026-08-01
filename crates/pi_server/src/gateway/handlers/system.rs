@@ -12,7 +12,7 @@ use crate::gateway::GatewayState;
 
 pub fn get_health(state: &GatewayState) -> HealthResponse {
     let lan_urls: Vec<String> = state
-        .lan_ips
+        .current_lan_ips()
         .iter()
         .map(|ip| format!("http://{}:{}/chat", ip, state.http_port))
         .collect();
@@ -29,7 +29,7 @@ pub fn get_health(state: &GatewayState) -> HealthResponse {
 
 pub fn get_lan_info(state: &GatewayState) -> LanInfoResponse {
     let lan_urls: Vec<String> = state
-        .lan_ips
+        .current_lan_ips()
         .iter()
         .map(|ip| format!("http://{}:{}/chat", ip, state.http_port))
         .collect();
@@ -80,8 +80,8 @@ pub async fn lan_info_handler(
 pub async fn lan_qr_handler(
     axum::extract::State(state): axum::extract::State<Arc<GatewayState>>,
 ) -> (HeaderMap, String) {
-    let data = state
-        .lan_ips
+    let ips = state.current_lan_ips();
+    let data = ips
         .first()
         .map(|ip| {
             format!(

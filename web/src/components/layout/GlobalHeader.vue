@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import ModelSelector from "./ModelSelector.vue";
+import ModelSelector from "../model/ModelSelector.vue";
 import LanShare from "./LanShare.vue";
 import { Settings } from "lucide-vue-next";
-import type { ModelRef } from "../types";
+import type { ModelRef } from "../../types";
 
 defineProps<{
   sessionName?: string;

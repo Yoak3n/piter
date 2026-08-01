@@ -1,8 +1,27 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
 
+/**
+ * Vite pre-bundles dependencies (optimizeDeps) lazily on the FIRST request.
+ * That first request stalls until esbuild finishes — a multi-second white
+ * screen on the initial navigation into the admin after `vite` starts. This
+ * plugin fires an early background request once the server is listening so
+ * the pre-bundle runs while the user is still on the chat view.
+ */
+function prewarmDevServer(): Plugin {
+  return {
+    name: "piter-prewarm-devdeps",
+    configureServer(server) {
+      server.httpServer?.once("listening", () => {
+        const port = server.config.server.port ?? 1420;
+        fetch(`http://localhost:${port}/`).catch(() => {});
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), prewarmDevServer()],
   clearScreen: false,
   server: {
     port: 1420,
@@ -17,5 +36,12 @@ export default defineConfig({
         ws: true,
       },
     },
+  },
+  optimizeDeps: {
+    // echarts/vue-echarts are loaded via dynamic import (Usage tab) — without
+    // this they would NOT be pre-bundled and dev would fetch hundreds of
+    // individual source modules on first open. lucide-vue-next is a large
+    // icon library worth pre-bundling up front too.
+    include: ["echarts", "vue-echarts", "lucide-vue-next"],
   },
 });

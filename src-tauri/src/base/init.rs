@@ -40,7 +40,13 @@ pub fn generate_handlers(
         get_extension_overview,
         set_global_extensions,
         set_project_extensions,
-        start_pi_gateway
+        start_pi_gateway,
+        list_pi_auth_status,
+        set_pi_api_key,
+        remove_pi_api_key,
+        get_pi_models_config,
+        save_pi_models_config,
+        get_cost_dashboard
     ]
 }
 

@@ -72,3 +72,23 @@ export function extractToolExecutions(
   }
   return execs;
 }
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+/** Format an epoch-ms timestamp for display (QQ-style: today → HH:MM,
+ * yesterday → 昨天 HH:MM, same year → M月D日 HH:MM, older → YYYY年M月D日 HH:MM). */
+export function formatMessageTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const startOfDay = (x: Date) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (dayDiff <= 0) return hm;
+  if (dayDiff === 1) return `昨天 ${hm}`;
+  const md = `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  if (d.getFullYear() === now.getFullYear()) return md;
+  return `${d.getFullYear()}年${md}`;
+}

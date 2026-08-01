@@ -1,15 +1,20 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from "vue";
+import { ref, onMounted, computed, watch, defineAsyncComponent } from "vue";
 import { useAdmin } from "../composables/useAdmin";
 import type { AppSettings, PiSettings } from "../composables/useAdmin";
 import { applyTheme, darkMedia } from "../utils/theme";
 import AdminNav from "../components/admin/AdminNav.vue";
 import StatusTab from "../components/admin/StatusTab.vue";
-import PiConfigTab from "../components/admin/PiConfigTab.vue";
-import PiVersionsTab from "../components/admin/PiVersionsTab.vue";
-import ExtensionsTab from "../components/admin/ExtensionsTab.vue";
-import MarketplaceTab from "../components/admin/MarketplaceTab.vue";
-import AppearanceTab from "../components/admin/AppearanceTab.vue";
+
+// Non-default tabs load lazily so the admin entry stays light (dev module
+// graph + production main bundle). UsageTab additionally pulls in echarts.
+const PiConfigTab = defineAsyncComponent(() => import("../components/admin/PiConfigTab.vue"));
+const ProvidersTab = defineAsyncComponent(() => import("../components/admin/ProvidersTab.vue"));
+const PiVersionsTab = defineAsyncComponent(() => import("../components/admin/PiVersionsTab.vue"));
+const ExtensionsTab = defineAsyncComponent(() => import("../components/admin/ExtensionsTab.vue"));
+const MarketplaceTab = defineAsyncComponent(() => import("../components/admin/MarketplaceTab.vue"));
+const AppearanceTab = defineAsyncComponent(() => import("../components/admin/AppearanceTab.vue"));
+const UsageTab = defineAsyncComponent(() => import("../components/admin/UsageTab.vue"));
 
 const { config, status, piSettings, piInstall, downloadProgress, loading, error,
   fetchConfig, saveConfig, fetchStatus, restartPi, stopPi,
@@ -100,18 +105,21 @@ function handlePackagesChanged(packages: string[]) {
         v-if="activeTab === 'status'"
         :status="status"
         :loading="loading.status"
+        :pi-settings="piSettingsVal"
+        :disabled="loading.config"
         @refresh="fetchStatus"
         @restart-pi="restartPi"
         @stop-pi="stopPi"
         @open-path="openPath"
+        @update-pi-settings="handlePiUpdate"
       />
+
+      <UsageTab v-if="activeTab === 'usage'" />
 
       <PiConfigTab
         v-if="activeTab === 'pi'"
-        :settings="piSettingsVal"
         :piAgentSettings="piSettings"
-        :disabled="loading.config || loading.piSettings"
-        @update="handlePiUpdate"
+        :disabled="loading.piSettings"
         @save-agent="savePiAgentSettings"
       />
 
@@ -122,9 +130,16 @@ function handlePackagesChanged(packages: string[]) {
         :loading="loading.piInstall"
         :downloading="loading.downloading"
         :uninstalling="loading.uninstalling"
+        :download="downloadPiVersion"
         @refresh="fetchPiInstallInfo"
-        @download="downloadPiVersion"
         @uninstall="uninstallPi"
+      />
+
+      <ProvidersTab
+        v-if="activeTab === 'providers'"
+        :broker-http-url="status?.broker_http_url ?? ''"
+        :pi-running="status?.pi_running ?? false"
+        @restart-pi="restartPi"
       />
 
       <ExtensionsTab v-if="activeTab === 'extensions'" />

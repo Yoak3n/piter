@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from "vue";
-import { Download, Check, RotateCcw, Trash2, Loader2, HardDrive, Link } from "lucide-vue-next";
+import { Download, Check, RotateCcw, Trash2, Loader2, HardDrive, Link, Globe } from "lucide-vue-next";
 import { invoke } from "@tauri-apps/api/core";
 import type { PiInstallInfo, DownloadProgressEvent } from "../../composables/useAdmin";
 
@@ -13,16 +13,19 @@ const props = defineProps<{
   loading: boolean;
   downloading: boolean;
   uninstalling: boolean;
+  download: (version: string) => Promise<boolean>;
 }>();
 
 const emit = defineEmits<{
   (e: "refresh"): void;
-  (e: "download", version: string): void;
   (e: "uninstall"): void;
 }>();
 
 const downloadInput = ref("");
 const actionFeedback = ref("");
+
+// Set when a download fails so the network hint only appears on failure.
+const networkHint = ref(false);
 
 async function openLink(url: string) {
   try {
@@ -53,10 +56,10 @@ watch(
 async function handleDownload() {
   const v = downloadInput.value.trim();
   if (!v) return;
-  actionFeedback.value = `Downloading ${v}...`;
-  emit("download", v);
   downloadInput.value = "";
-  setTimeout(() => { actionFeedback.value = ""; }, 5000);
+  networkHint.value = false;
+  const ok = await props.download(v);
+  if (!ok) networkHint.value = true;
 }
 
 async function handleUninstall() {
@@ -129,6 +132,17 @@ const progressText = computed(() => {
 
     <template v-else-if="installInfo">
       <div class="install-card" :class="{ 'install-card--installed': installInfo.binary_present }">
+        <div v-if="networkHint" class="proxy-note">
+          <Globe :size="14" class="proxy-note-icon" />
+          <span>
+            The download failed. This is often a network issue — check your
+            connection first; enabling a system proxy (e.g. Clash Verge: System
+            Proxy or TUN mode) or setting
+            <code>HTTPS_PROXY</code>/<code>HTTP_PROXY</code> may help, then
+            retry. Piter picks up both automatically.
+          </span>
+        </div>
+
         <div class="install-card-header">
           <div class="install-card-title">
             <template v-if="installInfo.binary_present">
@@ -238,12 +252,6 @@ const progressText = computed(() => {
           page for the latest version.
         </li>
         <li>
-          <strong>Network issues:</strong> downloads from GitHub can be slow or fail in China.
-          Enable a proxy (e.g. Clash Verge's System Proxy or TUN mode) and retry — Piter
-          automatically uses your system proxy and
-          <code>HTTPS_PROXY</code>/<code>HTTP_PROXY</code> environment variables.
-        </li>
-        <li>
           <strong>Manual install:</strong> prefer to install pi yourself? Use the official installer
           (<a class="text-link" href="#" @click.prevent="openLink(PI_HOMEPAGE_URL)">pi.dev</a>)
           or <code>npm i -g @earendil-works/pi-coding-agent</code>. Piter auto-detects pi from PATH
@@ -259,7 +267,6 @@ const progressText = computed(() => {
 <style scoped>
 .tab-content {
   padding: var(--space-xl);
-  max-width: 560px;
 }
 
 .tab-title {
@@ -299,6 +306,29 @@ const progressText = computed(() => {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   overflow: hidden;
+}
+
+.proxy-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  border-bottom: 1px solid var(--border);
+}
+
+.proxy-note-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.proxy-note code {
+  font-family: var(--font-mono);
+  background: transparent;
+  color: inherit;
 }
 
 .install-card-header {
