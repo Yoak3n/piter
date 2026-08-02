@@ -330,7 +330,9 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 | created_at | TEXT | NOT NULL (RFC3339) |
 | updated_at | TEXT | NOT NULL (RFC3339) |
 
-### project_extensions
+### project_added_extensions
+
+项目在全局基础上额外启用的扩展（增量）。`project_excluded_extensions` 存项目显式排除的扩展（即使全局启用也不加载）。
 
 | 列 | 类型 | 约束 |
 |----|------|------|
@@ -371,7 +373,7 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 | `get_pi_install_info` / `download_pi_version` / `uninstall_pi` | Pi 版本管理（下载走 progress Channel 流式进度） |
 | `list_pi_auth_status` / `set_pi_api_key` / `remove_pi_api_key` | Provider 认证管理（`~/.pi/agent/auth.json`） |
 | `get_pi_models_config` / `save_pi_models_config` | 自定义 Provider 配置（`~/.pi/agent/models.json`） |
-| `get_extension_overview` / `set_global_extensions` / `set_project_extensions` | 扩展管理（全局/项目级启用配置） |
+| `get_extension_overview` / `set_global_extensions` / `set_project_added_extensions` / `set_project_excluded_extensions` | 扩展管理（全局基准 + 项目增量/排除） |
 | `list_pi_packages` / `install_pi_package` / `remove_pi_package` | 包市场（`pi list/install/remove` + DB 注册） |
 | `restart_pi` / `stop_pi` / `start_pi_gateway` / `get_pi_agent_settings` / `save_pi_agent_settings` | Pi 进程与 agent 设置 |
 | `open_path` | 在系统文件管理器中打开路径 |

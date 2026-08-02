@@ -56,7 +56,7 @@ pub fn create_project(db: &Db, name: &str, cwd: &str, extensions: Vec<String>) -
 pub fn update_project(db: &Db, id: &str, name: Option<&str>, extensions: Option<Vec<String>>) -> Result<Project, String> {
     db.update_project(id, name, extensions.as_deref())?;
     let row = db.get_project(id).ok_or_else(|| format!("project not found: {}", id))?;
-    let exts = db.get_project_extensions(id);
+    let exts = db.get_project_added_extensions(id);
     Ok(Project {
         id: row.id,
         name: row.name,
@@ -77,7 +77,7 @@ pub fn list_projects(db: &Db, include_archived: bool) -> Vec<Project> {
     db.list_projects(include_archived)
         .into_iter()
         .map(|row| {
-            let exts = db.get_project_extensions(&row.id);
+            let exts = db.get_project_added_extensions(&row.id);
             Project {
                 id: row.id,
                 name: row.name,
@@ -119,7 +119,7 @@ pub fn discover_extensions(dir: &std::path::Path) -> Vec<String> {
 
 /// A discovered extension candidate: display/database name plus the resolved
 /// entry file (when it can be determined).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExtensionEntry {
     pub name: String,
     pub path: Option<PathBuf>,
@@ -467,30 +467,49 @@ pub fn resolve_extension_name(name: &str, cwd: &str) -> Option<PathBuf> {
     None
 }
 
-/// Resolve project extensions to file paths for passing to pi via `-e` flags.
-///
-/// Reads already-resolved paths from the database. Logs a warning for any
-/// extension whose path column is NULL or points to a missing file.
-pub fn resolve_project_extensions(db: &super::db::Db, project_id: &str, cwd: &str) -> Vec<String> {
-    let exts = db.get_project_extensions_with_paths(project_id);
+/// Resolve a list of extension names to file paths for pi's `-e` flags.
+/// Unresolvable names are logged and skipped.
+pub fn resolve_extension_paths(names: &[String], cwd: &str) -> Vec<String> {
     let mut paths = Vec::new();
-    for (name, path) in &exts {
-        match path {
-            Some(p) if Path::new(p).is_file() => paths.push(p.clone()),
-            _ => {
-                // Path missing or file gone — try to re-resolve
-                if let Some(resolved) = resolve_extension_name(name, cwd) {
-                    let rp = resolved.to_string_lossy().to_string();
-                    let _ = db.set_project_extension_path(project_id, name, &rp);
-                    paths.push(rp);
-                } else {
-                    log::warn!(
-                        "[project] extension '{}' not found (project={}, cwd={})",
-                        name, project_id, cwd
-                    );
-                }
-            }
+    for name in names {
+        match resolve_extension_name(name, cwd) {
+            Some(p) => paths.push(p.to_string_lossy().to_string()),
+            None => log::warn!(
+                "[extensions] '{}' enabled but not found (cwd={})",
+                name, cwd
+            ),
         }
     }
     paths
+}
+
+/// Compute the effective extension list for a project spawn:
+/// `(global_enabled ∪ project_enabled) − project_excluded`, then resolve each
+/// name to a file path for `-e` flags.
+///
+/// Global and project lists are merged (union); excluded names are dropped
+/// even when enabled globally, which is what lets a project reduce its
+/// extension set on top of the global baseline.
+pub fn effective_project_extensions(db: &Db, project_id: &str, cwd: &str) -> Vec<String> {
+    let mut enabled = db.get_global_extensions();
+    enabled.extend(db.get_project_added_extensions(project_id));
+
+    let excluded: std::collections::HashSet<String> =
+        db.get_project_excluded_extensions(project_id).into_iter().collect();
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut effective = Vec::new();
+    for name in enabled {
+        if excluded.contains(&name) || !seen.insert(name.clone()) {
+            continue;
+        }
+        effective.push(name);
+    }
+    resolve_extension_paths(&effective, cwd)
+}
+
+/// Resolve only the globally enabled extensions to file paths. Used when a
+/// session has no project association (fallback in restart / switch paths).
+pub fn effective_global_extensions(db: &Db, cwd: &str) -> Vec<String> {
+    resolve_extension_paths(&db.get_global_extensions(), cwd)
 }

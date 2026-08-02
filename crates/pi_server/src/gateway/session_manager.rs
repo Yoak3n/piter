@@ -181,7 +181,7 @@ impl SessionManager {
             }
         };
 
-        let extensions = super::project::resolve_project_extensions(&gw.db, &effective_project_id, cwd);
+        let extensions = super::project::effective_project_extensions(&gw.db, &effective_project_id, cwd);
 
         let instance_id = super::handlers::pi::spawn_persistent_for_gateway(gw, cwd, &extensions, model)?;
 

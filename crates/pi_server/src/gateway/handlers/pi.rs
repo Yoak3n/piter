@@ -76,7 +76,25 @@ pub fn restart_pi_instance(state: &GatewayState, instance_id: &str) -> Result<St
         return Err("instance not found".into());
     };
 
-    let extensions = crate::gateway::project::resolve_project_extensions(&state.db, &cwd, &cwd);
+    // Resolve the effective extension whitelist for this project (global ∪
+    // project − excluded). Fall back to global-only when no project is linked.
+    let project_id = state
+        .db
+        .get_session_project(instance_id)
+        .or_else(|| {
+            state
+                .db
+                .list_projects(true)
+                .into_iter()
+                .find(|p| p.cwd == cwd)
+                .map(|p| p.id)
+        });
+    let extensions = match project_id {
+        Some(pid) => {
+            crate::gateway::project::effective_project_extensions(&state.db, &pid, &cwd)
+        }
+        None => crate::gateway::project::effective_global_extensions(&state.db, &cwd),
+    };
     let effective_session_path = instance_session_path.or(session_file);
     let model_str = format_model_arg(&model_id, &model_provider);
 

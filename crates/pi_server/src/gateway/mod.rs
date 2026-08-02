@@ -10,6 +10,7 @@
 
 mod broadcast;
 pub mod db;
+pub mod ext_cache;
 pub mod handlers;
 mod helper;
 mod messages;
@@ -51,6 +52,9 @@ pub struct GatewayState {
     pub start_time: std::time::Instant,
     /// SQLite database for project/session/extension management.
     pub db: Arc<db::Db>,
+    /// Cached discovered extension candidates (global / per-project), filled
+    /// at startup and refreshed in the background. DB state is not cached.
+    pub extension_cache: Arc<parking_lot::RwLock<HashMap<String, Vec<project::ExtensionEntry>>>>,
     /// Connected UI WebSocket clients.
     pub ui_clients: Arc<parking_lot::Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>>,
     /// Session manager for message tracking and idle lifecycle.
@@ -110,9 +114,19 @@ impl GatewayState {
             static_dir,
             start_time: std::time::Instant::now(),
             db,
+            extension_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             ui_clients: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             session_manager: session_manager.clone(),
         });
+
+        // Warm the extension candidate cache in the background so the first
+        // visit to Installed shows a snapshot without a synchronous scan.
+        {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                ext_cache::refresh_all(&state);
+            });
+        }
 
         // Build axum router
         let app = Router::new()

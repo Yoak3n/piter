@@ -4,7 +4,8 @@
 //!
 //! Tables:
 //! - `projects` — project metadata with pin/archive support
-//! - `project_extensions` — per-project extension names
+//! - `project_added_extensions` — per-project extension names (added on top of global)
+//! - `project_excluded_extensions` — per-project excluded extension names
 //! - `sessions` — session_path → project_id mapping
 //! - `global_extensions` — global extension names
 
@@ -76,7 +77,7 @@ impl Db {
                 updated_at  TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS project_extensions (
+            CREATE TABLE IF NOT EXISTS project_added_extensions (
                 project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                 extension_name  TEXT NOT NULL,
                 extension_path  TEXT,
@@ -96,16 +97,15 @@ impl Db {
                 extension_name  TEXT PRIMARY KEY,
                 extension_path  TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS project_excluded_extensions (
+                project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                extension_name  TEXT NOT NULL,
+                PRIMARY KEY (project_id, extension_name)
+            );
             ",
         )
         .map_err(|e| format!("migrate: {}", e))?;
-
-        // Add extension_path column to existing tables (idempotent for upgrades)
-        let _ = conn.execute_batch(
-            "ALTER TABLE project_extensions ADD COLUMN extension_path TEXT;
-             ALTER TABLE global_extensions ADD COLUMN extension_path TEXT;"
-        );
-        // Ignore errors if columns already exist
 
         Ok(())
     }
@@ -142,7 +142,7 @@ impl Db {
         }
         if let Some(exts) = extensions {
             conn.execute(
-                "DELETE FROM project_extensions WHERE project_id = ?1",
+                "DELETE FROM project_added_extensions WHERE project_id = ?1",
                 params![id],
             )
             .map_err(|e| format!("clear extensions: {}", e))?;
@@ -155,7 +155,7 @@ impl Db {
                 )
                 .unwrap_or_default();
             let mut stmt = conn
-                .prepare("INSERT INTO project_extensions (project_id, extension_name, extension_path) VALUES (?1, ?2, ?3)")
+                .prepare("INSERT INTO project_added_extensions (project_id, extension_name, extension_path) VALUES (?1, ?2, ?3)")
                 .map_err(|e| format!("prepare ext insert: {}", e))?;
             for ext in exts {
                 let path = super::project::resolve_extension_name(ext, &cwd)
@@ -262,10 +262,10 @@ impl Db {
 
     // ── Project Extensions ─────────────────────────────────────────────
 
-    pub fn get_project_extensions(&self, project_id: &str) -> Vec<String> {
+    pub fn get_project_added_extensions(&self, project_id: &str) -> Vec<String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT extension_name FROM project_extensions WHERE project_id = ?1")
+            .prepare("SELECT extension_name FROM project_added_extensions WHERE project_id = ?1")
             .unwrap();
         stmt.query_map(params![project_id], |row| row.get(0))
             .unwrap()
@@ -273,27 +273,39 @@ impl Db {
             .collect()
     }
 
-    /// Get project extensions with their resolved file paths.
-    /// Returns Vec of (name, Option<path>).
-    pub fn get_project_extensions_with_paths(&self, project_id: &str) -> Vec<(String, Option<String>)> {
+    /// Get the extensions this project explicitly excludes (never loaded even
+    /// when enabled globally).
+    pub fn get_project_excluded_extensions(&self, project_id: &str) -> Vec<String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT extension_name, extension_path FROM project_extensions WHERE project_id = ?1")
+            .prepare("SELECT extension_name FROM project_excluded_extensions WHERE project_id = ?1")
             .unwrap();
-        stmt.query_map(params![project_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        stmt.query_map(params![project_id], |row| row.get(0))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect()
     }
 
-    /// Update the resolved path for a specific project extension.
-    pub fn set_project_extension_path(&self, project_id: &str, name: &str, path: &str) -> Result<(), String> {
+    /// Replace a project's excluded extension list (full replace, same style
+    /// as `set_project_added_extensions`).
+    pub fn set_project_excluded_extensions(
+        &self,
+        project_id: &str,
+        extensions: &[String],
+    ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE project_extensions SET extension_path = ?1 WHERE project_id = ?2 AND extension_name = ?3",
-            params![path, project_id, name],
+            "DELETE FROM project_excluded_extensions WHERE project_id = ?1",
+            params![project_id],
         )
-        .map_err(|e| format!("set_project_extension_path: {}", e))?;
+        .map_err(|e| format!("clear project excluded extensions: {}", e))?;
+        let mut stmt = conn
+            .prepare("INSERT INTO project_excluded_extensions (project_id, extension_name) VALUES (?1, ?2)")
+            .map_err(|e| format!("prepare project excluded insert: {}", e))?;
+        for ext in extensions {
+            stmt.execute(params![project_id, ext])
+                .map_err(|e| format!("insert project excluded: {}", e))?;
+        }
         Ok(())
     }
 
@@ -509,15 +521,15 @@ impl Db {
         Ok(())
     }
 
-    /// Replace a project's extension list, re-resolving extension paths.
-    pub fn set_project_extensions(
+    /// Replace a project's added-extension list, re-resolving extension paths.
+    pub fn set_project_added_extensions(
         &self,
         project_id: &str,
         extensions: &[String],
     ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "DELETE FROM project_extensions WHERE project_id = ?1",
+            "DELETE FROM project_added_extensions WHERE project_id = ?1",
             params![project_id],
         )
         .map_err(|e| format!("clear project extensions: {}", e))?;
@@ -529,7 +541,7 @@ impl Db {
             )
             .unwrap_or_default();
         let mut stmt = conn
-            .prepare("INSERT INTO project_extensions (project_id, extension_name, extension_path) VALUES (?1, ?2, ?3)")
+            .prepare("INSERT INTO project_added_extensions (project_id, extension_name, extension_path) VALUES (?1, ?2, ?3)")
             .map_err(|e| format!("prepare project ext insert: {}", e))?;
         for ext in extensions {
             let path = super::project::resolve_extension_name(ext, &cwd)

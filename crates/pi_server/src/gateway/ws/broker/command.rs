@@ -8,11 +8,11 @@ use super::super::{
 use crate::{
     GatewayState,
     gateway::{
-        broadcast::push_sessions_list_to_clients, command, 
+        broadcast::push_sessions_list_to_clients, command,
         session_manager::{SessionManager, SessionResult, SessionActivity},
         ws::helper::extract_cwd,
         handlers::session::load_session,
-        project::resolve_project_extensions
+        project::effective_project_extensions
     },
 };
 
@@ -206,8 +206,24 @@ fn handle_switch_session(
                 notify_undeliverable(client_tx, &value, "missing_cwd");
                 return;
             };
-            let session_path = db_session.and_then(|s| s.session_path);
-            let extensions = resolve_project_extensions(&state.db, &cwd, &cwd);
+            let session_path = db_session.as_ref().and_then(|s| s.session_path.clone());
+            // Effective whitelist: global ∪ project − excluded. Resolve the
+            // linked project (or by cwd) to apply per-project exclusions.
+            let project_id = db_session
+                .as_ref()
+                .and_then(|s| s.project_id.clone())
+                .or_else(|| {
+                    state
+                        .db
+                        .list_projects(true)
+                        .into_iter()
+                        .find(|p| p.cwd == cwd)
+                        .map(|p| p.id)
+                });
+            let extensions = match project_id {
+                Some(pid) => effective_project_extensions(&state.db, &pid, &cwd),
+                None => crate::gateway::project::effective_global_extensions(&state.db, &cwd),
+            };
             // Load existing messages from session file (if it exists)
             let existing_messages: Vec<Value> = session_path
                 .as_ref()

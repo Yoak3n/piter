@@ -145,7 +145,7 @@ Gateway 负责管理多个 pi coding agent 进程实例，每个实例对应一�
 
 ### 扩展与包市场
 
-- **Installed**：查看/启用/禁用全局与项目级扩展（DB 中 `global_extensions` / `project_extensions`）
+- **Installed**：查看/启用/禁用全局与项目级扩展（DB 中 `global_extensions` 全局基准 + `project_added_extensions` 项目增量 + `project_excluded_extensions` 项目排除）
 - **Market**：通过 `pi install <source>` / `pi remove <source>` 管理包，安装成功后自动注册为全局扩展
 
 ### WebSocket 实时通信

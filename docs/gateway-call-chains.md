@@ -32,10 +32,10 @@ ws/mod.rs :: route_ui_message()
 │  │        ├─ db.create_project(id, name, cwd)                 [db.rs]  — INSERT projects
 │  │        └─ 返回 Project
 │  │
-│  ├─ resolve_project_extensions(db, project_id, cwd)           [project.rs]
-│  │  └─ db.get_project_extensions_with_paths(pid)              [db.rs]  — 直接从 DB 读取已索引的 (name, path) 对
-│  │     ├─ path 有效且文件存在 → 直接使用
-│  │     └─ path 为空或文件丢失 → 重新 resolve_extension_name(name, cwd) 并回写 DB
+│  ├─ effective_project_extensions(db, project_id, cwd)         [project.rs]  — 有效白名单 = (global ∪ 项目增加) − 项目排除
+│  │  ├─ db.get_global_extensions() + db.get_project_added_extensions(pid)  [db.rs]  — 合并启用集合
+│  │  ├─ 减去 db.get_project_excluded_extensions(pid)           [db.rs]  — 项目显式排除
+│  │  └─ 逐个 resolve_extension_name(name, cwd) → 文件路径列表（不可解析记 warn）
 │  │
 │  ├─ spawn_persistent_for_gateway(gw, cwd, &extensions)        [handlers/pi.rs]
 │  │  ├─ state.spawn().cwd(cwd).extensions(&exts).run()         [mod.rs]  — 启动 pi 子进程
@@ -120,7 +120,7 @@ session_manager.rs :: SessionManager::switch_session(sm, instance_id, client_id)
 ├─ load_session(session_path)                                    [handlers/session.rs]
 │  └─ 逐行读取 .jsonl → 筛选 type=="message" → 提取消息体
 │
-├─ resolve_project_extensions(db, cwd, cwd)
+├─ effective_project_extensions(db, project_id, cwd)  — 全局∪项目增加−排除 → 白名单路径
 ├─ resume_session(state, iid, cwd, session_path, None, &exts)    [handlers/pi.rs]
 │  └─ 使用持久化的 instance_id 和 session_path 恢复 pi
 │
@@ -275,7 +275,7 @@ dispatch_gateway_command() 或 create_project_handler()
 ├─ project::create_project(db, name, cwd, extensions)           [project.rs]
 │  ├─ uuid::Uuid::new_v4() → id
 │  ├─ db.create_project(id, name, cwd)                          [db.rs]  — INSERT projects
-│  └─ db.update_project(id, None, Some(&extensions))            [db.rs]  — DELETE + INSERT project_extensions
+│  └─ db.update_project(id, None, Some(&extensions))            [db.rs]  — DELETE + INSERT project_added_extensions
 │
 └─ 返回 Project → 响应客户端
 ```
@@ -292,7 +292,7 @@ project::update_project(db, id, name, extensions)                [project.rs]
 │  ├─ name 非空 → UPDATE projects.name + updated_at
 │  └─ extensions 非空 → DELETE 旧扩展 + INSERT 新扩展 + UPDATE updated_at
 ├─ db.get_project(id)                                            — 读取更新后的记录
-├─ db.get_project_extensions(id)                                 — 读取扩展列表
+├─ db.get_project_added_extensions(id)                           — 读取项目增量扩展列表
 └─ 返回 Project → 响应客户端
 ```
 
@@ -305,7 +305,8 @@ WS: {"command":"delete_project", "data":{id}}
 ▼
 project::delete_project(db, id)                                  [project.rs]
 └─ db.delete_project(id)                                         [db.rs]  — DELETE projects WHERE id=?
-   ├─ project_extensions: ON DELETE CASCADE → 自动删除
+   ├─ project_added_extensions: ON DELETE CASCADE → 自动删除
+   ├─ project_excluded_extensions: ON DELETE CASCADE → 自动删除
    └─ sessions.project_id: ON DELETE SET NULL → 关联会话变为孤儿
 ```
 

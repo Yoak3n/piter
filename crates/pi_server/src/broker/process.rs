@@ -124,6 +124,11 @@ impl SpawnBuilder {
         // ── Build pi CLI args ─────────────────────────────────────────
         let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
 
+        // Extensions are fully controlled by piter's whitelist: `-e` paths are
+        // the only source pi loads (auto-discovery and settings packages are
+        // ignored), which is what allows projects to exclude global extensions.
+        args.push("--no-extensions".into());
+
         if let Some(ref sp) = self.session_path {
             args.push("--session".into());
             args.push(sp.clone());

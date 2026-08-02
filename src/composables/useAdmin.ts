@@ -75,7 +75,9 @@ export interface ExtensionEntry {
 
 export interface ProjectExtensionState extends ProjectBrief {
   extensions: ExtensionEntry[];
-  enabled: string[];
+  /** Extensions this project adds on top of the global list. */
+  added: string[];
+  excluded: string[];
 }
 
 export interface ExtensionOverview {
@@ -369,6 +371,17 @@ export function useAdmin() {
     }
   }
 
+  /** Lazily load one project's extension candidates (called when selected). */
+  async function fetchProjectExtensionOverview(projectId: string): Promise<ProjectExtensionState | null> {
+    error.value = "";
+    try {
+      return await invoke<ProjectExtensionState>("get_project_extension_overview", { projectId });
+    } catch (e) {
+      error.value = `Failed to load project extensions: ${e}`;
+      return null;
+    }
+  }
+
   async function saveGlobalExtensions(extensions: string[]): Promise<boolean> {
     error.value = "";
     try {
@@ -380,13 +393,24 @@ export function useAdmin() {
     }
   }
 
-  async function saveProjectExtensions(projectId: string, extensions: string[]): Promise<boolean> {
+  async function saveProjectAddedExtensions(projectId: string, extensions: string[]): Promise<boolean> {
     error.value = "";
     try {
-      await invoke("set_project_extensions", { projectId, extensions });
+      await invoke("set_project_added_extensions", { projectId, extensions });
       return true;
     } catch (e) {
       error.value = `Failed to save project extensions: ${e}`;
+      return false;
+    }
+  }
+
+  async function saveProjectExcludedExtensions(projectId: string, extensions: string[]): Promise<boolean> {
+    error.value = "";
+    try {
+      await invoke("set_project_excluded_extensions", { projectId, extensions });
+      return true;
+    } catch (e) {
+      error.value = `Failed to save project exclusions: ${e}`;
       return false;
     }
   }
@@ -477,8 +501,10 @@ export function useAdmin() {
     startPiGateway,
     uninstallPi,
     fetchExtensionOverview,
+    fetchProjectExtensionOverview,
     saveGlobalExtensions,
-    saveProjectExtensions,
+    saveProjectAddedExtensions,
+    saveProjectExcludedExtensions,
     fetchPiAuthStatus,
     setPiApiKey,
     removePiApiKey,

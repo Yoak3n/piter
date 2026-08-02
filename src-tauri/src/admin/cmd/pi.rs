@@ -184,6 +184,10 @@ pub async fn install_pi_package(
             if let Err(e) = gw.db.add_global_extension(&source) {
                 log::warn!("[admin] failed to register {} in DB: {}", source, e);
             }
+            // Disk layout changed — drop the candidate cache and rescan in the
+            // background so Installed reflects the new package.
+            pi_server::gateway::ext_cache::invalidate_all(gw);
+            super::extensions::refresh_extension_cache(gw.clone(), app.clone());
         }
         log::info!("[admin] installed pi package {}", source);
         Ok(())
@@ -212,6 +216,10 @@ pub async fn remove_pi_package(
             if let Err(e) = gw.db.remove_global_extension(&source) {
                 log::warn!("[admin] failed to remove {} from DB: {}", source, e);
             }
+            // Disk layout changed — drop the candidate cache and rescan in the
+            // background so Installed reflects the removal.
+            pi_server::gateway::ext_cache::invalidate_all(gw);
+            super::extensions::refresh_extension_cache(gw.clone(), app.clone());
         }
         log::info!("[admin] removed pi package {}", source);
         Ok(())

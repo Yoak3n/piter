@@ -1,39 +1,99 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { listen } from "@tauri-apps/api/event";
 import {
   Globe, FolderKanban, Loader2, RefreshCw, Inbox, Puzzle,
 } from "lucide-vue-next";
 import {
   useAdmin,
   type ExtensionOverview,
+  type ExtensionEntry,
 } from "../../composables/useAdmin";
 
-const { fetchExtensionOverview, saveGlobalExtensions, saveProjectExtensions } = useAdmin();
+const {
+  fetchExtensionOverview,
+  fetchProjectExtensionOverview,
+  saveGlobalExtensions,
+  saveProjectAddedExtensions,
+  saveProjectExcludedExtensions,
+} = useAdmin();
 
 const overview = ref<ExtensionOverview | null>(null);
 const loading = ref(false);
 const selectedProjectId = ref("");
 
-// Mutable enabled sets (preserve extra DB entries not shown as toggles)
+// Mutable sets (preserve extra DB entries not shown as toggles)
 const globalEnabled = ref<Set<string>>(new Set());
+// project_added_extensions — the "added on top of global" list per project.
 const projectEnabled = ref<Map<string, Set<string>>>(new Map());
+// project_excluded_extensions — extensions explicitly disabled per project.
+const projectExcluded = ref<Map<string, Set<string>>>(new Map());
+
+// Per-project candidates, loaded lazily when a project is selected (the disk
+// scan is the slow part). Cached so switching back is instant.
+const projectCandidates = ref<Map<string, ExtensionEntry[]>>(new Map());
+const loadingProject = ref(false);
 
 const selectedProject = computed(() =>
   overview.value?.projects.find((p) => p.id === selectedProjectId.value)
 );
 
-async function loadOverview() {
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+async function loadOverview(preserveState = false) {
   loading.value = true;
   overview.value = await fetchExtensionOverview();
-  globalEnabled.value = new Set(overview.value?.enabled_global ?? []);
-  projectEnabled.value = new Map(
-    (overview.value?.projects ?? []).map((p) => [p.id, new Set(p.enabled)])
-  );
+  // Background refresh events re-render candidates but must not clobber the
+  // sets the user is currently toggling.
+  if (!preserveState) {
+    globalEnabled.value = new Set(overview.value?.enabled_global ?? []);
+    projectEnabled.value = new Map(
+      (overview.value?.projects ?? []).map((p) => [p.id, new Set(p.added)])
+    );
+    projectExcluded.value = new Map(
+      (overview.value?.projects ?? []).map((p) => [p.id, new Set(p.excluded)])
+    );
+  }
   if (!selectedProjectId.value && overview.value?.projects.length) {
     selectedProjectId.value = overview.value.projects[0].id;
   }
   loading.value = false;
 }
+
+// Lazy-load candidates for the selected project (cache hit → instant).
+async function loadProjectCandidates(pid: string) {
+  if (projectCandidates.value.has(pid)) return;
+  loadingProject.value = true;
+  const detail = await fetchProjectExtensionOverview(pid);
+  if (detail) {
+    projectCandidates.value.set(pid, detail.extensions);
+    projectCandidates.value = new Map(projectCandidates.value);
+  }
+  loadingProject.value = false;
+}
+
+watch(selectedProjectId, (pid) => {
+  if (pid) loadProjectCandidates(pid);
+});
+
+// The backend rescans in the background (cached snapshot is returned first);
+// when the scan differs, it emits `extension_overview_updated` so this tab
+// refreshes automatically.
+let unlisten: (() => void) | undefined;
+onMounted(async () => {
+  loadOverview();
+  if (isTauri) {
+    unlisten = await listen("extension_overview_updated", async () => {
+      await loadOverview(true);
+      // Disk layout may have changed — drop cached candidates and re-fetch the
+      // currently selected project.
+      projectCandidates.value = new Map();
+      const pid = selectedProjectId.value;
+      if (pid) await loadProjectCandidates(pid);
+    });
+  }
+});
+onUnmounted(() => unlisten?.());
 
 // Serialize saves: `set_*_extensions` replaces the whole list, so concurrent
 // toggles must not race each other. Each queued save reads the latest state.
@@ -53,25 +113,58 @@ async function toggleGlobal(name: string, checked: boolean) {
   });
 }
 
-async function toggleProject(name: string, checked: boolean) {
-  const projectId = selectedProjectId.value;
-  if (!projectId) return;
-  const next = new Set(projectEnabled.value.get(projectId) ?? []);
-  if (checked) next.add(name);
-  else next.delete(name);
-  projectEnabled.value.set(projectId, next);
+// ── Tri-state project extension control ────────────────────────────────────
+// Effective model: (global ∪ project_added) − project_excluded.
+// Each candidate row shows the two relevant states for its kind:
+//   global-backed → 继承全局 (default) ↔ 排除
+//   project-only  → 未启用 ↔ 启用
+type ExtState = "inherit" | "enabled" | "excluded" | "off";
+
+function projectExtState(name: string): ExtState {
+  const pid = selectedProjectId.value;
+  if (!pid) return "off";
+  if (projectExcluded.value.get(pid)?.has(name)) return "excluded";
+  if (globalEnabled.value.has(name)) return "inherit";
+  if (projectEnabled.value.get(pid)?.has(name)) return "enabled";
+  return "off";
+}
+
+function extOptions(name: string): { value: ExtState; label: string }[] {
+  return globalEnabled.value.has(name)
+    ? [
+        { value: "inherit", label: "继承全局" },
+        { value: "excluded", label: "排除" },
+      ]
+    : [
+        { value: "off", label: "未启用" },
+        { value: "enabled", label: "启用" },
+      ];
+}
+
+function setProjectExtState(name: string, next: ExtState) {
+  const pid = selectedProjectId.value;
+  if (!pid) return;
+  const enabled = new Set(projectEnabled.value.get(pid) ?? []);
+  const excluded = new Set(projectExcluded.value.get(pid) ?? []);
+  if (next === "excluded") excluded.add(name);
+  else excluded.delete(name);
+  if (next === "enabled") enabled.add(name);
+  else enabled.delete(name);
+  projectEnabled.value.set(pid, enabled);
+  projectExcluded.value.set(pid, excluded);
   projectEnabled.value = new Map(projectEnabled.value);
+  projectExcluded.value = new Map(projectExcluded.value);
+  enqueueSaveProject(pid);
+}
+
+function enqueueSaveProject(pid: string) {
   enqueueSave(async () => {
-    const current = projectEnabled.value.get(projectId) ?? new Set<string>();
-    await saveProjectExtensions(projectId, [...current]);
+    const enabled = [...(projectEnabled.value.get(pid) ?? new Set<string>())];
+    const excluded = [...(projectExcluded.value.get(pid) ?? new Set<string>())];
+    await saveProjectAddedExtensions(pid, enabled);
+    await saveProjectExcludedExtensions(pid, excluded);
   });
 }
-
-function isProjectEnabled(name: string): boolean {
-  return projectEnabled.value.get(selectedProjectId.value)?.has(name) ?? false;
-}
-
-onMounted(loadOverview);
 </script>
 
 <template>
@@ -84,7 +177,7 @@ onMounted(loadOverview);
           gateway database. Installing/uninstalling packages is done in the Market tab.
         </p>
       </div>
-      <button class="btn btn-sm" :disabled="loading" @click="loadOverview">
+      <button class="btn btn-sm" :disabled="loading" @click="loadOverview()">
         <RefreshCw :size="12" :class="{ spin: loading }" />
         {{ loading ? "Loading..." : "Refresh" }}
       </button>
@@ -97,7 +190,7 @@ onMounted(loadOverview);
           <Globe :size="14" class="section-icon" />
           <span>Global Extensions</span>
         </div>
-        <p class="section-desc">Discovered in ~/.pi/agent/extensions/ and from installed packages. Enabled for every Pi session.</p>
+        <p class="section-desc">Discovered in ~/.pi/agent/extensions/ and from installed packages. Enabled for every Pi session. Only enabled extensions are passed to Pi — auto-discovery is disabled.</p>
       </div>
 
       <div v-if="loading" class="loading-row">
@@ -137,7 +230,11 @@ onMounted(loadOverview);
           <FolderKanban :size="14" class="section-icon" />
           <span>Project Extensions</span>
         </div>
-        <p class="section-desc">Includes globally available and project-local extensions. Enabled only for this project.</p>
+        <p class="section-desc">
+          Based on the global list: global-enabled extensions are inherited by
+          default and can be excluded for this project; project-local/package
+          extensions can be enabled per project.
+        </p>
       </div>
 
       <div v-if="loading" class="loading-row">
@@ -162,25 +259,37 @@ onMounted(loadOverview);
             </option>
           </select>
 
-          <div v-if="selectedProject && selectedProject.extensions.length === 0" class="empty-row">
+          <div v-if="selectedProject && (loadingProject || !projectCandidates.get(selectedProject.id))" class="loading-row">
+            <Loader2 :size="12" class="spin" />
+            <span>Loading project extensions...</span>
+          </div>
+
+          <div v-else-if="selectedProject && (projectCandidates.get(selectedProject.id) ?? []).length === 0" class="empty-row">
             <Inbox :size="20" class="empty-icon" />
             <span>No extensions or packages found for this project</span>
           </div>
 
           <div v-else-if="selectedProject" class="ext-list">
-            <div v-for="ext in selectedProject.extensions" :key="ext.name" class="ext-item">
+            <div
+              v-for="ext in projectCandidates.get(selectedProject.id) ?? []"
+              :key="ext.name"
+              class="ext-item"
+            >
               <div class="ext-info">
                 <Puzzle :size="13" class="ext-icon" />
                 <span class="ext-name">{{ ext.name }}</span>
               </div>
-              <label class="toggle" :class="{ on: isProjectEnabled(ext.name) }">
-                <input
-                  type="checkbox"
-                  :checked="isProjectEnabled(ext.name)"
-                  @change="toggleProject(ext.name, ($event.target as HTMLInputElement).checked)"
-                />
-                <span class="toggle-track"></span>
-              </label>
+              <div class="ext-seg">
+                <button
+                  v-for="opt in extOptions(ext.name)"
+                  :key="opt.value"
+                  class="seg-btn"
+                  :class="{ active: projectExtState(ext.name) === opt.value }"
+                  @click="setProjectExtState(ext.name, opt.value)"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
             </div>
           </div>
         </template>
@@ -320,6 +429,35 @@ onMounted(loadOverview);
 
 .project-select {
   font-size: var(--font-size-caption);
+}
+
+.ext-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.seg-btn {
+  border: none;
+  background: var(--bg-panel);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-caption);
+  padding: 2px 10px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--border);
+}
+.seg-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.seg-btn.active {
+  background: var(--accent);
+  color: var(--bg-panel);
 }
 
 .spin {
