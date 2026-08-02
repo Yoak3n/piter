@@ -6,6 +6,10 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const props = defineProps<{
   projects: Array<{ path: string; name: string }>
   mobileMode: boolean
+  /** 预选的工作目录（点击侧栏项目级 "+" 时传入，快速为该目录建会话） */
+  initialCwd?: string
+  /** 预选的项目名（与 initialCwd 配套，用于选中 DB 中匹配的项目） */
+  initialName?: string
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +35,23 @@ async function fetchProjects() {
     error.value = errorMsg
     console.error(errorMsg)
   }
+  preselectProject()
+}
+
+// 预选 initialCwd 对应的 DB 项目：优先 (cwd+name) 精确匹配，其次 cwd 匹配；
+// DB 尚未收录时退化为"新建项目"并预填名称，保证创建时项目名正确。
+function preselectProject() {
+  if (!props.initialCwd) return
+  const match =
+    dbProjects.value.find(p => p.cwd === props.initialCwd && p.name === props.initialName) ??
+    dbProjects.value.find(p => p.cwd === props.initialCwd)
+  if (match) {
+    selectedProjectId.value = match.id
+    createNewProject.value = false
+  } else if (props.initialName) {
+    createNewProject.value = true
+    newProjectName.value = props.initialName
+  }
 }
 
 // 根据项目的path来去重？我不需要啊
@@ -52,7 +73,9 @@ const matchingProjects = computed(() =>
 
 onMounted(() => {
   fetchProjects()
-  if (uniqueDirs.value.length > 0) {
+  if (props.initialCwd) {
+    selectedCwd.value = props.initialCwd
+  } else if (uniqueDirs.value.length > 0) {
     selectedCwd.value = uniqueDirs.value[0].path
   }
 })

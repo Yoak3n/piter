@@ -13,7 +13,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "select-session", instanceId: string): void;
   (e: "delete-session", instanceId: string): void;
-  (e: "new-session", cwd?: string): void;
+  (e: "new-session", cwd?: string, name?: string): void;
 }>();
 
 const projects = ref<ProjectGroup[]>([]);
@@ -230,7 +230,7 @@ onMounted(fetchSessions);
             <button
               class="project-new-btn"
               title="New chat"
-              @click.stop="emit('new-session', project.path)"
+              @click.stop="emit('new-session', project.path, project.name)"
             >
               <Plus :size="12" />
             </button>

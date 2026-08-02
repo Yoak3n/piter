@@ -60,6 +60,8 @@ const sidebarOpen = ref(window.innerWidth > 640);
 const sessionName = ref("");
 const modelId = ref<ModelRef | null>(null);
 const showNewSession = ref(true);
+const newSessionCwd = ref("");
+const newSessionName = ref("");
 const pendingFirstMessage = ref<string | null>(null);
 
 // Per-session input drafts, keyed by instanceId.
@@ -129,7 +131,10 @@ function handleDeleteSession(instanceId: string) {
 }
 
 // Global "+" or per-project "+" — show the new session pane
-function handleNewSession(_cwd?: string) {
+// (per-project "+" carries the project cwd+name so the pane preselects them)
+function handleNewSession(cwd?: string, name?: string) {
+  newSessionCwd.value = cwd || "";
+  newSessionName.value = name || "";
   showNewSession.value = true;
   if (mobileMode.value) closeSidebar();
 }
@@ -215,6 +220,8 @@ watch(sessionStatus, (status) => {
       <NewSessionPane
         v-if="showNewSession"
         :projects="wsSessions.map(p => ({ path: p.path, name: p.name }))"
+        :initial-cwd="newSessionCwd"
+        :initial-name="newSessionName"
         :mobile-mode="mobileMode"
         @create="handleCreateSession"
       />

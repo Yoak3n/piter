@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, nextTick, watch, onMounted } from "vue";
 import { Copy, Check } from "lucide-vue-next";
 import { marked } from "marked";
 import { formatMessageTime } from "../../utils/message";
@@ -27,14 +27,14 @@ function escapeHtml(t: string): string {
 const showTime = computed(() => props.mode !== "streaming" && !!props.timestamp);
 const timeLabel = computed(() => (props.timestamp ? formatMessageTime(props.timestamp) : ""));
 
-// Copy to clipboard
-const copied = ref(false);
-function copyToClipboard() {
-  const doCopy = navigator.clipboard
-    ? navigator.clipboard.writeText(props.content)
+// ─── Copy helpers ─────────────────────────────────────────────────────────
+
+function copyText(text: string): Promise<void> {
+  return navigator.clipboard
+    ? navigator.clipboard.writeText(text)
     : new Promise<void>((resolve) => {
         const ta = document.createElement("textarea");
-        ta.value = props.content;
+        ta.value = text;
         ta.style.cssText = "position:fixed;left:-9999px";
         document.body.appendChild(ta);
         ta.select();
@@ -42,23 +42,103 @@ function copyToClipboard() {
         document.body.removeChild(ta);
         resolve();
       });
-  doCopy.then(() => {
+}
+
+// Copy the whole message
+const copied = ref(false);
+function copyMessage() {
+  copyText(props.content).then(() => {
     copied.value = true;
     setTimeout(() => { copied.value = false; }, 1500);
   });
 }
+
+// ─── Per-code-block copy ──────────────────────────────────────────────────
+// The markdown is injected via v-html, so we decorate the rendered `<pre>`
+// elements after each render: wrap them in a `.code-block` header carrying a
+// copy button. Clicks are handled by event delegation; the code text is read
+// from the DOM (`pre.innerText`) so no HTML-escaping is involved.
+
+const COPY_ICON =
+  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+const CHECK_ICON =
+  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
+const bodyRef = ref<HTMLElement | null>(null);
+
+function decorateCodeBlocks(root: HTMLElement) {
+  root.querySelectorAll<HTMLPreElement>("pre").forEach((pre) => {
+    if (pre.parentElement?.classList.contains("code-block")) return;
+    const lang =
+      pre.querySelector("code")?.className.match(/language-([\w-]+)/)?.[1] || "";
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "code-block";
+
+    const header = document.createElement("div");
+    header.className = "code-block-header";
+
+    const langEl = document.createElement("span");
+    langEl.className = "code-lang";
+    langEl.textContent = lang || "code";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "code-copy-btn";
+    btn.title = "Copy code";
+    btn.setAttribute("aria-label", "Copy code");
+    btn.innerHTML = COPY_ICON;
+
+    header.append(langEl, btn);
+    wrapper.append(header, pre);
+    root.insertBefore(wrapper, pre);
+  });
+}
+
+function handleBodyClick(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  const btn = target.closest<HTMLButtonElement>(".code-copy-btn");
+  if (!btn) return;
+  const pre = btn.closest<HTMLElement>(".code-block")?.querySelector("pre");
+  if (!pre) return;
+  copyText(pre.innerText).then(() => {
+    btn.classList.add("copied");
+    btn.innerHTML = CHECK_ICON;
+    setTimeout(() => {
+      btn.classList.remove("copied");
+      btn.innerHTML = COPY_ICON;
+    }, 1500);
+  });
+}
+
+watch(
+  () => [props.content, props.mode] as const,
+  () => {
+    nextTick(() => bodyRef.value && decorateCodeBlocks(bodyRef.value));
+  },
+  { flush: "post" },
+);
+
+onMounted(() => {
+  bodyRef.value && decorateCodeBlocks(bodyRef.value);
+});
 </script>
 
 <template>
   <div class="msg" :class="mode === 'user' ? 'user-msg' : 'assistant-msg'">
     <div class="msg-bubble" :class="mode === 'user' ? 'user-bubble' : 'assistant-bubble'">
-      <div class="markdown-body" v-html="renderMarkdown(content)" />
+      <div
+        class="markdown-body"
+        ref="bodyRef"
+        v-html="renderMarkdown(content)"
+        @click="handleBodyClick"
+      />
       <button
         v-if="mode === 'assistant'"
         class="copy-btn"
         :class="{ copied }"
         aria-label="Copy message"
-        @click="copyToClipboard"
+        @click="copyMessage"
       >
         <Check v-if="copied" :size="12" />
         <Copy v-else :size="12" />
@@ -97,9 +177,18 @@ function copyToClipboard() {
 .markdown-body :deep(p){ margin:0.2em 0; }
 .markdown-body :deep(ul),.markdown-body :deep(ol){ margin:0.2em 0; padding-left:1.4em; }
 .markdown-body :deep(code){ font-family:var(--font-family-mono); font-size:0.85em; background:var(--color-bg-muted); padding:1px 4px; border-radius:3px; }
-.markdown-body :deep(pre){ margin:0.4em 0; padding:10px; background:var(--color-code-bg); color:var(--color-code-text); border-radius:8px; overflow-x:auto; font-family:var(--font-family-mono); font-size:11px; }
-.markdown-body :deep(pre code){ background:none; padding:0; }
+.markdown-body :deep(pre){ margin:0; padding:10px 12px; background:var(--color-code-bg); color:var(--color-code-text); border-radius:0 0 8px 8px; overflow-x:auto; font-family:var(--font-family-mono); font-size:13px; line-height:1.6; }
+.markdown-body :deep(pre code){ background:none; padding:0; font-size:inherit; }
 .markdown-body :deep(blockquote){ margin:0.3em 0; padding-left:10px; border-left:2px solid var(--color-border-strong); color:var(--color-text-secondary); }
+
+/* Code block wrapper (decorated at runtime: header + pre) */
+.markdown-body :deep(.code-block){ margin:0.4em 0; border-radius:8px; overflow:hidden; background:var(--color-code-bg); }
+.markdown-body :deep(.code-block-header){ display:flex; align-items:center; justify-content:space-between; padding:3px 6px 3px 12px; background:color-mix(in srgb, var(--color-code-bg) 70%, #000 30%); border-bottom:1px solid color-mix(in srgb, var(--color-code-bg) 80%, #fff 10%); }
+.markdown-body :deep(.code-lang){ font-family:var(--font-family-mono); font-size:11px; color:var(--color-text-tertiary); user-select:none; text-transform:lowercase; }
+.markdown-body :deep(.code-copy-btn){ display:flex; align-items:center; justify-content:center; width:22px; height:22px; border:none; border-radius:4px; background:transparent; color:var(--color-text-tertiary); cursor:pointer; opacity:0; transition:opacity 0.15s, background 0.15s, color 0.15s; }
+.markdown-body :deep(.code-block:hover .code-copy-btn){ opacity:0.7; }
+.markdown-body :deep(.code-copy-btn:hover){ opacity:1 !important; background:color-mix(in srgb, var(--color-code-text) 12%, transparent); }
+.markdown-body :deep(.code-copy-btn.copied){ opacity:1 !important; color:#34d399; }
 
 @media (max-width: 640px) {
   .msg { max-width:95%; }
