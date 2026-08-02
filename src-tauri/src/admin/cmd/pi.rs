@@ -176,7 +176,7 @@ pub async fn install_pi_package(
         return Err("Package source is empty".into());
     }
     let source = source.trim().to_string();
-    let gw_opt = gw.inner().lock().clone();
+    let gw_opt: Option<std::sync::Arc<pi_server::gateway::GatewayState>> = gw.inner().lock().clone();
     tokio::task::spawn_blocking(move || {
         let bin = crate::pi::try_resolve_pi_binary(&app)?;
         run_pi_command(&bin, &["install".to_string(), source.clone()])?;
@@ -208,7 +208,7 @@ pub async fn remove_pi_package(
         return Err("Package source is empty".into());
     }
     let source = source.trim().to_string();
-    let gw_opt = gw.inner().lock().clone();
+    let gw_opt: Option<std::sync::Arc<pi_server::gateway::GatewayState>> = gw.inner().lock().clone();
     tokio::task::spawn_blocking(move || {
         let bin = crate::pi::try_resolve_pi_binary(&app)?;
         run_pi_command(&bin, &["remove".to_string(), source.clone()])?;
