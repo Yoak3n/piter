@@ -48,7 +48,20 @@ pub fn get_lan_info(state: &GatewayState) -> LanInfoResponse {
 }
 
 pub fn get_git_branch() -> GitBranchResponse {
-    let branch = std::process::Command::new("git")
+    // git is a console app; without CREATE_NO_WINDOW a console window
+    // flashes when spawned from the GUI-subsystem piter.exe.
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut c = std::process::Command::new("git");
+        c.creation_flags(CREATE_NO_WINDOW);
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = std::process::Command::new("git");
+
+    let branch = cmd
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .ok()

@@ -18,7 +18,14 @@ pub fn discover_lan_ips() -> Vec<String> {
 
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = std::process::Command::new("ipconfig").output() {
+        // ipconfig is a console app; without CREATE_NO_WINDOW a console
+        // window flashes when spawned from the GUI-subsystem piter.exe.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        if let Ok(output) = std::process::Command::new("ipconfig")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
                 let line = line.trim();
