@@ -530,6 +530,11 @@ impl SessionManager {
         self.sessions
             .values()
             .filter_map(|s| {
+                // 已卸载的会话不应再次过期：mark_unloaded 只改 activity，
+                // disconnected_since 仍在，否则每轮 cleanup 都会重复命中。
+                if s.activity == SessionActivity::Unloaded {
+                    return None;
+                }
                 if let Some(since) = &s.disconnected_since {
                     if now.duration_since(*since) > self.idle_timeout {
                         return Some(s.instance_id.clone());

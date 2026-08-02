@@ -395,6 +395,13 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
     let Some(event_type) = val.get("type").and_then(serde_json::Value::as_str) else {
         return;
     };
+
+    // Gateway internal event (no instanceId) — handle before instanceId guard.
+    if event_type == "session_cleanup" {
+        push_sessions_list_to_clients(state);
+        return;
+    }
+
     let Some(iid) = pi_rpc::event::extract_instance_id(&val) else {
         return;
     };
@@ -418,12 +425,6 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
     // ── 5b. Refresh pi state after agent finishes handling a message ──
     if event_type == "agent_end" {
         command::send_get_state(state, &instance_id);
-    }
-
-    // ── 6. Push if session state changed (active↔idle transitions) ───
-    if event_type == "session_cleanup" {
-        push_sessions_list_to_clients(state);
-        return;
     }
 
     // Persist any auto-generated session names to DB

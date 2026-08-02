@@ -90,8 +90,11 @@ function decorateCodeBlocks(root: HTMLElement) {
     btn.innerHTML = COPY_ICON;
 
     header.append(langEl, btn);
-    wrapper.append(header, pre);
-    root.insertBefore(wrapper, pre);
+    wrapper.append(header);
+    // 先让 wrapper 占据 pre 的位置（此时 pre 仍是 root 的子节点），
+    // 再把 pre 移入 wrapper——避免先移动 pre 导致 insertBefore 抛 NotFoundError。
+    pre.replaceWith(wrapper);
+    wrapper.append(pre);
   });
 }
 
@@ -154,7 +157,7 @@ onMounted(() => {
 .user-msg { align-self:flex-end; align-items:flex-end; }
 .assistant-msg { align-self:flex-start; align-items:flex-start; }
 
-.msg-bubble { border-radius:12px; padding:8px 12px; line-height:1.5; font-size:13px; position:relative; min-width:0; }
+.msg-bubble { border-radius:12px; padding:8px 12px; line-height:1.5; font-size:13px; position:relative; min-width:0; max-width:100%; }
 .user-bubble { background:var(--color-accent-soft); border:1px solid color-mix(in srgb, var(--color-accent) 15%, transparent); }
 .assistant-bubble { background:var(--color-bg-panel); border:1px solid var(--color-border-subtle); }
 
@@ -177,12 +180,27 @@ onMounted(() => {
 .markdown-body :deep(p){ margin:0.2em 0; }
 .markdown-body :deep(ul),.markdown-body :deep(ol){ margin:0.2em 0; padding-left:1.4em; }
 .markdown-body :deep(code){ font-family:var(--font-family-mono); font-size:0.85em; background:var(--color-bg-muted); padding:1px 4px; border-radius:3px; }
-.markdown-body :deep(pre){ margin:0; padding:10px 12px; background:var(--color-code-bg); color:var(--color-code-text); border-radius:0 0 8px 8px; overflow-x:auto; font-family:var(--font-family-mono); font-size:13px; line-height:1.6; }
+.markdown-body :deep(pre){ margin:0; padding:10px 12px; background:var(--color-code-bg); color:var(--color-code-text); border-radius:0 0 8px 8px; overflow-x:auto; scrollbar-width:thin; scrollbar-color:color-mix(in srgb, var(--color-code-text) 25%, transparent) transparent; font-family:var(--font-family-mono); font-size:13px; line-height:1.6; }
+/* 代码块内横向滚动条：细滚动条，内容超宽时可见可横滚（PC/移动端一致） */
+.markdown-body :deep(pre::-webkit-scrollbar){ height:6px; }
+.markdown-body :deep(pre::-webkit-scrollbar-track){ background:transparent; }
+.markdown-body :deep(pre::-webkit-scrollbar-thumb){ background:color-mix(in srgb, var(--color-code-text) 25%, transparent); border-radius:3px; }
+.markdown-body :deep(pre::-webkit-scrollbar-thumb:hover){ background:color-mix(in srgb, var(--color-code-text) 45%, transparent); }
 .markdown-body :deep(pre code){ background:none; padding:0; font-size:inherit; }
 .markdown-body :deep(blockquote){ margin:0.3em 0; padding-left:10px; border-left:2px solid var(--color-border-strong); color:var(--color-text-secondary); }
 
+/* 表格：块内横向滚动，列宽自适应容器，不撑破文档 */
+.markdown-body :deep(table){ display:block; max-width:100%; overflow-x:auto; border-collapse:collapse; }
+.markdown-body :deep(th), .markdown-body :deep(td){ padding:4px 8px; border:1px solid var(--color-border-subtle); }
+
+/* 图片：限制最大宽度，避免大图/带宽度属性图片溢出被裁剪 */
+.markdown-body :deep(img){ max-width:100%; height:auto; }
+
+/* 兜底：所有子元素不超出容器（防御内联 HTML / 固定宽度元素） */
+.markdown-body :deep(*){ max-width:100%; }
+
 /* Code block wrapper (decorated at runtime: header + pre) */
-.markdown-body :deep(.code-block){ margin:0.4em 0; border-radius:8px; overflow:hidden; background:var(--color-code-bg); }
+.markdown-body :deep(.code-block){ margin:0.4em 0; border-radius:8px; overflow:hidden; max-width:100%; min-width:0; background:var(--color-code-bg); }
 .markdown-body :deep(.code-block-header){ display:flex; align-items:center; justify-content:space-between; padding:3px 6px 3px 12px; background:color-mix(in srgb, var(--color-code-bg) 70%, #000 30%); border-bottom:1px solid color-mix(in srgb, var(--color-code-bg) 80%, #fff 10%); }
 .markdown-body :deep(.code-lang){ font-family:var(--font-family-mono); font-size:11px; color:var(--color-text-tertiary); user-select:none; text-transform:lowercase; }
 .markdown-body :deep(.code-copy-btn){ display:flex; align-items:center; justify-content:center; width:22px; height:22px; border:none; border-radius:4px; background:transparent; color:var(--color-text-tertiary); cursor:pointer; opacity:0; transition:opacity 0.15s, background 0.15s, color 0.15s; }
