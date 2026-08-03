@@ -204,7 +204,7 @@ fn get_dist_path(app: &AppHandle) -> PathBuf {
         let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
-            .join("web")
+            .join("chat")
             .join("dist");
         if dev_path.exists() {
             return dev_path;
@@ -212,7 +212,7 @@ fn get_dist_path(app: &AppHandle) -> PathBuf {
     }
     app.path()
         .resource_dir()
-        .map(|p| p.join("web-frontend"))
+        .map(|p| p.join("chat"))
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 

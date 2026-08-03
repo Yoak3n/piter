@@ -23,6 +23,11 @@ function prewarmDevServer(): Plugin {
 export default defineConfig({
   plugins: [vue(), prewarmDevServer()],
   clearScreen: false,
+  // Usage tab (echarts) chunk is ~595KB min — verified lower bound after
+  // tree-shaking; raise the warning limit instead of splitting it further.
+  build: {
+    chunkSizeWarningLimit: 700,
+  },
   server: {
     port: 1420,
     strictPort: true,

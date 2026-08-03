@@ -27,17 +27,17 @@
 
 | 模块 | 状态 | 功能说明 |
 |---|---|---|
-| **ChatPane.vue** (web/) | ✅ 完成 | Markdown 渲染、流式输出、按 turn 分组的对话界面 |
-| **Composer / MessageTimeline / ThinkingBlock / ToolCard** (web/) | ✅ 完成 | 输入区、消息时间线、AI 思考过程、工具调用展示 |
-| **SessionSidebar.vue** (web/) | ✅ 完成 | 按项目分组的会话列表 |
-| **ModelSelector.vue** (web/) | ✅ 完成 | 模型选择组件 |
-| **usePiConnection** (web/) | ✅ 完成 | WebSocket 客户端，含事件处理/自动重连/消息管理 |
-| **useSessions** (web/) | ✅ 完成 | 会话 CRUD 的 REST API 集成 |
+| **ChatPane.vue** (chat/) | ✅ 完成 | Markdown 渲染、流式输出、按 turn 分组的对话界面 |
+| **Composer / MessageTimeline / ThinkingBlock / ToolCard** (chat/) | ✅ 完成 | 输入区、消息时间线、AI 思考过程、工具调用展示 |
+| **SessionSidebar.vue** (chat/) | ✅ 完成 | 按项目分组的会话列表 |
+| **ModelSelector.vue** (chat/) | ✅ 完成 | 模型选择组件 |
+| **usePiConnection** (chat/) | ✅ 完成 | WebSocket 客户端，含事件处理/自动重连/消息管理 |
+| **useSessions** (chat/) | ✅ 完成 | 会话 CRUD 的 REST API 集成 |
 | **AdminView.vue** (src/) | ✅ 完成 | 管理面板主视图 |
 | **AdminNav.vue** (src/) | ✅ 完成 | 分组导航（Status/Usage、Pi 分组、Extensions 分组、Appearance） |
 | **StatusTab / UsageTab / PiConfigTab / ProvidersTab / PiVersionsTab / ExtensionsTab / MarketplaceTab / AppearanceTab** (src/) | ✅ 完成 | 管理面板各标签页 |
 | **useAdmin / useMarketplace** (src/) | ✅ 完成 | 管理命令与包市场集成 |
-| **design-system.css** (src/ + web/) | ✅ 完成 | CSS 主题变量与基础样式系统（system/light/dark） |
+| **design-system.css** (src/ + chat/) | ✅ 完成 | CSS 主题变量与基础样式系统（system/light/dark） |
 
 ## 三、对比 Picot 的功能对照
 

@@ -138,7 +138,7 @@ function handleCreate() {
   <div class="welcome-pane">
     <div class="welcome-content">
       <div class="welcome-header">
-        <h1>Piter</h1>
+        <h1>Piter Chat</h1>
         <p class="tagline">Start a conversation</p>
       </div>
 

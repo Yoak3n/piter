@@ -20,7 +20,7 @@ pub fn navigate_to_admin() -> Result<(), String> {
     do_navigate_to_admin()
 }
 
-/// Navigate the main window to the web frontend (served by gateway).
+/// Navigate the main window to the chat frontend (served by gateway at /chat).
 #[tauri::command]
 pub fn navigate_to_web() -> Result<(), String> {
     do_navigate_to_web()
@@ -54,9 +54,9 @@ pub fn do_navigate_to_web() -> Result<(), String> {
     let window = WM::global()
         .get_window(WindowType::Main)
         .ok_or("Main window not found")?;
-    let url = tauri::Url::parse(&web_url_with_theme(&http_url))
+    let url = tauri::Url::parse(&web_url_with_theme(&format!("{}chat", http_url)))
         .map_err(|e| format!("Invalid web URL: {}", e))?;
-    log::info!("[nav] navigating to web: {}", url);
+    log::info!("[nav] navigating to chat: {}", url);
     let _ = window.navigate(url);
     Ok(())
 }

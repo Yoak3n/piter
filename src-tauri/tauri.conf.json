@@ -32,7 +32,7 @@
       }
     },
     "resources": {
-      "../web/dist": "web-frontend"
+      "../chat/dist": "chat"
     }
   }
 }

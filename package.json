@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:all": "pnpm build:web && pnpm dev",
+    "dev:all": "pnpm build:chat && pnpm dev",
     "build": "vue-tsc --noEmit && vite build",
-    "build:web": "cd web && pnpm build",
-    "build:all": "pnpm build && pnpm build:web",
+    "build:chat": "cd chat && pnpm build",
+    "build:all": "pnpm build && pnpm build:chat",
     "preview": "vite preview",
     "tauri": "tauri"
   },

@@ -12,7 +12,7 @@
 //! }}
 //! ```
 //!
-//! This module is pure (no gateway dependencies) so the web standalone build
+//! This module is pure (no gateway dependencies) so the chat standalone build
 //! can later expose the same aggregation over REST.
 //!
 //! Layout:

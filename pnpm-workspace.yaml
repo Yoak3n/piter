@@ -1,6 +1,6 @@
 packages:
   - .
-  - web
+  - chat
 
 allowBuilds:
   esbuild: true
