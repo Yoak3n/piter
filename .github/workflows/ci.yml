@@ -54,7 +54,7 @@ jobs:
       # 签名 → 必须传入签名密钥 env（即使非 release 构建）
       - name: Build (CI)
         if: github.ref_type != 'tag'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -65,7 +65,7 @@ jobs:
       # updater 用的 latest.json 与 .sig 签名（tauri-action 自动完成）。
       - name: Build & Create Release Draft (tag)
         if: github.ref_type == 'tag'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 由 `pnpm tauri signer generate` 生成；丢失将无法签名更新包
