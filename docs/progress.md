@@ -47,6 +47,7 @@
 |---|---|
 | **Broker 控制命令** | `broker_control` 命令分发（ping/info）+ `gateway_command` 业务命令 |
 | **对话框插件** | `tauri-plugin-dialog` 已接入 |
+| **Updater 集成** | `tauri-plugin-updater`：启动自动检查 → 自动下载（进度走 log）→ 系统对话框确认 → 安装重启；GitHub Releases `latest.json` 为载体（tauri-action 生成） |
 | **PATH 增强** | `build_augmented_path()` 合并 nvm/volta/bun/homebrew/cargo 等 shim 路径（`broker/util.rs`） |
 | **专用会话进程** | 多并行 pi 进程管理（每会话独立实例） |
 | **外部应用启动** | `open_path` 在文件管理器中打开目录 |
@@ -58,7 +59,6 @@
 
 | 功能 | 说明 |
 |---|---|
-| **Updater 集成** | 缺少 `tauri-plugin-updater`，无更新检查/下载安装（含进度流） |
 | **健康检查 + 端点等待** | `wait_for_health()` / `wait_for_endpoint()` 辅助方法 |
 | **启动恢复** | `find_latest_session_boot_target()` 恢复上次活动会话/工作目录 |
 | **启动错误处理** | `bootstrap.html` 错误窗口 + `cmd_retry_startup` 重试机制 |
@@ -98,13 +98,12 @@ PiBroker/Gateway (统一集成) — 替代 PiManager + BrokerWs + embedded-serve
 
 | 领域 | 完成度 | 备注 |
 |---|---|---|
-| 后端核心 | ~90% | Gateway/Broker/会话/项目/统计/管理命令就绪，Updater 与启动恢复待补 |
+| 后端核心 | ~90% | Gateway/Broker/会话/项目/统计/管理命令/Updater 就绪，启动恢复待补 |
 | 前端 | ~70% | 聊天界面 + 管理面板就绪，费用图表/搜索/引导等增强待做 |
-| 基础设施 | ~50% | 单实例、托盘、自动启动、日志、NSIS 打包就绪，CI/CD 与自动更新待建 |
+| 基础设施 | ~60% | 单实例、托盘、自动启动、日志、NSIS 打包、CI（build+release draft）、自动更新就绪 |
 
 ### 下一阶段关键任务
 
-1. 引入 `tauri-plugin-updater`，实现更新检查/下载安装（含进度流）
-2. 实现启动恢复逻辑（恢复上次活动会话/工作目录）
-3. 使用统计 REST 化：将 `get_cost_dashboard` 暴露为 `/api/cost-dashboard`（stats 模块已与 gateway 解耦，可直接复用）
-4. 补充健康检查等待、启动错误处理（bootstrap.html + 重试）
+1. 实现启动恢复逻辑（恢复上次活动会话/工作目录）
+2. 使用统计 REST 化：将 `get_cost_dashboard` 暴露为 `/api/cost-dashboard`（stats 模块已与 gateway 解耦，可直接复用）
+3. 补充健康检查等待、启动错误处理（bootstrap.html + 重试）

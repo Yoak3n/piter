@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod base;
 pub mod pi;
+pub mod updater;
 use base::init;
 pub use base::window::manager::Manager as WM;
 

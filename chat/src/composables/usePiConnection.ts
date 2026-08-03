@@ -511,14 +511,16 @@ export function usePiConnection() {
       return;
     }
 
-    const id = addMessage(s, "user", text);
     if (streaming) {
       // 流式默认发送：进入本地 outbox，agent_end 后自动以普通 prompt 投递（等价 pi 原生 followUp）。
+      // 排队期间不进入消息时间线（仅队列条展示），投递时才 addMessage 进时间线。
       // 不调用 pi 的 follow_up 命令，这样投递前可以取消/升级为插队。
-      s.outbox = [...s.outbox, { id, text, model: desiredModel ?? undefined }];
+      const oid = s.msgId++;
+      s.outbox = [...s.outbox, { id: oid, text, model: desiredModel ?? undefined }];
       return;
     }
 
+    addMessage(s, "user", text);
     // 空闲：立即发送
     if (!iid) {
       addMessage(s, "system", "No active session yet — please wait for the session to be ready.");
@@ -545,6 +547,8 @@ export function usePiConnection() {
     if (!s.instanceId || s.outbox.length === 0) return;
     const [first, ...rest] = s.outbox;
     s.outbox = rest;
+    // 投递时刻才进入消息时间线（排队期间仅显示在队列条）
+    addMessage(s, "user", first.text);
     const payload: Record<string, unknown> = { type: "prompt", message: first.text };
     if (first.model) payload.desiredModel = first.model;
     // 投递到 outbox 所属会话（s.instanceId），而非当前活动会话——
@@ -564,11 +568,9 @@ export function usePiConnection() {
     const latest = s.outbox[s.outbox.length - 1];
     const dropped = s.outbox.slice(0, -1);
     s.outbox = [];
+    // 投递时刻才进入消息时间线（排队期间仅显示在队列条）
+    addMessage(s, "user", latest.text);
     if (dropped.length > 0) {
-      const droppedIds = new Map(dropped.map((d) => [d.id, d.text]));
-      s.messages = s.messages.filter(
-        (m) => !(m.role === "user" && droppedIds.has(m.id) && m.content === droppedIds.get(m.id)),
-      );
       addMessage(
         s,
         "system",
@@ -585,11 +587,8 @@ export function usePiConnection() {
   function cancelQueued(id: number) {
     const s = getState(activeInstanceId.value);
     if (!s) return;
-    const item = s.outbox.find((o) => o.id === id);
+    // 排队消息不在时间线中，取消只需从 outbox 移除
     s.outbox = s.outbox.filter((o) => o.id !== id);
-    if (item) {
-      s.messages = s.messages.filter((m) => !(m.role === "user" && m.id === id && m.content === item.text));
-    }
   }
 
   /** 把一条本地排队消息升级为插队（立即投递，流式中走 steer，空闲时走普通 prompt） */
@@ -600,6 +599,8 @@ export function usePiConnection() {
     const item = s.outbox.find((o) => o.id === id);
     if (!item) return;
     s.outbox = s.outbox.filter((o) => o.id !== id);
+    // 升级为插队即立即投递，此刻才进入消息时间线
+    addMessage(s, "user", item.text);
     const payload: Record<string, unknown> = { type: "prompt", message: item.text };
     if (item.model) payload.desiredModel = item.model;
     if (s.isStreaming) payload.streamingBehavior = "steer";

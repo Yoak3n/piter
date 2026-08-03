@@ -38,6 +38,8 @@ pub fn create_tray_icon<R: Runtime>(app: &tauri::App<R>, visible: bool) -> Resul
 
     let _tray = TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().unwrap().clone())
+        // Tooltip: "Piter <version>", version synced with tauri.conf.json.
+        .tooltip(format!("Piter {}", app.package_info().version))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

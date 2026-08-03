@@ -78,7 +78,7 @@ function pad2(n: number): string {
 }
 
 /** Format an epoch-ms timestamp for display (QQ-style: today → HH:MM,
- * yesterday → 昨天 HH:MM, same year → M月D日 HH:MM, older → YYYY年M月D日 HH:MM). */
+ * yesterday → Yesterday HH:MM, same year → M/D HH:MM, older → YYYY/M/D HH:MM). */
 export function formatMessageTime(ts: number): string {
   const d = new Date(ts);
   const now = new Date();
@@ -87,8 +87,8 @@ export function formatMessageTime(ts: number): string {
     new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
   if (dayDiff <= 0) return hm;
-  if (dayDiff === 1) return `昨天 ${hm}`;
-  const md = `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  if (dayDiff === 1) return `Yesterday ${hm}`;
+  const md = `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
   if (d.getFullYear() === now.getFullYear()) return md;
-  return `${d.getFullYear()}年${md}`;
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 }

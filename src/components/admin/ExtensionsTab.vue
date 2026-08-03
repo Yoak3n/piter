@@ -116,8 +116,8 @@ async function toggleGlobal(name: string, checked: boolean) {
 // ── Tri-state project extension control ────────────────────────────────────
 // Effective model: (global ∪ project_added) − project_excluded.
 // Each candidate row shows the two relevant states for its kind:
-//   global-backed → 继承全局 (default) ↔ 排除
-//   project-only  → 未启用 ↔ 启用
+//   global-backed → inherit global (default) ↔ exclude
+//   project-only  → off ↔ enabled
 type ExtState = "inherit" | "enabled" | "excluded" | "off";
 
 function projectExtState(name: string): ExtState {
@@ -136,8 +136,8 @@ function extOptions(name: string): { value: ExtState; label: string }[] {
         { value: "excluded", label: "排除" },
       ]
     : [
-        { value: "off", label: "未启用" },
-        { value: "enabled", label: "启用" },
+        { value: "off", label: "Off" },
+        { value: "enabled", label: "Enabled" },
       ];
 }
 

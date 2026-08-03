@@ -54,7 +54,7 @@ function handleKeydown(e: KeyboardEvent) {
       v-if="outbox?.length || steeringQueue?.length"
       class="composer-queue"
     >
-      <span class="queue-label">队列</span>
+      <span class="queue-label">Queue</span>
       <span
         v-for="(m, i) in steeringQueue"
         :key="`s${i}`"
@@ -69,7 +69,7 @@ function handleKeydown(e: KeyboardEvent) {
         class="queue-chip queue-chip-followup"
         :title="item.text"
       >
-        <Clock :size="10" />{{ item.text }}
+        <Clock :size="10" /><span class="queue-chip-text">{{ item.text }}</span>
         <button
           class="chip-btn chip-upgrade"
           title="Upgrade to insert now (steer)"
@@ -203,6 +203,8 @@ function handleKeydown(e: KeyboardEvent) {
   background:var(--color-bg-app); color:var(--color-text-secondary); flex-shrink:0;
 }
 .queue-chip svg { flex-shrink:0; }
+/* 文本包 span 可收缩省略（min-width:0），⚡/✕ 按钮 flex-shrink:0 不被挤走，始终可见 */
+.queue-chip-text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .queue-chip-followup { border-color:var(--color-border-subtle); color:var(--color-text-secondary); }
 .queue-chip-steer { border-color:var(--color-accent); color:var(--color-accent); }
 .chip-btn {
@@ -218,6 +220,11 @@ function handleKeydown(e: KeyboardEvent) {
 .composer-stop-btn:hover { background:rgba(239,68,68,0.12); color:var(--color-danger, #ef4444); }
 .composer-steer-btn:hover { background:var(--color-accent-soft, var(--color-bg-hover)); color:var(--color-accent); }
 .composer-steer-btn:disabled { opacity:0.3; cursor:default; }
+
+/* 桌面端放宽队列 chip 宽度，长消息少省略 */
+@media (min-width: 641px) {
+  .queue-chip { max-width:400px; }
+}
 
 @media (max-width: 640px) {
   .composer-box { padding-bottom:calc(10px + env(safe-area-inset-bottom)); }

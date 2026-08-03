@@ -37,6 +37,9 @@ use helper::discover_lan_ips;
 use messages::command;
 // ─── Gateway State ─────────────────────────────────────────────────────────
 
+/// Default HTTP port for the gateway. Falls back to an ephemeral port when busy.
+const DEFAULT_HTTP_PORT: u16 = 31421;
+
 /// Clone-able state passed into every axum handler via `State`.
 #[derive(Clone)]
 pub struct GatewayState {
@@ -75,9 +78,15 @@ impl GatewayState {
         idle_timeout_secs: Option<u64>,
         data_dir: PathBuf,
     ) -> Result<(Arc<GatewayState>, u16), String> {
-        let bind_port = port.unwrap_or(0);
-        let std_listener = std::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], bind_port)))
-            .map_err(|e| format!("[gateway] bind failed: {}", e))?;
+        let bind_port = port.unwrap_or(DEFAULT_HTTP_PORT);
+        let std_listener = match std::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], bind_port))) {
+            Ok(l) => l,
+            // 默认端口被占用时回退到随机空闲端口（仅当调用方未显式指定端口时）
+            Err(_) if port.is_none() =>
+                std::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
+                    .map_err(|e| format!("[gateway] bind fallback failed: {}", e))?,
+            Err(e) => return Err(format!("[gateway] bind failed: {}", e)),
+        };
         let actual_port = std_listener
             .local_addr()
             .map_err(|e| format!("[gateway] local_addr failed: {}", e))?

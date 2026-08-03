@@ -68,6 +68,8 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
 
     let builder = builder.plugin(tauri_plugin_dialog::init());
 
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
     let builder = builder.plugin(
         tauri_plugin_log::Builder::new()
             .targets([
@@ -129,6 +131,10 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         Handle::global().init(app.handle().clone());
         let _ = create_tray_icon(app, false);
 
+        // Auto-update check (release builds only; dev builds skip the chain).
+        #[cfg(not(debug_assertions))]
+        crate::updater::spawn_update_check(app.handle().clone());
+
         // Listen for navigation events from remote frontend (bypasses command ACL).
         app.listen("navigate-to-admin", |_event| {
             if let Err(e) = super::cmd::do_navigate_to_admin() {
@@ -174,6 +180,8 @@ pub fn try_start_gateway(app: &AppHandle) -> Result<Option<(Arc<pi_server::gatew
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| app_data_dir_path());
+    // dev 构建固定用 1421；release 不传端口，由 gateway 使用默认端口 31421
+    //（被占用时回退随机端口），避免与 dev 端口冲突。
     let dev_port = std::env::var("TAURI_ENV_DEBUG")
         .ok()
         .and_then(|v| if v == "true" { Some(1421u16) } else { None });

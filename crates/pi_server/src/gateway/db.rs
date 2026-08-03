@@ -71,6 +71,7 @@ impl Db {
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
                 cwd         TEXT NOT NULL,
+                type        TEXT NOT NULL DEFAULT 'normal',
                 pinned      INTEGER NOT NULL DEFAULT 0,
                 archived    INTEGER NOT NULL DEFAULT 0,
                 created_at  TEXT NOT NULL,
@@ -116,8 +117,8 @@ impl Db {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO projects (id, name, cwd, pinned, archived, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 0, 0, ?4, ?4)",
+            "INSERT INTO projects (id, name, cwd, type, pinned, archived, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'normal', 0, 0, ?4, ?4)",
             params![id, name, cwd, now],
         )
         .map_err(|e| format!("create_project: {}", e))?;
@@ -186,7 +187,7 @@ impl Db {
     pub fn get_project(&self, id: &str) -> Option<ProjectRow> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, name, cwd, pinned, archived, created_at, updated_at
+            "SELECT id, name, cwd, type, pinned, archived, created_at, updated_at
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -194,10 +195,11 @@ impl Db {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     cwd: row.get(2)?,
-                    pinned: row.get(3)?,
-                    archived: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
+                    project_type: row.get(3)?,
+                    pinned: row.get(4)?,
+                    archived: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
                 })
             },
         )
@@ -207,10 +209,10 @@ impl Db {
     pub fn list_projects(&self, include_archived: bool) -> Vec<ProjectRow> {
         let conn = self.conn.lock().unwrap();
         let sql = if include_archived {
-            "SELECT id, name, cwd, pinned, archived, created_at, updated_at
+            "SELECT id, name, cwd, type, pinned, archived, created_at, updated_at
              FROM projects ORDER BY pinned DESC, updated_at DESC"
         } else {
-            "SELECT id, name, cwd, pinned, archived, created_at, updated_at
+            "SELECT id, name, cwd, type, pinned, archived, created_at, updated_at
              FROM projects WHERE archived = 0 ORDER BY pinned DESC, updated_at DESC"
         };
         let mut stmt = conn.prepare(sql).unwrap();
@@ -219,10 +221,11 @@ impl Db {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 cwd: row.get(2)?,
-                pinned: row.get(3)?,
-                archived: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                project_type: row.get(3)?,
+                pinned: row.get(4)?,
+                archived: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })
         .unwrap()
@@ -433,17 +436,18 @@ impl Db {
     pub fn find_project_by_cwd_and_name(&self, cwd: &str, name: &str) -> Option<ProjectRow> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, name, cwd, pinned, archived, created_at, updated_at \
+            "SELECT id, name, cwd, type, pinned, archived, created_at, updated_at \
              FROM projects WHERE cwd = ?1 AND name = ?2",
             params![cwd, name],
             |row| Ok(ProjectRow {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 cwd: row.get(2)?,
-                pinned: row.get(3)?,
-                archived: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                project_type: row.get(3)?,
+                pinned: row.get(4)?,
+                archived: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             }),
         )
         .ok()
@@ -560,6 +564,8 @@ pub struct ProjectRow {
     pub id: String,
     pub name: String,
     pub cwd: String,
+    /// `normal` or `workspace` (0.3.0 workspaces). Defaults to `normal`.
+    pub project_type: String,
     pub pinned: i32,
     pub archived: bool,
     pub created_at: String,
