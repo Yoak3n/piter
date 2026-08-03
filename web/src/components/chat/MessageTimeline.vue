@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onUnmounted } from "vue";
+import { ref, nextTick, watch } from "vue";
 import { ArrowDown } from "lucide-vue-next";
 import type { ChatTurn, ToolExecution } from "../../types";
 import MessageTurn from "./MessageTurn.vue";
@@ -19,21 +19,12 @@ const timelineRef = ref<HTMLDivElement | null>(null);
 
 // ─── Auto-scroll with user-override ──────────────────────────────────
 // While streaming, the timeline follows the latest content. If the user
-// scrolls away from the bottom (to re-read), auto-scroll pauses; it resumes
-// either when the user returns to the bottom or after a period of
-// inactivity. A floating button jumps straight back to the bottom.
+// scrolls away from the bottom (to re-read), auto-scroll pauses (sticky);
+// it resumes when the user returns to the bottom or clicks the floating
+// button. A floating button jumps straight back to the bottom.
 
 const isPaused = ref(false);
-let pauseTimer: ReturnType<typeof setTimeout> | null = null;
-const PAUSE_MS = 5000; // resume auto-scroll after this long without scrolling
 const BOTTOM_THRESHOLD = 120; // px from bottom considered "at the bottom"
-
-function clearPauseTimer() {
-  if (pauseTimer) {
-    clearTimeout(pauseTimer);
-    pauseTimer = null;
-  }
-}
 
 function scrollToBottom() {
   if (isPaused.value) return;
@@ -48,27 +39,20 @@ function handleScroll() {
   const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
   if (distFromBottom <= BOTTOM_THRESHOLD) {
     // User is back at the bottom — resume following.
-    clearPauseTimer();
     isPaused.value = false;
     return;
   }
-  // User is reading older content — pause, and arm a resume timer that
-  // restarts on every scroll so active reading keeps it paused.
+  // User is reading older content — pause auto-scroll (sticky). It stays
+  // paused until the user returns to the bottom or clicks the floating
+  // button. No timer: content growth (e.g. streaming thinking deltas)
+  // must NOT yank the user back to the bottom while reading.
   isPaused.value = true;
-  clearPauseTimer();
-  pauseTimer = setTimeout(() => {
-    isPaused.value = false;
-    pauseTimer = null;
-  }, PAUSE_MS);
 }
 
 function jumpToBottom() {
-  clearPauseTimer();
   isPaused.value = false;
   scrollToBottom();
 }
-
-onUnmounted(clearPauseTimer);
 
 watch(() => props.turns.length, scrollToBottom);
 watch(() => props.isStreaming, scrollToBottom);

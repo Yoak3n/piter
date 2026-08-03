@@ -16,7 +16,8 @@ export interface PendingItem {
 }
 
 interface SessionState {
-  sessionId: string;
+  /** 运行实例 ID（broker_command 路由用；注意：不是 DB session id） */
+  instanceId: string;
   messages: Message[];
   msgId: number;
   isStreaming: boolean;
@@ -36,9 +37,9 @@ interface SessionState {
 /** 流式发送的显式行为：目前仅插队（steer）会走 pi 原生队列 */
 export type DeliveryBehavior = "steer";
 
-function createSessionState(sessionId: string): SessionState {
+function createSessionState(instanceId: string): SessionState {
   return reactive({
-    sessionId,
+    instanceId,
     messages: [],
     msgId: 0,
     isStreaming: false,
@@ -335,8 +336,11 @@ export function usePiConnection() {
       case "sessions_list": {
         const raw = data.projects as Array<Record<string, unknown>> || [];
         wsSessions.value = raw.map((p) => ({
+          id: p.id as string | undefined,
           path: p.path as string || "",
           name: (p.name ?? p.dirName) as string || "",
+          pinned: (p.pinned as number) || 0,
+          archived: (p.archived as boolean) || false,
           sessions: p.sessions as any[] || [],
         }));
         break;
@@ -538,13 +542,14 @@ export function usePiConnection() {
 
   /** 按序投递 outbox 第一条（one-at-a-time，等价 pi followUp 默认模式） */
   function deliverOutboxFirst(s: SessionState) {
-    const iid = activeInstanceId.value;
-    if (!iid || s.outbox.length === 0) return;
+    if (!s.instanceId || s.outbox.length === 0) return;
     const [first, ...rest] = s.outbox;
     s.outbox = rest;
     const payload: Record<string, unknown> = { type: "prompt", message: first.text };
     if (first.model) payload.desiredModel = first.model;
-    sendCommand(payload);
+    // 投递到 outbox 所属会话（s.instanceId），而非当前活动会话——
+    // 防止用户在等待期间切换到其他会话时，排队消息被发到错误的会话。
+    sendCommand(payload, s.instanceId);
   }
 
   /** 用户点击停止后：只停当前生成，投递 outbox 最新一条（当前意图），丢弃更早的排队消息 */
@@ -572,7 +577,8 @@ export function usePiConnection() {
     }
     const payload: Record<string, unknown> = { type: "prompt", message: latest.text };
     if (latest.model) payload.desiredModel = latest.model;
-    sendCommand(payload);
+    // 同样投递到 outbox 所属会话，避免切换会话后发错
+    sendCommand(payload, s.instanceId);
   }
 
   /** 取消一条本地排队消息（纯本地，pi 不感知） */
@@ -612,9 +618,9 @@ export function usePiConnection() {
     }
   }
 
-  function sendCommand(cmd: Record<string, unknown>) {
+  function sendCommand(cmd: Record<string, unknown>, targetInstanceId?: string) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      const iid = activeInstanceId.value;
+      const iid = targetInstanceId ?? activeInstanceId.value;
       if (iid) {
         ws.send(JSON.stringify({
           type: "broker_command",

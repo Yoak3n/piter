@@ -47,8 +47,14 @@ export interface SessionInfo {
 
 /** A project grouping sessions */
 export interface ProjectGroup {
+  /** Database project id; undefined for the synthetic "Other" group */
+  id?: string;
   path: string;
   name: string;
+  /** 1 when pinned (backend sorts pinned first) */
+  pinned?: number;
+  /** Whether the project is archived (hidden from the default list) */
+  archived?: boolean;
   sessions: SessionInfo[];
 }
 

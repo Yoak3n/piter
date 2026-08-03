@@ -39,9 +39,10 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
         .map(|s| (s.instance_id.clone(), s))
         .collect();
 
-    let db_projects = list_projects(&state.db, false);
+    let db_projects = list_projects(&state.db, true);
 
     let mut result: Vec<ProjectGroup> = Vec::new();
+    let mut archived_result: Vec<ProjectGroup> = Vec::new();
 
     for proj in &db_projects {
         let instance_ids = state.db.get_project_sessions(&proj.id);
@@ -87,11 +88,19 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
 
         sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
-        result.push(ProjectGroup {
+        let group = ProjectGroup {
             path: proj.cwd.clone(),
             dir_name: proj.name.clone(),
+            id: Some(proj.id.clone()),
+            pinned: proj.pinned,
+            archived: proj.archived,
             sessions,
-        });
+        };
+        if proj.archived {
+            archived_result.push(group);
+        } else {
+            result.push(group);
+        }
     }
 
     // Orphaned sessions (in DB but no project)
@@ -130,9 +139,16 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
         result.push(ProjectGroup {
             path: String::new(),
             dir_name: "Other".to_string(),
+            id: None,
+            pinned: 0,
+            archived: false,
             sessions: orphans,
         });
     }
+
+    // Archived projects stay visible but are grouped at the very end under the
+    // "Archive" section by the frontend, so they can be restored anytime.
+    result.extend(archived_result);
 
     result
 }

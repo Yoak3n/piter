@@ -58,6 +58,15 @@ pub struct SessionInfo {
 pub struct ProjectGroup {
     pub path: String,
     pub dir_name: String,
+    /// Database project id; None for the synthetic "Other" orphan group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// 1 when the project is pinned (sorted first by the backend).
+    #[serde(default)]
+    pub pinned: i32,
+    /// Whether the project is archived (hidden from the default list).
+    #[serde(default)]
+    pub archived: bool,
     pub sessions: Vec<SessionInfo>,
 }
 

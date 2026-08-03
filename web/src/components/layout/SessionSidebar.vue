@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
-import { Trash2, Plus, Search, X, RefreshCw } from "lucide-vue-next";
+import { Trash2, Plus, Search, X, RefreshCw, Pin, PinOff, Archive, ArchiveRestore } from "lucide-vue-next";
 import type { ProjectGroup } from "../../types";
 
 const props = defineProps<{
@@ -24,6 +24,68 @@ const collapsedProjects = ref<Set<string>>(new Set());
 const showDeleteConfirm = ref<string | null>(null);
 const deleteLoading = ref(false);
 
+// ─── Project pin / archive ─────────────────────────────────────────────
+const archiveConfirm = ref<string | null>(null);
+const actionLoading = ref(false);
+
+async function togglePin(project: ProjectGroup) {
+  if (!project.id || actionLoading.value) return;
+  actionLoading.value = true;
+  try {
+    await fetch(`/api/projects/${encodeURIComponent(project.id)}/pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned: project.pinned ? 0 : 1 }),
+    });
+    await fetchSessions();
+  } catch (e) {
+    console.error("Pin failed:", e);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
+function confirmArchive(project: ProjectGroup) {
+  if (!project.id) return;
+  archiveConfirm.value = project.id;
+}
+
+async function doArchive() {
+  const id = archiveConfirm.value;
+  if (!id || actionLoading.value) return;
+  actionLoading.value = true;
+  try {
+    await fetch(`/api/projects/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    archiveConfirm.value = null;
+    await fetchSessions();
+  } catch (e) {
+    console.error("Archive failed:", e);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
+async function restoreProject(id: string) {
+  if (actionLoading.value) return;
+  actionLoading.value = true;
+  try {
+    await fetch(`/api/projects/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: false }),
+    });
+    await fetchSessions();
+  } catch (e) {
+    console.error("Restore failed:", e);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
 function handleNewSession() {
   emit("new-session");
 }
@@ -35,14 +97,31 @@ const filteredProjects = computed(() => {
   return projects.value
     .map((p) => ({
       ...p,
-      sessions: p.sessions.filter(
-        (s) =>
-          s.label.toLowerCase().includes(q) ||
-          s.preview.toLowerCase().includes(q),
-      ),
+      // Archived projects are matched by project name/path (sessions kept as-is);
+      // active projects match by session label/preview.
+      sessions: p.archived
+        ? p.sessions
+        : p.sessions.filter(
+            (s) =>
+              s.label.toLowerCase().includes(q) ||
+              s.preview.toLowerCase().includes(q),
+          ),
     }))
-    .filter((p) => p.sessions.length > 0);
+    .filter((p) =>
+      p.archived
+        ? p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
+        : p.sessions.length > 0,
+    );
 });
+
+// Archived projects are returned by the backend at the end of the list;
+// render them under a dedicated "Archive" section.
+const normalProjects = computed(() =>
+  filteredProjects.value.filter((p) => !p.archived),
+);
+const archivedFiltered = computed(() =>
+  filteredProjects.value.filter((p) => p.archived),
+);
 
 // Sync externally pushed session data into local state
 watch(
@@ -212,12 +291,13 @@ onMounted(fetchSessions);
       <!-- Project groups -->
       <template v-else>
         <div
-          v-for="project in filteredProjects"
+          v-for="project in normalProjects"
           :key="project.path"
           class="project-group"
         >
-          <button
+          <div
             class="project-header"
+            role="button"
             :title="project.path"
             @click="toggleProject(project.name)"
           >
@@ -226,7 +306,69 @@ onMounted(fetchSessions);
               :class="{ collapsed: collapsedProjects.has(project.name) }"
             >&#9660;</span>
             <span class="project-name">{{ project.name }}</span>
+            <Pin
+              v-if="project.pinned"
+              :size="11"
+              class="project-pinned-icon"
+              fill="currentColor"
+            />
+            <Archive
+              v-if="project.archived"
+              :size="11"
+              class="project-archived-icon"
+            />
             <span class="project-count">{{ project.sessions.length }}</span>
+            <template v-if="project.id">
+              <span
+                v-if="archiveConfirm === project.id"
+                class="archive-confirm"
+                @click.stop
+              >
+                <span class="archive-confirm-text">Archive?</span>
+                <button
+                  class="btn btn-sm btn-danger"
+                  :disabled="actionLoading"
+                  @click="doArchive"
+                >
+                  Yes
+                </button>
+                <button
+                  class="btn btn-sm btn-ghost"
+                  @click="archiveConfirm = null"
+                >
+                  No
+                </button>
+              </span>
+              <template v-else-if="project.archived">
+                <button
+                  class="project-action-btn"
+                  title="Restore project"
+                  :disabled="actionLoading"
+                  @click.stop="restoreProject(project.id)"
+                >
+                  <ArchiveRestore :size="12" />
+                </button>
+              </template>
+              <template v-else>
+                <button
+                  class="project-action-btn"
+                  :title="project.pinned ? 'Unpin project' : 'Pin project'"
+                  :disabled="actionLoading"
+                  @click.stop="togglePin(project)"
+                >
+                  <PinOff v-if="project.pinned" :size="12" />
+                  <Pin v-else :size="12" />
+                </button>
+                <button
+                  class="project-action-btn"
+                  title="Archive project"
+                  :disabled="actionLoading"
+                  @click.stop="confirmArchive(project)"
+                >
+                  <Archive :size="12" />
+                </button>
+              </template>
+            </template>
             <button
               class="project-new-btn"
               title="New chat"
@@ -234,7 +376,7 @@ onMounted(fetchSessions);
             >
               <Plus :size="12" />
             </button>
-          </button>
+          </div>
 
           <div
             v-if="!collapsedProjects.has(project.name)"
@@ -304,6 +446,121 @@ onMounted(fetchSessions);
                 </button>
               </template>
             </button>
+          </div>
+        </div>
+
+        <!-- Archived projects stay visible under an "Archive" section -->
+        <div v-if="archivedFiltered.length > 0" class="archived-section">
+          <div class="archived-section-title">Archive</div>
+          <div
+            v-for="project in archivedFiltered"
+            :key="'arch-' + project.path"
+            class="project-group"
+          >
+            <div
+              class="project-header"
+              role="button"
+              :title="project.path"
+              @click="toggleProject(project.name)"
+            >
+              <span
+                class="project-chevron"
+                :class="{ collapsed: collapsedProjects.has(project.name) }"
+              >&#9660;</span>
+              <span class="project-name">{{ project.name }}</span>
+              <Archive
+                :size="11"
+                class="project-archived-icon"
+              />
+              <span class="project-count">{{ project.sessions.length }}</span>
+              <template v-if="project.id">
+                <button
+                  class="project-action-btn"
+                  title="Restore project"
+                  :disabled="actionLoading"
+                  @click.stop="restoreProject(project.id)"
+                >
+                  <ArchiveRestore :size="12" />
+                </button>
+              </template>
+              <button
+                class="project-new-btn"
+                title="New chat"
+                @click.stop="emit('new-session', project.path, project.name)"
+              >
+                <Plus :size="12" />
+              </button>
+            </div>
+
+            <div
+              v-if="!collapsedProjects.has(project.name)"
+              class="project-sessions"
+            >
+              <button
+                v-for="session in project.sessions"
+                :key="session.instanceId ?? session.id"
+                class="session-item"
+                :class="{
+                  active: (session.instanceId ?? session.id) === activeSessionId,
+                }"
+                @click="emit('select-session', session.instanceId ?? session.id)"
+              >
+                <div class="session-item-main">
+                  <div class="session-title">
+                    <span
+                      class="session-status-dot"
+                      :class="{
+                        'status-idle': session.state === 'idle',
+                        'status-busy': session.state === 'busy',
+                        'status-review': session.state === 'waiting_review',
+                        'status-unloaded': session.state === 'unloaded',
+                      }"
+                      :title="session.state || 'unloaded'"
+                    />
+                    <span
+                      v-if="(session.instanceId ?? session.id) === activeSessionId && sessionStatus === 'running'"
+                      class="session-running-indicator"
+                      title="Pi is processing..."
+                    />
+                    {{ session.label || "Untitled" }}
+                  </div>
+                  <div class="session-meta">
+                    <span class="session-time">{{
+                      formatTime(session.updatedAt)
+                    }}</span>
+                  </div>
+                </div>
+
+                <!-- Delete confirm -->
+                <template v-if="showDeleteConfirm === session.instanceId">
+                  <div class="delete-confirm" @click.stop>
+                    <span class="delete-confirm-text">Delete?</span>
+                    <button
+                      class="btn btn-sm btn-danger"
+                      :disabled="deleteLoading"
+                      @click="handleDelete(session.instanceId)"
+                    >
+                      Yes
+                    </button>
+                    <button
+                      class="btn btn-sm btn-ghost"
+                      @click="showDeleteConfirm = null"
+                    >
+                      No
+                    </button>
+                  </div>
+                </template>
+                <template v-else>
+                  <button
+                    class="session-delete-btn"
+                    title="Delete session"
+                    @click.stop="showDeleteConfirm = session.instanceId ?? null"
+                  >
+                    <Trash2 :size="12" />
+                  </button>
+                </template>
+              </button>
+            </div>
           </div>
         </div>
       </template>
@@ -512,7 +769,8 @@ onMounted(fetchSessions);
   font-weight: 400;
 }
 
-.project-new-btn {
+.project-new-btn,
+.project-action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -526,13 +784,60 @@ onMounted(fetchSessions);
   transition: opacity 0.15s ease;
 }
 
-.project-header:hover .project-new-btn {
+.project-header:hover .project-new-btn,
+.project-header:hover .project-action-btn {
   opacity: 1;
 }
 
-.project-new-btn:hover {
+.project-new-btn:hover,
+.project-action-btn:hover {
   background: var(--color-bg-active);
   color: var(--color-text-primary);
+}
+
+.project-action-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.project-pinned-icon {
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.project-archived-icon {
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+/* Archive confirm inline (mirrors delete-confirm) */
+.archive-confirm {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.archive-confirm-text {
+  font-size: 11px;
+  color: var(--color-danger);
+  white-space: nowrap;
+}
+
+/* Archive section */
+.archived-section-title {
+  padding: 10px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  border-top: 1px solid var(--color-border-subtle);
+  margin-top: 4px;
 }
 
 /* Session item */
@@ -698,7 +1003,9 @@ onMounted(fetchSessions);
     max-width: 300px;
   }
 
-  .session-item .session-delete-btn {
+  .session-item .session-delete-btn,
+  .project-new-btn,
+  .project-action-btn {
     opacity: 1;
   }
 }
