@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-05
+
+> 版本主线：统一自定义标题栏 + Bug 修复批次 + Linux 构建支持。
+
+### 新增
+
+- **统一自定义标题栏**：packages/ui 共享包（TitleBar 外壳 + useTauriWindow 窗口控制），chat 与 admin 双端接入，替代系统标题栏；data-tauri-drag-region 拖拽 + min/max/close 按钮，非 tauri 环境自动降级
+- **Linux 构建支持**：CI matrix 双平台（Windows NSIS + Linux AppImage/deb），uploadUpdaterJson 仅 Windows
+
+### 修复
+
+- **BUG-010**：流式输出 think 时无法向上滚动——粘滞暂停方案多次迭代后定案（方向判断 + 手机端 touch 补强）
+- **BUG-011**：新建会话页侧边栏仍高亮旧会话——哨兵值 NewSession + 后端 deactivate_session；衍生：窗口关闭时主动断开 WS（订阅清理不再双重拖延）
+- **BUG-012**：日志时间戳时区用 UTC——timezone_strategy(UseLocal) 切换本地时区
+- **BUG-013**：provider 故障时发送无反馈——auto_retry 错误可见 + error 容错 + 90s 无进展 watchdog
+
 ## [0.1.0] - 2026-08-03
 
 > 首个公开发布版本。piter 是一个 AI 编程助手客户端，以 Tauri 桌面应用 + 移动端网页（局域网）两种形式提供，通过 WebSocket + REST API 驱动后端管理的 pi coding agent 进程。
