@@ -9,7 +9,7 @@ use crate::base::{
 };
 use crate::pi::{try_resolve_pi_binary, locked_pi_version};
 
-use tauri::{AppHandle, Builder, Listener, Manager, RunEvent, generate_handler};
+use tauri::{AppHandle, Builder, Emitter, Listener, Manager, RunEvent, generate_handler};
 use tauri_plugin_log::{Target, TargetKind};
 
 use std::path::PathBuf;
@@ -253,6 +253,10 @@ pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let window = app_handle.get_webview_window(&label).unwrap();
+                // 窗口关闭（隐藏到托盘）：通知前端主动断开 WS，
+                // 让订阅清理走 onclose → subscribers.remove → disconnected_since 最优路径，
+                // 而不是等轻量模式 10min 计时后 destroy_window 才触发。
+                let _ = window.emit("piter-window-hidden", ());
                 let _ = window.hide();
             }
             tauri::WindowEvent::Focused(true) => {}

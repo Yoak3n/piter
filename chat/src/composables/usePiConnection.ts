@@ -46,6 +46,9 @@ const WATCHDOG_INTERVAL_MS = 15_000;
 const WATCHDOG_NO_PROGRESS_MS = 90_000;
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 
+// Tauri 窗口生命周期监听防重复注册（参考 watchdogTimer 单例写法）
+let windowLifecycleRegistered = false;
+
 function createSessionState(instanceId: string): SessionState {
   return reactive({
     instanceId,
@@ -79,6 +82,11 @@ export function usePiConnection() {
   let reconnectAttempts = 0;
   const MAX_RECONNECT_ATTEMPTS = 3;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // ── Tauri 窗口隐藏：暂停 WS 重连（BUG-011 衍生）────────────
+  // 窗口关闭（隐藏到托盘）时主动断 WS → 后端 onclose 立即清理订阅；
+  // 隐藏期间暂停自动重连，恢复可见时重连（重新订阅）。
+  let suspendReconnect = false;
 
   // ── Active session helpers ──
 
@@ -530,7 +538,33 @@ export function usePiConnection() {
 
   // ─── WebSocket ──────────────────────────────────────────────────────
 
+  /** 注册窗口生命周期监听（幂等）：隐藏→断 WS 并暂停重连；恢复可见→重连重新订阅 */
+  function registerWindowLifecycleListeners() {
+    if (windowLifecycleRegistered) return;
+    windowLifecycleRegistered = true;
+    if (typeof window === "undefined") return;
+    const isTauri = "__TAURI_INTERNALS__" in window;
+    if (isTauri) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => {
+          listen("piter-window-hidden", () => {
+            suspendReconnect = true;
+            ws?.close();
+          }).catch(() => {});
+        })
+        .catch(() => {});
+    }
+    // 恢复可见 → 复位并重连（纯前端感知，不依赖后端信号）
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && suspendReconnect) {
+        suspendReconnect = false;
+        if (!ws || ws.readyState !== WebSocket.OPEN) connectWebSocket();
+      }
+    });
+  }
+
   function connectWebSocket() {
+    registerWindowLifecycleListeners();
     const url = getWsUrl();
     statusText.value = "Connecting...";
     ws = new WebSocket(url);
@@ -562,6 +596,7 @@ export function usePiConnection() {
   }
 
   function scheduleReconnect() {
+    if (suspendReconnect) return; // 窗口隐藏中：不自动重连（恢复可见时由 visibilitychange 接管）
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       reconnectAttempts++;
       const delay = reconnectAttempts * 3000;
