@@ -156,7 +156,14 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         
         // "Start minimized": launch into the tray without showing the window.
         if !admin_config.app.start_minimized {
-            let url = crate::base::cmd::web_url_with_theme(&format!("{}chat", web_url));
+            // Pi 未安装时 gateway 未启动（web_url 为空）：此时若仍加载
+            // "/chat" 会解析到 frontendDist 下不存在的目录 → 404 白屏。
+            // 回退到内置 admin 面板，引导用户在 Settings > Versions 下载 pi。
+            let url = if web_url.is_empty() {
+                "/".to_string()
+            } else {
+                crate::base::cmd::web_url_with_theme(&format!("{}chat", web_url))
+            };
             let _ = WM::global().show_window(WindowType::Main, Some(&url));
         }
 
