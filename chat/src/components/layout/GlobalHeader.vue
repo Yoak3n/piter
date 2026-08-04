@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { TitleBar } from "@piter/ui";
 import ModelSelector from "../model/ModelSelector.vue";
 import LanShare from "./LanShare.vue";
 import { Settings } from "lucide-vue-next";
@@ -33,15 +32,14 @@ async function openAdmin() {
 </script>
 
 <template>
-  <TitleBar>
-    <template #left>
-      <button class="hamburger-btn" @click="emit('toggle-sidebar')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-      </button>
+  <header class="global-header">
+    <button class="hamburger-btn" @click="emit('toggle-sidebar')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <div class="header-info">
       <span v-if="sessionName && showSessionName" class="session-label">{{ sessionName }}</span>
-    </template>
-
-    <template #right>
+    </div>
+    <div class="header-right">
       <ModelSelector
         :model-id="modelId?.id"
         :session-status="sessionStatus"
@@ -58,11 +56,32 @@ async function openAdmin() {
       </button>
       <span class="status-dot" :class="{ connected: isRunning, disconnected: !isRunning }" :title="isRunning ? 'Connected' : 'Disconnected'" />
       <span v-if="!isRunning" class="status-label disconnected-label">{{ statusText }}</span>
-    </template>
-  </TitleBar>
+    </div>
+  </header>
 </template>
 
 <style scoped>
+.global-header {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  height: 44px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.header-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .hamburger-btn {
   display: flex;
   align-items: center;
