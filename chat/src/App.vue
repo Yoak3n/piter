@@ -53,6 +53,8 @@ const {
   switchSession,
   restartPi,
   clearMessages,
+  sendCommand,
+  setActiveInstanceId,
 } = usePiConnection();
 
 const { sessions, fetchSessions } = useSessions();
@@ -69,11 +71,13 @@ const pendingFirstMessage = ref<string | null>(null);
 const drafts = ref<Record<string, string>>({});
 
 const activeDraft = computed(() =>
-  activeInstanceId.value ? (drafts.value[activeInstanceId.value] ?? "") : "",
+  activeInstanceId.value && activeInstanceId.value !== "NewSession"
+    ? (drafts.value[activeInstanceId.value] ?? "")
+    : "",
 );
 
 function handleDraftUpdate(text: string) {
-  if (activeInstanceId.value) {
+  if (activeInstanceId.value && activeInstanceId.value !== "NewSession") {
     drafts.value[activeInstanceId.value] = text;
   }
 }
@@ -137,6 +141,13 @@ function handleNewSession(cwd?: string, name?: string) {
   newSessionCwd.value = cwd || "";
   newSessionName.value = name || "";
   showNewSession.value = true;
+  // BUG-011：进入"无激活会话"态——哨兵值，侧边栏无高亮、草稿隔离
+  const prev = activeInstanceId.value;
+  if (prev && prev !== "NewSession") {
+    setActiveInstanceId("NewSession");
+    // 通知后端去激活旧会话（subscribers.remove → 无订阅者则进入 disconnected_since 计时）
+    sendCommand({ type: "deactivate_session" }, prev);
+  }
   if (mobileMode.value) closeSidebar();
 }
 
