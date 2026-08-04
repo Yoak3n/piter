@@ -1,7 +1,7 @@
 {
   "name": "piter",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@piter/ui": "workspace:*",
     "@tauri-apps/api": "^2",
     "echarts": "^6.1.0",
     "lucide-vue-next": "^1.0.0",

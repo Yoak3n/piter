@@ -60,7 +60,7 @@ const emit = defineEmits<{
 .thinking-content {
   padding:0 12px 12px; white-space:pre-wrap; overflow-wrap:anywhere;
   font-style:italic; border-top:1px solid var(--color-border-subtle);
-  max-height:260px; overflow-y:auto; overscroll-behavior:contain;
+  max-height:260px; overflow-y:auto; overscroll-behavior:auto;
   font-size:12px; line-height:1.5; color:var(--color-text-secondary);
 }
 .thinking-content.expanded { display:block; }

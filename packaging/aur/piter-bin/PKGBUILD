@@ -1,0 +1,36 @@
+# Maintainer: Yoake <yoake@users.noreply.github.com>
+# Contributor: piter
+
+# piter-bin: 从 GitHub Releases 拉取 Tauri 构建的 .deb（含全部运行时资源），
+# 解包后安装到 /usr。更新由 pacman 管理（AUR 场景关闭了内置 updater，见 D3）。
+
+pkgname=piter-bin
+pkgver=0.1.1
+pkgrel=1
+pkgdesc="Piter — AI coding agent desktop client (Tauri), with LAN web access"
+arch=('x86_64')
+url="https://github.com/Yoak3n/piter"
+license=('MIT')
+depends=(
+  'glib2'
+  'glibc'
+  'gcc-libs'
+  'gtk3'
+  'libayatana-appindicator'
+  'librsvg'
+  'webkit2gtk-4.1'
+  'xdg-utils'
+)
+# binutils（ar）与 tar 属 base-devel / base，无需声明
+source=("https://github.com/Yoak3n/piter/releases/download/v${pkgver}/piter_${pkgver}_amd64.deb")
+# TODO: v0.1.1 发布后替换为实际 SHA256（`sha256sum piter_0.1.1_amd64.deb`）
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir"
+  # .deb 是 ar 归档（debian-binary + control.tar.* + data.tar.*）
+  ar x "piter_${pkgver}_amd64.deb"
+  tar -xf data.tar.*
+  install -d "$pkgdir/usr"
+  cp -r usr/* "$pkgdir/usr/"
+}

@@ -25,10 +25,12 @@ impl WindowConfig {
                 window_type,
                 inner_size: (1440.0, 960.0),
                 min_inner_size: (400.0, 80.0),
-                decorations: true,
+                // 自定义标题栏：去掉系统标题栏，由前端 TitleBar 提供拖拽与
+                // 窗口控制；Windows 下用 shadow 补偿无边框窗口的系统阴影。
+                decorations: false,
                 transparent: false,
                 skip_taskbar: false,
-                shadow: false,
+                shadow: true,
                 always_on_top: false,
                 maximizable: true,
                 focused: true,

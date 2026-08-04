@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch, defineAsyncComponent } from "vue";
+import { TitleBar } from "@piter/ui";
 import { useAdmin } from "../composables/useAdmin";
 import type { AppSettings, PiSettings } from "../composables/useAdmin";
 import { applyTheme, darkMedia } from "../utils/theme";
@@ -92,8 +93,15 @@ function handlePackagesChanged(packages: string[]) {
 
 <template>
   <div class="admin-view">
-    <AdminNav :activeTab="activeTab" :chatAvailable="chatAvailable" @select="handleTabSelect" />
-    <main class="admin-main">
+    <TitleBar>
+      <template #left>
+        <span class="admin-title">Piter</span>
+      </template>
+    </TitleBar>
+
+    <div class="admin-body">
+      <AdminNav :activeTab="activeTab" :chatAvailable="chatAvailable" @select="handleTabSelect" />
+      <main class="admin-main">
       <div v-if="error" class="admin-error">{{ error }}</div>
 
       <div v-if="piMissing" class="admin-banner">
@@ -157,7 +165,8 @@ function handlePackagesChanged(packages: string[]) {
         @update="handleAppUpdate"
         @preview="handleThemePreview"
       />
-    </main>
+      </main>
+    </div>
   </div>
 </template>
 
@@ -168,12 +177,27 @@ function handlePackagesChanged(packages: string[]) {
 <style scoped>
 .admin-view {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
   font-size: var(--font-size-body);
   line-height: var(--line-height-body);
+}
+
+.admin-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.admin-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .admin-main {

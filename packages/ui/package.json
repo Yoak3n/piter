@@ -1,0 +1,21 @@
+{
+  "name": "@piter/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared UI shell for the piter frontends (chat + admin). Source-shared — consumers compile the SFCs themselves.",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": ["src"],
+  "peerDependencies": {
+    "@tauri-apps/api": "^2",
+    "vue": "^3.5.0"
+  }
+}

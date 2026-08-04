@@ -204,34 +204,33 @@ impl Manager {
     pub fn show_window(&self, window_type: WindowType, url: Option<&str>) -> WindowOperationResult {
         // TODO 添加防抖
 
-        let current_state = self.get_cached_window_state(window_type);
-                let result = match current_state {
-            WindowState::NotExist => {
-                match self.create_window_inner(window_type, url) {
-                    Ok(_) => {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                        WindowOperationResult::Created
-                    }
-                    Err(e) => {
-                        println!("创建窗口失败: {:?}", e);
-                        WindowOperationResult::Failed
-                    }
+        // 以实际窗口实例为准：窗口可能已被销毁（如轻量模式）但缓存状态仍是
+        // Hidden/VisibleFocused，此时需要重新创建而不是依赖缓存的窗口状态。
+        let result = match self.get_window(window_type) {
+            Some(window) => {
+                // 窗口已可见且有焦点时无需重复操作
+                if matches!(
+                    self.get_cached_window_state(window_type),
+                    WindowState::VisibleFocused
+                ) {
+                    WindowOperationResult::NoAction
+                } else {
+                    self.activate_window(&window, window_type)
                 }
             }
-            WindowState::VisibleFocused => {
-                WindowOperationResult::NoAction
-            }
-            WindowState::Minimized | WindowState::Hidden => {
-                if let Some(window) = self.get_window(window_type) {
-                    self.activate_window(&window, window_type);
-                    WindowOperationResult::Shown
-                } else {
+            None => match self.create_window_inner(window_type, url) {
+                Ok(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    WindowOperationResult::Created
+                }
+                Err(e) => {
+                    println!("创建窗口失败: {:?}", e);
                     WindowOperationResult::Failed
                 }
-            }
+            },
         };
 
-                // 更新缓存状态
+        // 更新缓存状态
         if matches!(
             result,
             WindowOperationResult::Created | WindowOperationResult::Shown

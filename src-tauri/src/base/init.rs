@@ -68,6 +68,9 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
 
     let builder = builder.plugin(tauri_plugin_dialog::init());
 
+    // D3: Linux（AUR 场景）关闭内置 updater，更新由 pacman 管理；
+    // Windows 保留 tauri-plugin-updater。
+    #[cfg(not(target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     let builder = builder.plugin(
@@ -81,6 +84,7 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
                 }),
             ])
             .level(log::LevelFilter::Info)
+            .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
             .build(),
     );
 
@@ -132,7 +136,8 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         let _ = create_tray_icon(app, false);
 
         // Auto-update check (release builds only; dev builds skip the chain).
-        #[cfg(not(debug_assertions))]
+        // Linux 关闭内置 updater（D3：AUR 场景由 pacman 管理更新）。
+        #[cfg(all(not(debug_assertions), not(target_os = "linux")))]
         crate::updater::spawn_update_check(app.handle().clone());
 
         // Listen for navigation events from remote frontend (bypasses command ACL).

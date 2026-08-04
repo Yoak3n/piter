@@ -18,6 +18,11 @@ export default defineConfig({
       allow: [".."],
     },
   },
+  // @piter/ui ships source SFCs — let the vue plugin compile them instead of
+  // letting esbuild pre-bundle (esbuild cannot parse .vue).
+  optimizeDeps: {
+    exclude: ["@piter/ui"],
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

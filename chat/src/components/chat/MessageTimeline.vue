@@ -49,6 +49,22 @@ function handleScroll() {
   isPaused.value = true;
 }
 
+// Wheel capture (capture phase): the streaming thinking block owns an inner
+// scroll area (max-height + overflow-y:auto), so wheel events over it are
+// swallowed there and never reach this container's @scroll handler. Pausing
+// only on @scroll therefore never triggers while the user reads thinking
+// text — the next think delta would yank the view back to the bottom (the
+// "can't scroll up during thinking" bug). Capturing wheel at the timeline
+// level sees every scroll intent (even ones the inner container eats) and
+// pauses immediately.
+function handleWheelCapture() {
+  const el = timelineRef.value;
+  if (!el || isPaused.value) return;
+  if (el.scrollHeight - el.scrollTop - el.clientHeight > BOTTOM_THRESHOLD) {
+    isPaused.value = true;
+  }
+}
+
 function jumpToBottom() {
   isPaused.value = false;
   scrollToBottom();
@@ -62,7 +78,7 @@ watch(() => props.currentThinking, scrollToBottom);
 </script>
 
 <template>
-  <div ref="timelineRef" class="timeline" @scroll="handleScroll">
+  <div ref="timelineRef" class="timeline" @scroll="handleScroll" @wheel.capture="handleWheelCapture">
     <div v-if="turns.length === 0" class="empty-state">
       <div class="empty-icon">💬</div>
       <p>Chat with Pi, your coding agent.</p>
