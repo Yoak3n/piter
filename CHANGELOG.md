@@ -19,6 +19,7 @@
 - **BUG-011**：新建会话页侧边栏仍高亮旧会话——哨兵值 NewSession + 后端 deactivate_session；衍生：窗口关闭时主动断开 WS（订阅清理不再双重拖延）
 - **BUG-012**：日志时间戳时区用 UTC——timezone_strategy(UseLocal) 切换本地时区
 - **BUG-013**：provider 故障时发送无反馈——auto_retry 错误可见 + error 容错 + 90s 无进展 watchdog
+- **BUG-014**：pi 未安装时启动加载 /chat 404 白屏——回退内置 admin 面板引导下载 pi
 
 ## [0.1.0] - 2026-08-03
 
