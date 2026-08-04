@@ -1,6 +1,8 @@
 pub mod admin;
 pub mod base;
 pub mod pi;
+// D3: Linux（AUR 场景）关闭内置 updater 模块，避免未使用代码告警。
+#[cfg(not(target_os = "linux"))]
 pub mod updater;
 use base::init;
 pub use base::window::manager::Manager as WM;

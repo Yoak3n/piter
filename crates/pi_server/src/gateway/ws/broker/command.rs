@@ -31,6 +31,19 @@ pub fn handler_broker_command(
         "new_session" => handle_new_session(state, value, client_tx, client_id),
         "switch_session" => handle_switch_session(state, raw_text, value, client_tx, client_id),
         "ack_review" => handle_ack_review(state, value, client_id),
+        "deactivate_session" => {
+            let iid = value
+                .get("instanceId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !iid.is_empty() {
+                log::info!("[gateway] deactivate_session: {} (client {})", iid, client_id);
+                state.session_manager.lock().deactivate(&iid, client_id);
+            } else {
+                log::warn!("[gateway] deactivate_session: missing instanceId");
+                notify_undeliverable(client_tx, value, "missing_instanceId");
+            }
+        }
         _ => {
             // Forward any other command (prompt, steer, etc.) to the target instance
             let iid = value

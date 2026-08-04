@@ -17,13 +17,41 @@ concurrency:
 
 jobs:
   build:
-    name: Build & Release (Windows x64)
-    runs-on: windows-latest
+    # matrix 单 job 双平台：tauri-action 内部处理产物合并，
+    # 避免两个独立 job 并行 uploadUpdaterJson 时 latest.json 互相覆盖
+    name: Build & Release (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            bundle_args: --bundles nsis
+            # updater 仅 Windows 启用（Linux 决策 D3：AUR 场景关内置 updater）
+            updater_json: true
+          - platform: ubuntu-latest
+            bundle_args: --bundles appimage,deb
+            updater_json: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # 仅 Linux 需要：Tauri v2 系统依赖（webkit2gtk-4.1 等）
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            file \
+            build-essential
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -38,8 +66,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
+        # 不再显式设 targets：两平台默认 host target 即正确
+        # （windows-latest 默认 msvc，linux 默认 gnu）
 
       - name: Cache Cargo
         uses: swatinem/rust-cache@v2
@@ -49,7 +77,7 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      # 非 tag 触发（main 分支推送 / PR / 手动触发）：仅构建，产物存为 workflow artifacts
+      # 非 tag（main / PR / 手动）：仅构建，产物存 artifacts
       # 注意：tauri.conf.json 的 createUpdaterArtifacts 全局生效，任何构建都会尝试生成 .sig
       # 签名 → 必须传入签名密钥 env（即使非 release 构建）
       - name: Build (CI)
@@ -59,20 +87,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          args: ${{ matrix.bundle_args }}
           uploadWorkflowArtifacts: true
 
-      # tag（v*）推送：构建并创建 GitHub Release 草稿，同时生成并上传
-      # updater 用的 latest.json 与 .sig 签名（tauri-action 自动完成）。
+      # tag（v*）：构建 + 创建 Release 草稿 + 上传产物
       - name: Build & Create Release Draft (tag)
         if: github.ref_type == 'tag'
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 由 `pnpm tauri signer generate` 生成；丢失将无法签名更新包
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # 生成签名密钥时设置的密码（与上面的私钥配套）
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          args: ${{ matrix.bundle_args }}
           tagName: v__VERSION__
           releaseName: "piter v__VERSION__"
           releaseBody: |
@@ -81,4 +108,5 @@ jobs:
             See the assets below to download and install this version.
           releaseDraft: true
           prerelease: false
-          uploadUpdaterJson: true
+          # 关键：只有 Windows 上传 latest.json（Linux 关 updater，避免覆盖）
+          uploadUpdaterJson: ${{ matrix.updater_json }}

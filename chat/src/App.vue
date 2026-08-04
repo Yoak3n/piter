@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
+import { TitleBar } from "@piter/ui";
 import ChatPane from "./components/chat/ChatPane.vue";
 import SessionSidebar from "./components/layout/SessionSidebar.vue";
 import GlobalHeader from "./components/layout/GlobalHeader.vue";
@@ -52,6 +53,8 @@ const {
   switchSession,
   restartPi,
   clearMessages,
+  sendCommand,
+  setActiveInstanceId,
 } = usePiConnection();
 
 const { sessions, fetchSessions } = useSessions();
@@ -68,11 +71,13 @@ const pendingFirstMessage = ref<string | null>(null);
 const drafts = ref<Record<string, string>>({});
 
 const activeDraft = computed(() =>
-  activeInstanceId.value ? (drafts.value[activeInstanceId.value] ?? "") : "",
+  activeInstanceId.value && activeInstanceId.value !== "NewSession"
+    ? (drafts.value[activeInstanceId.value] ?? "")
+    : "",
 );
 
 function handleDraftUpdate(text: string) {
-  if (activeInstanceId.value) {
+  if (activeInstanceId.value && activeInstanceId.value !== "NewSession") {
     drafts.value[activeInstanceId.value] = text;
   }
 }
@@ -136,6 +141,13 @@ function handleNewSession(cwd?: string, name?: string) {
   newSessionCwd.value = cwd || "";
   newSessionName.value = name || "";
   showNewSession.value = true;
+  // BUG-011：进入"无激活会话"态——哨兵值，侧边栏无高亮、草稿隔离
+  const prev = activeInstanceId.value;
+  if (prev && prev !== "NewSession") {
+    setActiveInstanceId("NewSession");
+    // 通知后端去激活旧会话（subscribers.remove → 无订阅者则进入 disconnected_since 计时）
+    sendCommand({ type: "deactivate_session" }, prev);
+  }
   if (mobileMode.value) closeSidebar();
 }
 
@@ -183,68 +195,78 @@ watch(sessionStatus, (status) => {
 
 <template>
   <div class="app-shell">
-    <!-- Sidebar overlay for mobile -->
-    <div
-      v-if="sidebarOpen && mobileMode"
-      class="sidebar-overlay"
-      @click="closeSidebar"
-    />
+    <!-- Window title bar: replaces the OS title bar (desktop). Spans the full
+         window width, identical to the admin view's title bar. -->
+    <TitleBar>
+      <template #left>
+        <span class="app-brand">Piter</span>
+      </template>
+    </TitleBar>
 
-    <!-- Session sidebar -->
-    <aside class="app-sidebar" :class="{ open: sidebarOpen, closed: !sidebarOpen }">
-      <SessionSidebar
-        :active-session-id="activeInstanceId"
-        :projects="wsSessions"
-        :session-status="sessionStatus"
-        :mobile-mode="mobileMode"
-        @select-session="handleSelectSession"
-        @delete-session="handleDeleteSession"
-        @new-session="handleNewSession"
-      />
-    </aside>
-
-    <!-- Main area: global header + new session pane OR chat pane -->
-    <main class="app-main">
-      <GlobalHeader
-        :session-name="sessionName"
-        :show-session-name="!showNewSession"
-        :is-running="isRunning"
-        :status-text="statusText"
-        :model-id="modelId"
-        :session-status="sessionStatus"
-        :mobile-mode="mobileMode"
-        @toggle-sidebar="toggleSidebar"
-        @select-model="handleModelSelect"
+    <div class="app-shell__body">
+      <!-- Sidebar overlay for mobile -->
+      <div
+        v-if="sidebarOpen && mobileMode"
+        class="sidebar-overlay"
+        @click="closeSidebar"
       />
 
-      <NewSessionPane
-        v-if="showNewSession"
-        :projects="wsSessions.map(p => ({ path: p.path, name: p.name }))"
-        :initial-cwd="newSessionCwd"
-        :initial-name="newSessionName"
-        :mobile-mode="mobileMode"
-        @create="handleCreateSession"
-      />
-      <ChatPane
-        v-else
-        :messages="messages"
-        :is-running="isRunning"
-        :is-streaming="isStreaming"
-        :current-assistant-content="currentAssistantContent"
-        :current-thinking="currentThinking"
-        :tool-executions="toolExecutions"
-        :draft="activeDraft"
-        :outbox="outbox"
-        :steering-queue="steeringQueue"
-        @send="handleSend"
-        @steer="handleSteer"
-        @abort="handleAbort"
-        @cancel-queued="cancelQueued"
-        @upgrade-queued="upgradeQueued"
-        @update:draft="handleDraftUpdate"
-        @restart-pi="restartPi"
-      />
-    </main>
+      <!-- Session sidebar -->
+      <aside class="app-sidebar" :class="{ open: sidebarOpen, closed: !sidebarOpen }">
+        <SessionSidebar
+          :active-session-id="activeInstanceId"
+          :projects="wsSessions"
+          :session-status="sessionStatus"
+          :mobile-mode="mobileMode"
+          @select-session="handleSelectSession"
+          @delete-session="handleDeleteSession"
+          @new-session="handleNewSession"
+        />
+      </aside>
+
+      <!-- Main area: global header + new session pane OR chat pane -->
+      <main class="app-main">
+        <GlobalHeader
+          :session-name="sessionName"
+          :show-session-name="!showNewSession"
+          :is-running="isRunning"
+          :status-text="statusText"
+          :model-id="modelId"
+          :session-status="sessionStatus"
+          :mobile-mode="mobileMode"
+          @toggle-sidebar="toggleSidebar"
+          @select-model="handleModelSelect"
+        />
+
+        <NewSessionPane
+          v-if="showNewSession"
+          :projects="wsSessions.map(p => ({ path: p.path, name: p.name }))"
+          :initial-cwd="newSessionCwd"
+          :initial-name="newSessionName"
+          :mobile-mode="mobileMode"
+          @create="handleCreateSession"
+        />
+        <ChatPane
+          v-else
+          :messages="messages"
+          :is-running="isRunning"
+          :is-streaming="isStreaming"
+          :current-assistant-content="currentAssistantContent"
+          :current-thinking="currentThinking"
+          :tool-executions="toolExecutions"
+          :draft="activeDraft"
+          :outbox="outbox"
+          :steering-queue="steeringQueue"
+          @send="handleSend"
+          @steer="handleSteer"
+          @abort="handleAbort"
+          @cancel-queued="cancelQueued"
+          @upgrade-queued="upgradeQueued"
+          @update:draft="handleDraftUpdate"
+          @restart-pi="restartPi"
+        />
+      </main>
+    </div>
   </div>
 </template>
 
@@ -253,9 +275,24 @@ watch(sessionStatus, (status) => {
 
 .app-shell {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
   background: var(--color-bg-app);
+}
+
+.app-shell__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-brand {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .app-sidebar {

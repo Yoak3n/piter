@@ -43,6 +43,9 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    // @piter/ui ships source SFCs — exclude from esbuild pre-bundling so the
+    // vue plugin compiles them.
+    exclude: ["@piter/ui"],
     // echarts/vue-echarts are loaded via dynamic import (Usage tab) — without
     // this they would NOT be pre-bundled and dev would fetch hundreds of
     // individual source modules on first open. lucide-vue-next is a large

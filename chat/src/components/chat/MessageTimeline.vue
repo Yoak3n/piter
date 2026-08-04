@@ -49,6 +49,48 @@ function handleScroll() {
   isPaused.value = true;
 }
 
+// Wheel capture (capture phase): the streaming thinking block owns an inner
+// scroll area (max-height + overflow-y:auto), so wheel events over it are
+// swallowed there and never reach this container's @scroll handler. Pausing
+// only on @scroll therefore never triggers while the user reads thinking
+// text — the next think delta would yank the view back to the bottom (the
+// "can't scroll up during thinking" bug). Capturing wheel at the timeline
+// level sees every scroll intent (even ones the inner container eats) and
+// pauses immediately.
+// ⚠️ Do NOT judge by "current scroll position": in the capture phase the
+// scroll has NOT happened yet, so when the user is at the bottom and wheels
+// up, distFromBottom=0 and a position check never triggers. Judge by
+// direction instead — deltaY<0 (wheel up) is an unambiguous "reading" intent.
+function handleWheelCapture(e: WheelEvent) {
+  if (isPaused.value) return;
+  if (e.deltaY < 0) {
+    // Immediately sticky-pause so think deltas can no longer yank the view.
+    isPaused.value = true;
+  }
+}
+
+// Touch scrolling (mobile): wheel events don't fire on touchscreens, and
+// scroll doesn't bubble (so scrolling the thinking block's inner area never
+// reaches this container's @scroll handler). Capturing touchmove here sees
+// every gesture, and direction is judged by clientY movement — a finger
+// swiping up means the user is reading.
+let lastTouchY: number | null = null;
+
+// Finger swipe up = reading intent → sticky pause (symmetric with wheel deltaY<0)
+function handleTouchMoveCapture(e: TouchEvent) {
+  const t = e.touches[0];
+  if (!t) return;
+  const y = t.clientY;
+  if (lastTouchY !== null && y < lastTouchY) {
+    isPaused.value = true;
+  }
+  lastTouchY = y;
+}
+
+function handleTouchEndCapture() {
+  lastTouchY = null;
+}
+
 function jumpToBottom() {
   isPaused.value = false;
   scrollToBottom();
@@ -62,7 +104,14 @@ watch(() => props.currentThinking, scrollToBottom);
 </script>
 
 <template>
-  <div ref="timelineRef" class="timeline" @scroll="handleScroll">
+  <div
+    ref="timelineRef"
+    class="timeline"
+    @scroll="handleScroll"
+    @wheel.capture="handleWheelCapture"
+    @touchmove.capture="handleTouchMoveCapture"
+    @touchend.capture="handleTouchEndCapture"
+  >
     <div v-if="turns.length === 0" class="empty-state">
       <div class="empty-icon">💬</div>
       <p>Chat with Pi, your coding agent.</p>

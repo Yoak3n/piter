@@ -1,6 +1,7 @@
 packages:
   - .
   - chat
+  - packages/ui
 
 allowBuilds:
   esbuild: true

@@ -32,10 +32,22 @@ interface SessionState {
   /** 用户点击停止后，等待 pi 停稳再投递 outbox 最新一条 */
   abortFlushPending: boolean;
   abortTimer: ReturnType<typeof setTimeout> | null;
+  /** 最近一次"内容进展"时间戳（流式 delta/工具调用/重试都算），watchdog 用 */
+  lastProgressAt: number;
+  /** 本轮生成是否已提示过"长时间无响应"（防重复，agent_start 时复位） */
+  warnedNoOutput: boolean;
 }
 
 /** 流式发送的显式行为：目前仅插队（steer）会走 pi 原生队列 */
 export type DeliveryBehavior = "steer";
+
+// ─── No-progress watchdog（BUG-013：pi 卡死时兜底提示）────────────
+const WATCHDOG_INTERVAL_MS = 15_000;
+const WATCHDOG_NO_PROGRESS_MS = 90_000;
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+// Tauri 窗口生命周期监听防重复注册（参考 watchdogTimer 单例写法）
+let windowLifecycleRegistered = false;
 
 function createSessionState(instanceId: string): SessionState {
   return reactive({
@@ -51,6 +63,8 @@ function createSessionState(instanceId: string): SessionState {
     outbox: [],
     abortFlushPending: false,
     abortTimer: null,
+    lastProgressAt: 0,
+    warnedNoOutput: false,
   });
 }
 
@@ -68,6 +82,11 @@ export function usePiConnection() {
   let reconnectAttempts = 0;
   const MAX_RECONNECT_ATTEMPTS = 3;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // ── Tauri 窗口隐藏：暂停 WS 重连（BUG-011 衍生）────────────
+  // 窗口关闭（隐藏到托盘）时主动断 WS → 后端 onclose 立即清理订阅；
+  // 隐藏期间暂停自动重连，恢复可见时重连（重新订阅）。
+  let suspendReconnect = false;
 
   // ── Active session helpers ──
 
@@ -130,6 +149,20 @@ export function usePiConnection() {
 
   // ─── Event Handler ─────────────────────────────────────────────────
 
+  /** 懒启动 watchdog：轮询所有 streaming session，超 90s 无进展提示一次 */
+  function ensureWatchdog() {
+    if (watchdogTimer) return;
+    watchdogTimer = setInterval(() => {
+      for (const s of sessionStates.values()) {
+        if (!s.isStreaming) continue;
+        if (Date.now() - s.lastProgressAt > WATCHDOG_NO_PROGRESS_MS && !s.warnedNoOutput) {
+          s.warnedNoOutput = true;
+          addMessage(s, "system", "[Warn] 长时间无响应，可点 ■ 停止");
+        }
+      }
+    }, WATCHDOG_INTERVAL_MS);
+  }
+
   function handlePiEvent(raw: Record<string, unknown>) {
     // ── Broker-level meta events ──
     if (raw.type === "capabilities") return;
@@ -184,7 +217,7 @@ export function usePiConnection() {
 
       case "error": {
         const s = getOrCreateState(instanceId);
-        const errText = (data.error as string) || "";
+        const errText = (data.error as string) || (data.message as string) || "";
         const reason = (data.reason as string) || "";
         // Aborted generation: keep the partial output, just reset streaming state.
         if (/abort/i.test(errText) || reason === "aborted" || data.aborted === true) {
@@ -198,9 +231,13 @@ export function usePiConnection() {
           s.currentThinking = "";
           s.toolExecutions = [];
           s.isStreaming = false;
+          s.warnedNoOutput = false;
           handleRunSettled(s);
         } else {
-          addMessage(s, "system", `[Error] ${errText}`);
+          // 空错误文案不渲染裸 `[Error]`（如失败信息只在 message 字段或已由其他事件展示）
+          if (errText) {
+            addMessage(s, "system", `[Error] ${errText}`);
+          }
         }
         break;
       }
@@ -211,6 +248,10 @@ export function usePiConnection() {
         s.currentAssistantContent = "";
         s.currentThinking = "";
         s.toolExecutions = [];
+        // 新一轮生成：重置无进展计时与提示标记，启动 watchdog
+        s.lastProgressAt = Date.now();
+        s.warnedNoOutput = false;
+        ensureWatchdog();
         break;
       }
 
@@ -227,6 +268,7 @@ export function usePiConnection() {
           }
         }
         s.isStreaming = false;
+        s.warnedNoOutput = false;
         if (s.currentThinking || s.currentAssistantContent || s.toolExecutions.length > 0) {
           addMessage(s, "assistant", s.currentAssistantContent, {
             thinking: s.currentThinking || undefined,
@@ -246,9 +288,17 @@ export function usePiConnection() {
         if (!s) break;
         const evt = data.assistantMessageEvent as Record<string, unknown> | undefined;
         if (evt?.type === "text_delta") {
-          s.currentAssistantContent += (evt.delta as string) || "";
+          const delta = (evt.delta as string) || "";
+          if (delta) {
+            s.currentAssistantContent += delta;
+            s.lastProgressAt = Date.now();
+          }
         } else if (evt?.type === "thinking_delta") {
-          s.currentThinking += (evt.delta as string) || "";
+          const delta = (evt.delta as string) || "";
+          if (delta) {
+            s.currentThinking += delta;
+            s.lastProgressAt = Date.now();
+          }
         }
         break;
       }
@@ -271,6 +321,7 @@ export function usePiConnection() {
           s.currentThinking = "";
           s.toolExecutions = [];
         }
+        s.lastProgressAt = Date.now();
         break;
       }
 
@@ -286,6 +337,7 @@ export function usePiConnection() {
           s.currentThinking = "";
           s.toolExecutions = [];
         }
+        s.lastProgressAt = Date.now();
         break;
       }
 
@@ -305,6 +357,7 @@ export function usePiConnection() {
         const toolName = data.toolName as string || "Tool";
         const args = (data.args as Record<string, unknown>) || {};
         s.toolExecutions = [...s.toolExecutions, { toolCallId, toolName, args, status: "pending" }];
+        s.lastProgressAt = Date.now();
         break;
       }
       case "tool_execution_update": {
@@ -317,6 +370,7 @@ export function usePiConnection() {
             ? { ...te, status: "streaming" as const, output: formatToolOutput(partialResult) }
             : te,
         );
+        s.lastProgressAt = Date.now();
         break;
       }
       case "tool_execution_end": {
@@ -330,6 +384,42 @@ export function usePiConnection() {
             ? { ...te, status: isError ? "error" as const : "complete" as const, output: formatToolOutput(result), isError }
             : te,
         );
+        s.lastProgressAt = Date.now();
+        break;
+      }
+
+      // ── 失败可见性（BUG-013）：provider 故障 / 重试 / 扩展错误不再静默 ──
+      case "auto_retry_start": {
+        const s = getOrCreateState(instanceId);
+        const attempt = (data.attempt as number) || 0;
+        const maxAttempts = (data.maxAttempts as number) || 0;
+        const delayMs = (data.delayMs as number) || 0;
+        const errMsg = (data.errorMessage as string) || "provider request failed";
+        const suffix = delayMs > 0 ? `（${Math.round(delayMs / 1000)}s 后重试）` : "";
+        addMessage(s, "system", `[Retry ${attempt}/${maxAttempts}] ${errMsg}${suffix}`);
+        s.lastProgressAt = Date.now();
+        break;
+      }
+
+      case "auto_retry_end": {
+        const s = getOrCreateState(instanceId);
+        if (data.success === true) break; // 重试成功，不打扰
+        const finalError = (data.finalError as string) || "generation failed after retries";
+        addMessage(s, "system", `[Error] ${finalError}`);
+        s.isStreaming = false;
+        s.currentAssistantContent = "";
+        s.currentThinking = "";
+        s.toolExecutions = [];
+        s.warnedNoOutput = false;
+        handleRunSettled(s);
+        break;
+      }
+
+      case "extension_error": {
+        const s = getOrCreateState(instanceId);
+        const err = (data.error as string) || "extension error";
+        const evt = (data.event as string) || "";
+        addMessage(s, "system", `[Extension Error] ${err}${evt ? ` (${evt})` : ""}`);
         break;
       }
 
@@ -443,11 +533,38 @@ export function usePiConnection() {
     s.abortFlushPending = false;
     if (s.abortTimer) clearTimeout(s.abortTimer);
     s.abortTimer = null;
+    s.warnedNoOutput = false;
   }
 
   // ─── WebSocket ──────────────────────────────────────────────────────
 
+  /** 注册窗口生命周期监听（幂等）：隐藏→断 WS 并暂停重连；恢复可见→重连重新订阅 */
+  function registerWindowLifecycleListeners() {
+    if (windowLifecycleRegistered) return;
+    windowLifecycleRegistered = true;
+    if (typeof window === "undefined") return;
+    const isTauri = "__TAURI_INTERNALS__" in window;
+    if (isTauri) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => {
+          listen("piter-window-hidden", () => {
+            suspendReconnect = true;
+            ws?.close();
+          }).catch(() => {});
+        })
+        .catch(() => {});
+    }
+    // 恢复可见 → 复位并重连（纯前端感知，不依赖后端信号）
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && suspendReconnect) {
+        suspendReconnect = false;
+        if (!ws || ws.readyState !== WebSocket.OPEN) connectWebSocket();
+      }
+    });
+  }
+
   function connectWebSocket() {
+    registerWindowLifecycleListeners();
     const url = getWsUrl();
     statusText.value = "Connecting...";
     ws = new WebSocket(url);
@@ -479,6 +596,7 @@ export function usePiConnection() {
   }
 
   function scheduleReconnect() {
+    if (suspendReconnect) return; // 窗口隐藏中：不自动重连（恢复可见时由 visibilitychange 接管）
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       reconnectAttempts++;
       const delay = reconnectAttempts * 3000;
@@ -699,6 +817,10 @@ export function usePiConnection() {
   }
 
   onUnmounted(() => {
+    if (watchdogTimer) {
+      clearInterval(watchdogTimer);
+      watchdogTimer = null;
+    }
     disconnect();
   });
 

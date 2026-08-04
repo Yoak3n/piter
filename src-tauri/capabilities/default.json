@@ -9,6 +9,9 @@
   "permissions": [
     "core:default",
     "core:event:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
     "opener:default",
     "dialog:default",
     "log:default"

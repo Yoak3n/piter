@@ -9,7 +9,7 @@ use crate::base::{
 };
 use crate::pi::{try_resolve_pi_binary, locked_pi_version};
 
-use tauri::{AppHandle, Builder, Listener, Manager, RunEvent, generate_handler};
+use tauri::{AppHandle, Builder, Emitter, Listener, Manager, RunEvent, generate_handler};
 use tauri_plugin_log::{Target, TargetKind};
 
 use std::path::PathBuf;
@@ -68,6 +68,9 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
 
     let builder = builder.plugin(tauri_plugin_dialog::init());
 
+    // D3: Linux（AUR 场景）关闭内置 updater，更新由 pacman 管理；
+    // Windows 保留 tauri-plugin-updater。
+    #[cfg(not(target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     let builder = builder.plugin(
@@ -81,6 +84,7 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
                 }),
             ])
             .level(log::LevelFilter::Info)
+            .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
             .build(),
     );
 
@@ -132,7 +136,8 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         let _ = create_tray_icon(app, false);
 
         // Auto-update check (release builds only; dev builds skip the chain).
-        #[cfg(not(debug_assertions))]
+        // Linux 关闭内置 updater（D3：AUR 场景由 pacman 管理更新）。
+        #[cfg(all(not(debug_assertions), not(target_os = "linux")))]
         crate::updater::spawn_update_check(app.handle().clone());
 
         // Listen for navigation events from remote frontend (bypasses command ACL).
@@ -248,6 +253,10 @@ pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let window = app_handle.get_webview_window(&label).unwrap();
+                // 窗口关闭（隐藏到托盘）：通知前端主动断开 WS，
+                // 让订阅清理走 onclose → subscribers.remove → disconnected_since 最优路径，
+                // 而不是等轻量模式 10min 计时后 destroy_window 才触发。
+                let _ = window.emit("piter-window-hidden", ());
                 let _ = window.hide();
             }
             tauri::WindowEvent::Focused(true) => {}
