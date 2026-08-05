@@ -196,8 +196,9 @@ watch(sessionStatus, (status) => {
 <template>
   <div class="app-shell">
     <!-- Window title bar: replaces the OS title bar (desktop). Spans the full
-         window width, identical to the admin view's title bar. -->
-    <TitleBar>
+         window width, identical to the admin view's title bar. Phones don't
+         have draggable chrome, so the whole bar is skipped in mobile mode. -->
+    <TitleBar v-if="!mobileMode">
       <template #left>
         <span class="app-brand">Piter</span>
       </template>
@@ -271,14 +272,14 @@ watch(sessionStatus, (status) => {
 </template>
 
 <style>
-@import "./styles/design-system.css";
+@import "@piter/ui/styles/design-system.css";
 
 .app-shell {
   display: flex;
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
-  background: var(--color-bg-app);
+  background: var(--bg);
 }
 
 .app-shell__body {
@@ -290,7 +291,7 @@ watch(sessionStatus, (status) => {
 .app-brand {
   font-size: 12px;
   font-weight: 600;
-  color: var(--color-text-secondary);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }

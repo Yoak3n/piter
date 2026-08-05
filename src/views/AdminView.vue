@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch, defineAsyncComponent } from "vue";
-import { TitleBar } from "@piter/ui";
+import { TitleBar, setLocale } from "@piter/ui";
 import { useAdmin } from "../composables/useAdmin";
+import { i18n } from "../i18n";
 import type { AppSettings, PiSettings } from "../composables/useAdmin";
 import { applyTheme, darkMedia } from "../utils/theme";
 import AdminNav from "../components/admin/AdminNav.vue";
@@ -26,7 +27,7 @@ const { config, status, piSettings, piInstall, downloadProgress, loading, error,
 const activeTab = ref("status");
 
 const appSettings = computed<AppSettings>(() =>
-  config.value?.app ?? { theme: "system", auto_start: true, start_minimized: true }
+  config.value?.app ?? { theme: "system", language: "system", auto_start: true, start_minimized: true }
 );
 
 // Theme currently in effect. Normally follows the saved config, but the
@@ -53,6 +54,7 @@ onMounted(() => {
 watch(appSettings, (s) => {
   activeTheme.value = s.theme;
   syncTheme();
+  setLocale(i18n, s.language);
 });
 
 // Appearance tab previews an unsaved theme selection.
@@ -102,11 +104,19 @@ function handlePackagesChanged(packages: string[]) {
     <div class="admin-body">
       <AdminNav :activeTab="activeTab" :chatAvailable="chatAvailable" @select="handleTabSelect" />
       <main class="admin-main">
-      <div v-if="error" class="admin-error">{{ error }}</div>
+      <div v-if="error" class="admin-error">
+        <strong>{{ $t("admin.errorPrefix") }}</strong> {{ error }}
+      </div>
 
       <div v-if="piMissing" class="admin-banner">
-        <strong>Pi runtime not found.</strong>
-        <span>Pi features are unavailable. Go to <a href="#" @click.prevent="activeTab = 'versions'">Versions</a> to download a Pi binary.</span>
+        <strong>{{ $t("admin.piMissingTitle") }}</strong>
+        <span>
+          <i18n-t keypath="admin.piMissingDesc">
+            <template #link>
+              <a href="#" @click.prevent="activeTab = 'versions'">{{ $t("admin.versions") }}</a>
+            </template>
+          </i18n-t>
+        </span>
       </div>
 
       <StatusTab
@@ -171,7 +181,7 @@ function handlePackagesChanged(packages: string[]) {
 </template>
 
 <style>
-@import "../styles/design-system.css";
+@import "@piter/ui/styles/design-system.css";
 </style>
 
 <style scoped>

@@ -11,11 +11,13 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
-    }
+    },
+    "./styles/*": "./src/styles/*"
   },
   "files": ["src"],
   "peerDependencies": {
     "@tauri-apps/api": "^2",
-    "vue": "^3.5.0"
+    "vue": "^3.5.0",
+    "vue-i18n": "^11.4.8"
   }
 }
