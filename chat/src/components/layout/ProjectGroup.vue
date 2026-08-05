@@ -29,6 +29,7 @@ const emit = defineEmits<{
   (e: "request-delete", instanceId: string): void;
   (e: "confirm-delete", instanceId: string): void;
   (e: "cancel-delete"): void;
+  (e: "renamed"): void;
 }>();
 
 // Delete confirm + delete action use the same identity as session selection
@@ -122,6 +123,7 @@ function sessionKey(s: { instanceId?: string; id: string }): string {
         @request-delete="emit('request-delete', sessionKey(session))"
         @confirm-delete="emit('confirm-delete', sessionKey(session))"
         @cancel-delete="emit('cancel-delete')"
+        @renamed="emit('renamed')"
       />
     </div>
   </div>

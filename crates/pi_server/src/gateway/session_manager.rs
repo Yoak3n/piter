@@ -369,6 +369,15 @@ impl SessionManager {
         std::mem::take(&mut self.pending_names)
     }
 
+    /// Set a user-provided session name for a loaded session.
+    /// Marks the title as set so the auto-title logic won't override it.
+    pub fn set_session_name(&mut self, instance_id: &str, name: String) {
+        if let Some(session) = self.sessions.get_mut(instance_id) {
+            session.session_name = Some(name);
+            session.title_set = true;
+        }
+    }
+
     // ── Event Tracking ─────────────────────────────────────────────────
 
     /// Process a raw pi event and update in-memory message tracking.

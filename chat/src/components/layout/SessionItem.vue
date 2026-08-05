@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Trash2 } from "lucide-vue-next";
+import { Pencil, Trash2 } from "lucide-vue-next";
 import { StatusDot, InlineConfirm } from "@piter/ui";
 import type { SessionInfo } from "../../types";
 
@@ -21,9 +21,57 @@ const emit = defineEmits<{
   (e: "request-delete"): void;
   (e: "confirm-delete"): void;
   (e: "cancel-delete"): void;
+  (e: "renamed"): void;
 }>();
 
 const { t, locale } = useI18n();
+
+// ─── Inline rename ────────────────────────────────────────────────
+const editing = ref(false);
+const saving = ref(false);
+const draft = ref("");
+const inputEl = ref<HTMLInputElement | null>(null);
+
+function startEdit() {
+  draft.value = props.session.label;
+  editing.value = true;
+  nextTick(() => {
+    inputEl.value?.focus();
+    inputEl.value?.select();
+  });
+}
+
+function cancelEdit() {
+  if (saving.value) return;
+  editing.value = false;
+}
+
+async function saveEdit() {
+  if (saving.value) return;
+  const name = draft.value.trim();
+  // Empty or unchanged name → close without an API call.
+  if (!name || name === props.session.label) {
+    editing.value = false;
+    return;
+  }
+  saving.value = true;
+  try {
+    const res = await fetch("/api/sessions/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: props.session.filePath, name }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || `HTTP ${res.status}`);
+    editing.value = false;
+    emit("renamed");
+  } catch (e) {
+    console.error("Rename failed:", e);
+    // Keep the input open so the user can retry.
+  } finally {
+    saving.value = false;
+  }
+}
 
 const statusState = computed<"idle" | "busy" | "review" | "unloaded">(() => {
   switch (props.session.state) {
@@ -59,41 +107,64 @@ function formatTime(updatedAt: number): string {
   <button
     class="session-item"
     :class="{ active }"
-    @click="emit('select')"
+    @click="!editing && emit('select')"
   >
-    <div class="session-item-main">
-      <div class="session-title">
-        <StatusDot
-          :state="statusState"
-          :title="session.state || 'unloaded'"
+    <template v-if="editing">
+      <div class="session-rename-wrap" @click.stop>
+        <input
+          ref="inputEl"
+          v-model="draft"
+          class="session-rename-input"
+          :title="$t('chat.renameSession')"
+          @keydown.enter="saveEdit"
+          @keydown.esc="cancelEdit"
+          @blur="cancelEdit"
         />
-        <span
-          v-if="running"
-          class="session-running-indicator"
-          :title="$t('chat.piProcessing')"
-        />
-        {{ session.label || $t("common.untitled") }}
       </div>
-      <div class="session-meta">
-        <span class="session-time">{{ formatTime(session.updatedAt) }}</span>
+    </template>
+    <template v-else>
+      <div class="session-item-main">
+        <div class="session-title">
+          <StatusDot
+            :state="statusState"
+            :title="session.state || 'unloaded'"
+          />
+          <span
+            v-if="running"
+            class="session-running-indicator"
+            :title="$t('chat.piProcessing')"
+          />
+          {{ session.label || $t("common.untitled") }}
+        </div>
+        <div class="session-meta">
+          <span class="session-time">{{ formatTime(session.updatedAt) }}</span>
+        </div>
       </div>
-    </div>
 
-    <InlineConfirm
-      v-if="confirming"
-      :prompt="$t('chat.deletePrompt')"
-      :busy="deleteLoading"
-      @confirm="emit('confirm-delete')"
-      @cancel="emit('cancel-delete')"
-    />
-    <button
-      v-else
-      class="session-delete-btn"
-      :title="$t('chat.deleteSession')"
-      @click.stop="emit('request-delete')"
-    >
-      <Trash2 :size="12" />
-    </button>
+      <InlineConfirm
+        v-if="confirming"
+        :prompt="$t('chat.deletePrompt')"
+        :busy="deleteLoading"
+        @confirm="emit('confirm-delete')"
+        @cancel="emit('cancel-delete')"
+      />
+      <template v-else>
+        <button
+          class="session-edit-btn"
+          :title="$t('chat.renameSession')"
+          @click.stop="startEdit"
+        >
+          <Pencil :size="12" />
+        </button>
+        <button
+          class="session-delete-btn"
+          :title="$t('chat.deleteSession')"
+          @click.stop="emit('request-delete')"
+        >
+          <Trash2 :size="12" />
+        </button>
+      </template>
+    </template>
   </button>
 </template>
 
@@ -170,6 +241,7 @@ function formatTime(updatedAt: number): string {
   color: var(--text-tertiary);
 }
 
+.session-edit-btn,
 .session-delete-btn {
   display: flex;
   align-items: center;
@@ -184,8 +256,14 @@ function formatTime(updatedAt: number): string {
   transition: opacity var(--duration-fast) var(--ease);
 }
 
+.session-item:hover .session-edit-btn,
 .session-item:hover .session-delete-btn {
   opacity: 1;
+}
+
+.session-edit-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
 .session-delete-btn:hover {
@@ -193,8 +271,29 @@ function formatTime(updatedAt: number): string {
   color: var(--danger);
 }
 
+.session-rename-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.session-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
 /* Mobile: keep row actions visible without hover */
 @media (max-width: 640px) {
+  .session-edit-btn,
   .session-delete-btn {
     opacity: 1;
   }

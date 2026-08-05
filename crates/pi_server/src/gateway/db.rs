@@ -376,6 +376,17 @@ impl Db {
         .flatten()
     }
 
+    /// Find the instance_id for a session file path, if registered.
+    pub fn session_id_for_path(&self, session_path: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT instance_id FROM sessions WHERE session_path = ?1",
+            params![session_path],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
     /// Get the project_id for a session by instance_id.
     pub fn get_session_project(&self, instance_id: &str) -> Option<String> {
         let conn = self.conn.lock().unwrap();

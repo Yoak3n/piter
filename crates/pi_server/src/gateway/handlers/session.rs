@@ -152,6 +152,7 @@ pub async fn create_session_handler(
 }
 
 pub async fn rename_session_handler(
+    axum::extract::State(state): axum::extract::State<Arc<GatewayState>>,
     axum::Json(body): axum::Json<HashMap<String, Value>>,
 ) -> Json<Value> {
     let file_path = match body.get("path").and_then(|v| v.as_str()) {
@@ -163,7 +164,20 @@ pub async fn rename_session_handler(
         None => return Json(serde_json::json!({"success": false, "error": "missing name"})),
     };
     match rename_session(file_path, new_name) {
-        Ok(()) => Json(serde_json::json!({"success": true})),
+        Ok(()) => {
+            // The sessions list is built from in-memory state + DB, not the
+            // session file, so mirror the new name there too. Otherwise the
+            // sidebar would keep showing the old title after a refresh.
+            if let Some(instance_id) = state.db.session_id_for_path(file_path) {
+                let _ = state.db.set_session_name(&instance_id, new_name);
+                state
+                    .session_manager
+                    .lock()
+                    .set_session_name(&instance_id, new_name.to_string());
+            }
+            super::super::push_sessions_list_to_clients(&state);
+            Json(serde_json::json!({"success": true}))
+        }
         Err(e) => Json(serde_json::json!({"success": false, "error": e})),
     }
 }
