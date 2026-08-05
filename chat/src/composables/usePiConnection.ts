@@ -1,4 +1,5 @@
 import { ref, reactive, computed, onUnmounted } from "vue";
+import { i18n } from "../i18n";
 import type { Message, ToolExecution, ProjectGroup, ModelRef } from "../types";
 import {
   extractTextContent,
@@ -74,7 +75,7 @@ export function usePiConnection() {
 
   // ── Global connection state ──
   const isRunning = ref(false);
-  const statusText = ref("Connecting...");
+  const statusText = ref(i18n.global.t("chat.connecting"));
   const wsSessions = ref<ProjectGroup[]>([]);
   const sessionStatus = ref<"running" | "idle" | null>(null);
 
@@ -205,13 +206,13 @@ export function usePiConnection() {
     switch (data.type) {
       case "pi_started":
         isRunning.value = true;
-        statusText.value = "Connected";
+        statusText.value = i18n.global.t("common.connected");
         break;
 
       case "pi_exited":
       case "disconnected":
         isRunning.value = false;
-        statusText.value = "Disconnected";
+        statusText.value = i18n.global.t("chat.disconnected");
         scheduleReconnect();
         break;
 
@@ -442,6 +443,13 @@ export function usePiConnection() {
 
       case "response": {
         const cmd = data.command as string;
+        // 模型切换失败也走现有 system 消息链路提示（失败时 prompt 仍会用旧模型继续）
+        if ((cmd === "set_model" || cmd === "cycle_model") && data.success === false) {
+          const s = getOrCreateState(instanceId);
+          const errText = (data.error as string) || "unknown";
+          addMessage(s, "system", i18n.global.t("chat.modelSwitchFailed", { msg: errText }));
+          break;
+        }
         if (cmd === "new_session" && data.success) {
           const iid = data.instanceId as string | undefined;
           if (iid) {
@@ -566,11 +574,11 @@ export function usePiConnection() {
   function connectWebSocket() {
     registerWindowLifecycleListeners();
     const url = getWsUrl();
-    statusText.value = "Connecting...";
+    statusText.value = i18n.global.t("chat.connecting");
     ws = new WebSocket(url);
     ws.onopen = () => {
       isRunning.value = true;
-      statusText.value = "Connected";
+      statusText.value = i18n.global.t("common.connected");
       reconnectAttempts = 0;
       // Re-acknowledge current session after reconnect
       if (activeInstanceId.value) {
@@ -587,7 +595,7 @@ export function usePiConnection() {
     };
     ws.onclose = () => {
       isRunning.value = false;
-      statusText.value = "Disconnected";
+      statusText.value = i18n.global.t("chat.disconnected");
       scheduleReconnect();
     };
     ws.onerror = () => {
@@ -600,10 +608,10 @@ export function usePiConnection() {
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       reconnectAttempts++;
       const delay = reconnectAttempts * 3000;
-      statusText.value = `Reconnecting in ${reconnectAttempts}s...`;
+      statusText.value = i18n.global.t("chat.reconnecting", { s: reconnectAttempts });
       reconnectTimer = setTimeout(() => connectWebSocket(), delay);
     } else {
-      statusText.value = "Connection failed";
+      statusText.value = i18n.global.t("chat.connectionFailed");
     }
   }
 

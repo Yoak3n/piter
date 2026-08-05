@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { Copy, Check } from "lucide-vue-next";
 import { marked } from "marked";
 import { formatMessageTime } from "../../utils/message";
 
 marked.setOptions({ breaks: true, gfm: true });
+
+const { t } = useI18n();
 
 const props = defineProps<{
   content: string;
@@ -80,13 +83,13 @@ function decorateCodeBlocks(root: HTMLElement) {
 
     const langEl = document.createElement("span");
     langEl.className = "code-lang";
-    langEl.textContent = lang || "code";
+    langEl.textContent = lang || t("chat.code");
 
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "code-copy-btn";
-    btn.title = "Copy code";
-    btn.setAttribute("aria-label", "Copy code");
+    btn.title = t("chat.copyCode");
+    btn.setAttribute("aria-label", t("chat.copyCode"));
     btn.innerHTML = COPY_ICON;
 
     header.append(langEl, btn);
@@ -140,7 +143,7 @@ onMounted(() => {
         v-if="mode === 'assistant'"
         class="copy-btn"
         :class="{ copied }"
-        aria-label="Copy message"
+        :aria-label="$t('chat.copyMessage')"
         @click="copyMessage"
       >
         <Check v-if="copied" :size="12" />
@@ -157,17 +160,17 @@ onMounted(() => {
 .user-msg { align-self:flex-end; align-items:flex-end; }
 .assistant-msg { align-self:flex-start; align-items:flex-start; }
 
-.msg-bubble { border-radius:12px; padding:8px 12px; line-height:1.5; font-size:13px; position:relative; min-width:0; max-width:100%; }
-.user-bubble { background:var(--color-accent-soft); border:1px solid color-mix(in srgb, var(--color-accent) 15%, transparent); }
-.assistant-bubble { background:var(--color-bg-panel); border:1px solid var(--color-border-subtle); }
+.msg-bubble { border-radius:var(--radius-md); padding:8px 12px; line-height:1.5; font-size:13px; position:relative; min-width:0; max-width:100%; }
+.user-bubble { background:var(--accent-soft); border:1px solid color-mix(in srgb, var(--accent) 15%, transparent); }
+.assistant-bubble { background:var(--bg-panel); border:1px solid var(--border); }
 
-.msg-time { font-size:10px; color:var(--color-text-tertiary); margin-top:2px; padding:0 4px; user-select:none; }
+.msg-time { font-size:10px; color:var(--text-tertiary); margin-top:2px; padding:0 4px; user-select:none; }
 
-.cursor-blink { display:inline-block; width:6px; height:14px; background:var(--color-accent); animation:blink 1s step-end infinite; vertical-align:text-bottom; }
+.cursor-blink { display:inline-block; width:6px; height:14px; background:var(--accent); animation:blink 1s step-end infinite; vertical-align:text-bottom; }
 @keyframes blink { 50% { opacity:0; } }
 
 /* Copy button */
-.copy-btn { position:absolute; top:6px; right:6px; opacity:0; display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:none; background:var(--color-bg-muted); border-radius:var(--radius-sm); color:var(--color-text-tertiary); cursor:pointer; transition:opacity 0.15s, color 0.15s; }
+.copy-btn { position:absolute; top:6px; right:6px; opacity:0; display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:none; background:var(--bg-muted); border-radius:var(--radius-sm); color:var(--text-tertiary); cursor:pointer; transition:opacity 0.15s, color 0.15s; }
 .msg-bubble:hover .copy-btn { opacity:0.6; }
 .copy-btn:hover { opacity:1 !important; }
 .copy-btn.copied { opacity:1 !important; color:var(--success); }
@@ -179,19 +182,19 @@ onMounted(() => {
 .markdown-body :deep(h3){ font-size:1em; }
 .markdown-body :deep(p){ margin:0.2em 0; }
 .markdown-body :deep(ul),.markdown-body :deep(ol){ margin:0.2em 0; padding-left:1.4em; }
-.markdown-body :deep(code){ font-family:var(--font-family-mono); font-size:0.85em; background:var(--color-bg-muted); padding:1px 4px; border-radius:3px; }
-.markdown-body :deep(pre){ margin:0; padding:10px 12px; background:var(--color-code-bg); color:var(--color-code-text); border-radius:0 0 8px 8px; overflow-x:auto; scrollbar-width:thin; scrollbar-color:color-mix(in srgb, var(--color-code-text) 25%, transparent) transparent; font-family:var(--font-family-mono); font-size:13px; line-height:1.6; }
+.markdown-body :deep(code){ font-family:var(--font-mono); font-size:0.85em; background:var(--bg-muted); padding:1px 4px; border-radius:3px; }
+.markdown-body :deep(pre){ margin:0; padding:10px 12px; background:var(--code-bg); color:var(--code-text); border-radius:0 0 var(--radius-sm) var(--radius-sm); overflow-x:auto; scrollbar-width:thin; scrollbar-color:color-mix(in srgb, var(--code-text) 25%, transparent) transparent; font-family:var(--font-mono); font-size:13px; line-height:1.6; }
 /* 代码块内横向滚动条：细滚动条，内容超宽时可见可横滚（PC/移动端一致） */
 .markdown-body :deep(pre::-webkit-scrollbar){ height:6px; }
 .markdown-body :deep(pre::-webkit-scrollbar-track){ background:transparent; }
-.markdown-body :deep(pre::-webkit-scrollbar-thumb){ background:color-mix(in srgb, var(--color-code-text) 25%, transparent); border-radius:3px; }
-.markdown-body :deep(pre::-webkit-scrollbar-thumb:hover){ background:color-mix(in srgb, var(--color-code-text) 45%, transparent); }
+.markdown-body :deep(pre::-webkit-scrollbar-thumb){ background:color-mix(in srgb, var(--code-text) 25%, transparent); border-radius:3px; }
+.markdown-body :deep(pre::-webkit-scrollbar-thumb:hover){ background:color-mix(in srgb, var(--code-text) 45%, transparent); }
 .markdown-body :deep(pre code){ background:none; padding:0; font-size:inherit; }
-.markdown-body :deep(blockquote){ margin:0.3em 0; padding-left:10px; border-left:2px solid var(--color-border-strong); color:var(--color-text-secondary); }
+.markdown-body :deep(blockquote){ margin:0.3em 0; padding-left:10px; border-left:2px solid var(--border-strong); color:var(--text-secondary); }
 
 /* 表格：块内横向滚动，列宽自适应容器，不撑破文档 */
 .markdown-body :deep(table){ display:block; max-width:100%; overflow-x:auto; border-collapse:collapse; }
-.markdown-body :deep(th), .markdown-body :deep(td){ padding:4px 8px; border:1px solid var(--color-border-subtle); }
+.markdown-body :deep(th), .markdown-body :deep(td){ padding:4px 8px; border:1px solid var(--border); }
 
 /* 图片：限制最大宽度，避免大图/带宽度属性图片溢出被裁剪 */
 .markdown-body :deep(img){ max-width:100%; height:auto; }
@@ -200,13 +203,13 @@ onMounted(() => {
 .markdown-body :deep(*){ max-width:100%; }
 
 /* Code block wrapper (decorated at runtime: header + pre) */
-.markdown-body :deep(.code-block){ margin:0.4em 0; border-radius:8px; overflow:hidden; max-width:100%; min-width:0; background:var(--color-code-bg); }
-.markdown-body :deep(.code-block-header){ display:flex; align-items:center; justify-content:space-between; padding:3px 6px 3px 12px; background:color-mix(in srgb, var(--color-code-bg) 70%, #000 30%); border-bottom:1px solid color-mix(in srgb, var(--color-code-bg) 80%, #fff 10%); }
-.markdown-body :deep(.code-lang){ font-family:var(--font-family-mono); font-size:11px; color:var(--color-text-tertiary); user-select:none; text-transform:lowercase; }
-.markdown-body :deep(.code-copy-btn){ display:flex; align-items:center; justify-content:center; width:22px; height:22px; border:none; border-radius:4px; background:transparent; color:var(--color-text-tertiary); cursor:pointer; opacity:0; transition:opacity 0.15s, background 0.15s, color 0.15s; }
+.markdown-body :deep(.code-block){ margin:0.4em 0; border-radius:var(--radius-sm); overflow:hidden; max-width:100%; min-width:0; background:var(--code-bg); }
+.markdown-body :deep(.code-block-header){ display:flex; align-items:center; justify-content:space-between; padding:3px 6px 3px 12px; background:color-mix(in srgb, var(--code-bg) 70%, #000 30%); border-bottom:1px solid color-mix(in srgb, var(--code-bg) 80%, #fff 10%); }
+.markdown-body :deep(.code-lang){ font-family:var(--font-mono); font-size:11px; color:var(--text-tertiary); user-select:none; text-transform:lowercase; }
+.markdown-body :deep(.code-copy-btn){ display:flex; align-items:center; justify-content:center; width:22px; height:22px; border:none; border-radius:4px; background:transparent; color:var(--text-tertiary); cursor:pointer; opacity:0; transition:opacity 0.15s, background 0.15s, color 0.15s; }
 .markdown-body :deep(.code-block:hover .code-copy-btn){ opacity:0.7; }
-.markdown-body :deep(.code-copy-btn:hover){ opacity:1 !important; background:color-mix(in srgb, var(--color-code-text) 12%, transparent); }
-.markdown-body :deep(.code-copy-btn.copied){ opacity:1 !important; color:#34d399; }
+.markdown-body :deep(.code-copy-btn:hover){ opacity:1 !important; background:color-mix(in srgb, var(--code-text) 12%, transparent); }
+.markdown-body :deep(.code-copy-btn.copied){ opacity:1 !important; color:var(--state-idle); }
 
 @media (max-width: 640px) {
   .msg { max-width:95%; }

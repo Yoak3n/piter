@@ -121,7 +121,7 @@ onUnmounted(() => {
     <button
       class="model-selector-btn"
       :class="{ disabled: unavailable }"
-      :title="unavailable ? 'Model switching not available' : 'Select model'"
+      :title="unavailable ? $t('chat.modelUnavailable') : $t('chat.selectModel')"
       @click.stop="unavailable ? null : toggle()"
     >
       <span class="model-selector-label">{{ displayName }}</span>
@@ -133,17 +133,17 @@ onUnmounted(() => {
         v-model="searchText"
         type="text"
         class="model-search"
-        placeholder="Search models..."
+        :placeholder="$t('chat.searchModels')"
         autocomplete="off"
       />
 
       <div class="model-list">
-        <div v-if="loading" class="model-empty">Loading...</div>
+        <div v-if="loading" class="model-empty">{{ $t("common.loading") }}</div>
         <div v-else-if="unavailable" class="model-empty">
-          Model switching unavailable
+          {{ $t("chat.modelUnavailable") }}
         </div>
         <div v-else-if="filteredModels.length === 0" class="model-empty">
-          No models available
+          {{ $t("chat.noModelsHint") }}
         </div>
         <button
           v-for="model in filteredModels"
@@ -182,17 +182,17 @@ onUnmounted(() => {
   gap: 4px;
   height: 26px;
   padding: 0 8px;
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  background: var(--color-bg-muted);
-  color: var(--color-text-primary);
+  background: var(--bg-muted);
+  color: var(--text);
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
 }
 
 .model-selector-btn:hover:not(.disabled) {
-  background: var(--color-bg-hover);
+  background: var(--bg-hover);
 }
 
 .model-selector-btn.disabled {
@@ -216,8 +216,8 @@ onUnmounted(() => {
   max-height: 280px;
   display: flex;
   flex-direction: column;
-  background: var(--color-bg-panel);
-  border: 1px solid var(--color-border-subtle);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-modal);
   z-index: 50;
@@ -227,15 +227,15 @@ onUnmounted(() => {
 .model-search {
   padding: 8px 10px;
   border: none;
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-panel);
-  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
   font-size: 12px;
   outline: none;
 }
 
 .model-search::placeholder {
-  color: var(--color-text-tertiary);
+  color: var(--text-tertiary);
 }
 
 .model-list {
@@ -245,7 +245,7 @@ onUnmounted(() => {
 
 .model-empty {
   padding: 14px;
-  color: var(--color-text-tertiary);
+  color: var(--text-tertiary);
   font-size: 12px;
   text-align: center;
 }
@@ -258,18 +258,18 @@ onUnmounted(() => {
   padding: 8px 10px;
   border: none;
   background: none;
-  color: var(--color-text-primary);
+  color: var(--text);
   font-size: 12px;
   cursor: pointer;
   text-align: left;
 }
 
 .model-item:hover {
-  background: var(--color-bg-hover);
+  background: var(--bg-hover);
 }
 
 .model-item.active {
-  background: var(--color-accent-soft);
+  background: var(--accent-soft);
 }
 
 .model-item-name {
@@ -280,14 +280,14 @@ onUnmounted(() => {
 
 .model-item-provider {
   font-size: 10px;
-  color: var(--color-text-tertiary);
-  background: var(--color-bg-muted);
+  color: var(--text-tertiary);
+  background: var(--bg-muted);
   padding: 0 5px;
   border-radius: 3px;
 }
 
 .model-item-ctx {
   font-size: 10px;
-  color: var(--color-text-tertiary);
+  color: var(--text-tertiary);
 }
 </style>

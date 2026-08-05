@@ -49,12 +49,12 @@ async function openAdmin() {
       <button
         v-if="isTauri"
         class="hamburger-btn"
-        title="Desktop settings"
+        :title="$t('chat.settings')"
         @click="openAdmin"
       >
         <Settings :size="14" />
       </button>
-      <span class="status-dot" :class="{ connected: isRunning, disconnected: !isRunning }" :title="isRunning ? 'Connected' : 'Disconnected'" />
+      <span class="status-dot" :class="{ connected: isRunning, disconnected: !isRunning }" :title="isRunning ? $t('common.connected') : $t('chat.disconnected')" />
       <span v-if="!isRunning" class="status-label disconnected-label">{{ statusText }}</span>
     </div>
   </header>
@@ -67,8 +67,8 @@ async function openAdmin() {
   padding: 0 12px;
   height: 44px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-panel);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
 }
 .header-info {
   display: flex;
@@ -91,18 +91,18 @@ async function openAdmin() {
   border: none;
   background: none;
   cursor: pointer;
-  color: var(--color-text-secondary);
-  border-radius: 6px;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 .hamburger-btn:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
+  background: var(--bg-hover);
+  color: var(--text);
 }
 .session-label {
   font-size: 12px;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -112,22 +112,22 @@ async function openAdmin() {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #999;
+  background: var(--text-tertiary);
   flex-shrink: 0;
-  transition: background 0.3s, box-shadow 0.3s;
+  transition: background var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
 .status-dot.connected {
-  background: #34d399;
-  box-shadow: 0 0 6px 2px rgba(52, 211, 153, 0.5);
+  background: var(--state-idle);
+  box-shadow: 0 0 6px 2px color-mix(in srgb, var(--state-idle) 50%, transparent);
 }
 .status-dot.disconnected {
-  background: #ef4444;
+  background: var(--state-error);
 }
 .status-label {
   font-size: 10px;
-  color: var(--color-text-tertiary);
+  color: var(--text-tertiary);
 }
 .disconnected-label {
-  color: var(--color-danger);
+  color: var(-danger);
 }
 </style>

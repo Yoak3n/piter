@@ -44,6 +44,6 @@ function toggleThinking(id: number) {
 
 <style scoped>
 .turn { display:flex; flex-direction:column; gap:6px; min-width:0; }
-.system-msg { align-self:center; font-size:10px; color:var(--color-text-tertiary); background:var(--color-bg-muted); padding:2px 10px; border-radius:10px; min-width:0; }
+.system-msg { align-self:center; font-size:10px; color:var(--text-tertiary); background:var(--bg-muted); padding:2px 10px; border-radius:var(--radius-sm); min-width:0; }
 .tool-executions { display:flex; flex-direction:column; gap:4px; align-self:flex-start; max-width:90%; min-width:0; }
 </style>

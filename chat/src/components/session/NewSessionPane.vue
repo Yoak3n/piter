@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 // Only show the 'Browse' button when running inside Tauri (native dialog)
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -23,6 +26,25 @@ const newProjectName = ref('')
 const firstMessage = ref('')
 const error = ref('')
 
+// ─── First-launch onboarding ───────────────────────────────────────────
+// Shown once until dismissed or the first session is created — three quick
+// steps to get a new user from zero to their first question.
+const ONBOARDING_KEY = 'piter-onboarded'
+const showGuide = ref(false)
+
+function dismissGuide() {
+  showGuide.value = false
+  try { localStorage.setItem(ONBOARDING_KEY, '1') } catch { /* ignore */ }
+}
+
+onMounted(() => {
+  try {
+    showGuide.value = !localStorage.getItem(ONBOARDING_KEY)
+  } catch {
+    showGuide.value = true
+  }
+})
+
 const dbProjects = ref<Array<{ id: string; name: string; cwd: string }>>([])
 
 async function fetchProjects() {
@@ -32,7 +54,7 @@ async function fetchProjects() {
     if (data.success) dbProjects.value = data.projects
   } catch (err) {
     const errorMsg = err instanceof Error ? `Failed to fetch projects: ${err.message}` : 'Unknown error'
-    error.value = errorMsg
+    error.value = t('chat.fetchProjectsError', { msg: errorMsg })
     console.error(errorMsg)
   }
   preselectProject()
@@ -71,6 +93,13 @@ const matchingProjects = computed(() =>
   dbProjects.value.filter(p => p.cwd === selectedCwd.value)
 )
 
+// Project name when "Auto" is selected: falls back to the directory name.
+const autoProjectName = computed(() =>
+  selectedCwd.value
+    ? selectedCwd.value.split(/[/\\]/).filter(Boolean).pop() || 'New Session'
+    : ''
+)
+
 onMounted(() => {
   fetchProjects()
   if (props.initialCwd) {
@@ -94,7 +123,7 @@ function selectProject(id: string) {
 
 function handleBrowse() {
   import('@tauri-apps/plugin-dialog').then(({ open }) => {
-    open({ directory: true, multiple: false, title: 'Select working directory' }).then((sel) => {
+    open({ directory: true, multiple: false, title: t('chat.browseTitle') }).then((sel) => {
       if (sel && typeof sel === 'string') {
         selectedCwd.value = sel
         selectedProjectId.value = ''
@@ -104,12 +133,22 @@ function handleBrowse() {
   }).catch(() => {})
 }
 
+// Onboarding step 1 → jump to the desktop settings (Providers tab area).
+async function openSettings() {
+  if (!isTauri) return
+  try {
+    const { emit } = await import('@tauri-apps/api/event')
+    await emit('navigate-to-admin')
+  } catch { /* non-critical */ }
+}
+
 function handleCreate() {
   if (!selectedCwd.value.trim()) {
-    error.value = 'Select a working directory'
+    error.value = t('chat.selectDirError')
     return
   }
   error.value = ''
+  dismissGuide()
 
   // Determine the project name: selected existing project, new project name, or directory name as fallback
   let name = ''
@@ -138,15 +177,58 @@ function handleCreate() {
   <div class="welcome-pane">
     <div class="welcome-content">
       <div class="welcome-header">
-        <h1>Piter Chat</h1>
-        <p class="tagline">Start a conversation</p>
+        <h1>{{ $t("chat.paneTitle") }}</h1>
+        <p class="tagline">{{ $t("chat.paneTagline") }}</p>
+      </div>
+
+      <!-- First-launch guide: three steps to your first question -->
+      <div v-if="showGuide" class="onboarding">
+        <button
+          class="onboarding-close"
+          :aria-label="$t('chat.dismiss')"
+          :title="$t('chat.dismiss')"
+          @click="dismissGuide"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+        <div class="onboarding-emoji">👋</div>
+        <h2 class="onboarding-title">{{ $t("chat.welcomeTitle") }}</h2>
+        <ol class="onboarding-steps">
+          <li class="onboarding-step">
+            <span class="onboarding-num">1</span>
+            <div class="onboarding-body">
+              <strong>{{ $t("chat.stepAddProvider") }}</strong>
+              <i18n-t keypath="chat.stepAddProviderDesc" tag="span">
+                <template #settings>
+                  <button v-if="isTauri" class="step-link" @click="openSettings">{{ $t("chat.settingsLink") }}</button>
+                  <template v-else>{{ $t("chat.settingsLink") }}</template>
+                </template>
+              </i18n-t>
+            </div>
+          </li>
+          <li class="onboarding-step">
+            <span class="onboarding-num">2</span>
+            <div class="onboarding-body">
+              <strong>{{ $t("chat.stepCreateSession") }}</strong>
+              <span>{{ $t("chat.stepCreateSessionDesc") }}</span>
+            </div>
+          </li>
+          <li class="onboarding-step">
+            <span class="onboarding-num">3</span>
+            <div class="onboarding-body">
+              <strong>{{ $t("chat.stepAsk") }}</strong>
+              <span>{{ $t("chat.stepAskDesc") }}</span>
+            </div>
+          </li>
+        </ol>
+        <button class="btn btn-primary onboarding-done" @click="dismissGuide">{{ $t("common.gotIt") }}</button>
       </div>
 
       <!-- Environment configuration -->
       <div class="config-area">
         <!-- Working directory -->
         <div class="config-row">
-          <span class="config-label">Directory</span>
+          <span class="config-label">{{ $t("chat.directory") }}</span>
           <div class="config-chips">
             <button
               v-for="d in uniqueDirs"
@@ -162,7 +244,7 @@ function handleCreate() {
               class="chip chip-dashed"
               @click="handleBrowse"
             >
-              + Browse
+              + {{ $t("common.browse") }}
             </button>
           </div>
         </div>
@@ -172,7 +254,7 @@ function handleCreate() {
 
         <!-- Project -->
         <div class="config-row">
-          <span class="config-label">Project</span>
+          <span class="config-label">{{ $t("chat.project") }}</span>
           <div class="config-chips">
             <button
               v-for="p in matchingProjects"
@@ -186,9 +268,10 @@ function handleCreate() {
             <button
               class="chip"
               :class="{ active: !selectedProjectId && !createNewProject }"
+              :title="$t('chat.autoProjectTitle')"
               @click="selectedProjectId = ''; createNewProject = false"
             >
-              None
+              {{ $t("chat.autoProject") }}
             </button>
             <button
               v-if="!mobileMode"
@@ -196,19 +279,25 @@ function handleCreate() {
               :class="{ active: createNewProject }"
               @click="createNewProject = !createNewProject; selectedProjectId = ''"
             >
-              + New
+              {{ $t("chat.newProject") }}
             </button>
           </div>
+        </div>
+        <div
+          v-if="!selectedProjectId && !createNewProject && autoProjectName"
+          class="project-hint"
+        >
+          {{ $t("chat.autoHint", { name: autoProjectName }) }}
         </div>
 
         <!-- New project name (inline, only when creating) -->
         <div v-if="createNewProject" class="config-row">
-          <span class="config-label">Name</span>
+          <span class="config-label">{{ $t("chat.name") }}</span>
           <input
             v-model="newProjectName"
             type="text"
             class="config-input"
-            placeholder="My project"
+            :placeholder="$t('chat.projectPlaceholder')"
           />
         </div>
 
@@ -221,7 +310,7 @@ function handleCreate() {
           v-model="firstMessage"
           type="text"
           class="prompt-input"
-          placeholder="What do you want to work on?"
+          :placeholder="$t('chat.promptPlaceholder')"
           @keydown.enter="handleCreate"
         />
         <button class="send-btn" @click="handleCreate" :disabled="!selectedCwd">
@@ -230,7 +319,7 @@ function handleCreate() {
           </svg>
         </button>
       </div>
-      <p class="hint">Press Enter or click send to start — session name is auto-generated</p>
+      <p class="hint">{{ $t("chat.paneHint") }}</p>
     </div>
   </div>
 </template>
@@ -241,76 +330,78 @@ function handleCreate() {
   align-items: center;
   justify-content: center;
   height: 100%;
-  padding: 2rem;
+  padding: 3rem;
 }
 
 .welcome-content {
-  max-width: 600px;
+  max-width: 680px;
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 2.25rem;
 }
 
 .welcome-header {
   text-align: center;
+  margin-bottom: 0.75rem;
 }
 
 .welcome-header h1 {
-  font-size: 1.8rem;
+  font-size: 2.6rem;
   font-weight: 600;
   margin: 0;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .tagline {
   color: var(--text-secondary);
-  font-size: 0.95rem;
-  margin: 0.4rem 0 0;
+  font-size: 1.05rem;
+  margin: 0.6rem 0 0;
 }
 
 /* Config area */
 .config-area {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
-  padding: 1rem 1.25rem;
+  gap: 1.1rem;
+  padding: 1.5rem 1.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 12px);
   background: var(--bg-panel);
+  box-shadow: var(--shadow-md);
 }
 
 .config-row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 1.1rem;
 }
 
 .config-label {
-  font-size: 0.75rem;
+  font-size: 0.85rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-secondary);
-  min-width: 60px;
+  min-width: 72px;
   flex-shrink: 0;
 }
 
 .config-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.5rem;
 }
 
 .chip {
-  padding: 0.3rem 0.65rem;
+  padding: 0.45rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: transparent;
-  color: var(--text-primary);
-  font-size: 0.78rem;
+  color: var(--text);
+  font-size: 0.875rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--duration-fast);
   white-space: nowrap;
 }
 
@@ -319,9 +410,10 @@ function handleCreate() {
 }
 
 .chip.active {
-  background: var(--accent, #3b82f6);
+  background: var(--accent-soft);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-strong);
+  font-weight: 500;
 }
 
 .chip-dashed {
@@ -331,12 +423,12 @@ function handleCreate() {
 
 .config-input {
   flex: 1;
-  padding: 0.3rem 0.6rem;
+  padding: 0.45rem 0.75rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-primary);
-  font-size: 0.85rem;
+  color: var(--text);
+  font-size: 0.95rem;
   outline: none;
 }
 
@@ -346,53 +438,63 @@ function handleCreate() {
 
 .config-selected-path {
   margin-top: -0.25rem;
-  margin-left: 68px;
-  font-size: 0.72rem;
-  color: var(--text-tertiary, var(--text-secondary));
+  margin-left: 84px;
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
   font-family: monospace;
   word-break: break-all;
   line-height: 1.3;
 }
 
-.error {
-  color: var(--text-error, #ef4444);
+.project-hint {
+  margin-top: -0.4rem;
+  margin-left: 84px;
   font-size: 0.8rem;
+  color: var(--text-tertiary);
+}
+
+.error {
+  color: var(--danger);
+  font-size: 0.85rem;
   margin: 0;
 }
 
 /* Prompt area */
 .prompt-area {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.75rem;
 }
 
 .prompt-input {
   flex: 1;
-  padding: 0.85rem 1rem;
+  padding: 1rem 1.25rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg, 12px);
-  background: var(--bg-input, var(--bg-panel));
-  color: var(--text-primary);
-  font-size: 1rem;
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 1.1rem;
   outline: none;
+  box-shadow: var(--shadow-sm);
 }
 
 .prompt-input:focus {
   border-color: var(--accent);
+  box-shadow: var(--focus-ring);
 }
 
 .send-btn {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-lg, 12px);
-  border: none;
-  background: var(--accent, #3b82f6);
-  color: white;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease), transform 0.1s var(--ease);
 }
 
 .send-btn:disabled {
@@ -401,14 +503,133 @@ function handleCreate() {
 }
 
 .send-btn:not(:disabled):hover {
-  opacity: 0.9;
+  background: var(--accent-glow);
+  border-color: var(--accent);
+}
+
+.send-btn:not(:disabled):active {
+  transform: scale(0.96);
 }
 
 .hint {
-  font-size: 0.75rem;
-  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 0.85rem;
+  color: var(--text-tertiary);
   margin: 0;
   text-align: center;
 }
+
+/* ── First-launch onboarding ── */
+.onboarding {
+  position: relative;
+  padding: 1.75rem 2rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+  text-align: center;
+  animation: onboard-pop var(--duration) var(--spring);
+}
+
+@keyframes onboard-pop {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.onboarding-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.onboarding-close:hover {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+
+.onboarding-emoji {
+  font-size: 2.5rem;
+  line-height: 1;
+}
+
+.onboarding-title {
+  margin: 0.75rem 0 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.onboarding-steps {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  text-align: left;
+}
+
+.onboarding-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.onboarding-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent-strong);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.onboarding-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.onboarding-body strong {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.step-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.onboarding-done {
+  margin-top: 1.25rem;
+  height: 38px;
+  padding: 0 26px;
+  font-size: 0.9rem;
+}
 </style>
-tyle>

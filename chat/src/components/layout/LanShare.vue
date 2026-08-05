@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { QrCode, Copy, Check, X } from "lucide-vue-next";
 
 defineProps<{
   mobileMode: boolean;
 }>();
+
+const { t } = useI18n();
 
 const showPopover = ref(false);
 const qrSvg = ref("");
@@ -25,7 +28,7 @@ async function fetchQr() {
     // Extract the URL from the SVG for display (it's embedded in the QR)
     // We also fetch /api/lan-info for the plain URL
   } catch (e) {
-    error.value = `Failed to load QR: ${e}`;
+    error.value = t("chat.lanLoadError", { msg: e });
     qrSvg.value = "";
   } finally {
     loading.value = false;
@@ -80,7 +83,7 @@ async function copyUrl() {
   <div v-if="!mobileMode" class="lan-share">
     <button
       class="btn btn-ghost btn-icon btn-sm"
-      title="Share via LAN"
+      :title="$t('chat.shareViaLan')"
       @click="togglePopover"
     >
       <QrCode :size="14" />
@@ -90,13 +93,13 @@ async function copyUrl() {
     <div v-if="showPopover" class="lan-popover-overlay" @click.self="closePopover">
       <div class="lan-popover">
         <div class="lan-popover-header">
-          <span class="lan-popover-title">Scan to connect</span>
+          <span class="lan-popover-title">{{ $t("chat.scanToConnect") }}</span>
           <button class="btn-close" @click="closePopover">
             <X :size="14" />
           </button>
         </div>
 
-        <div v-if="loading" class="lan-popover-loading">Loading...</div>
+        <div v-if="loading" class="lan-popover-loading">{{ $t("common.loading") }}</div>
         <div v-else-if="error" class="lan-popover-error">{{ error }}</div>
         <template v-else>
           <div v-if="qrSvg" class="lan-qr-wrapper" v-html="qrSvg" />
@@ -104,7 +107,7 @@ async function copyUrl() {
             <code class="lan-url">{{ qrData }}</code>
             <button
               class="btn btn-ghost btn-icon btn-sm"
-              :title="copied ? 'Copied!' : 'Copy URL'"
+              :title="copied ? $t('common.copied') : $t('chat.copyUrl')"
               @click="copyUrl"
             >
               <Check v-if="copied" :size="14" />
@@ -131,17 +134,17 @@ async function copyUrl() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--overlay-backdrop);
 }
 
 .lan-popover {
-  background: var(--color-bg-panel);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 16px;
   min-width: 280px;
   max-width: 320px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-modal);
 }
 
 .lan-popover-header {
@@ -154,7 +157,7 @@ async function copyUrl() {
 .lan-popover-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text);
 }
 
 .btn-close {
@@ -165,25 +168,25 @@ async function copyUrl() {
   height: 24px;
   border: none;
   background: none;
-  color: var(--color-text-tertiary);
+  color: var(--text-tertiary);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .btn-close:hover {
-  background: var(--color-bg-hover);
+  background: var(--bg-hover);
 }
 
 .lan-popover-loading,
 .lan-popover-error {
   font-size: 12px;
-  color: var(--color-text-tertiary);
+  color: var(--text-tertiary);
   text-align: center;
   padding: 20px 0;
 }
 
 .lan-popover-error {
-  color: var(--color-danger);
+  color: var(-danger);
 }
 
 .lan-qr-wrapper {
@@ -195,23 +198,23 @@ async function copyUrl() {
 .lan-qr-wrapper :deep(svg) {
   width: 200px;
   height: 200px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
 .lan-url-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: var(--color-bg-muted);
-  border-radius: 6px;
+  background: var(--bg-muted);
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
 }
 
 .lan-url {
   flex: 1;
   font-size: 10px;
-  font-family: var(--font-family-mono);
-  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
   word-break: break-all;
   overflow: hidden;
   display: -webkit-box;

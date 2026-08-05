@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, watch } from "vue";
 import { ArrowDown } from "lucide-vue-next";
+import { EmptyState } from "@piter/ui";
 import type { ChatTurn, ToolExecution } from "../../types";
 import MessageTurn from "./MessageTurn.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
@@ -112,11 +113,57 @@ watch(() => props.currentThinking, scrollToBottom);
     @touchmove.capture="handleTouchMoveCapture"
     @touchend.capture="handleTouchEndCapture"
   >
-    <div v-if="turns.length === 0" class="empty-state">
-      <div class="empty-icon">💬</div>
-      <p>Chat with Pi, your coding agent.</p>
-      <p class="empty-hint">Type a message below and press Enter.</p>
-    </div>
+    <EmptyState
+      v-if="turns.length === 0"
+      fill
+      illustration
+      :title="$t('chat.timelineEmptyTitle')"
+      :hint="$t('chat.timelineEmptyHint')"
+    >
+      <template #icon>
+        <svg
+          class="empty-illustration"
+          width="76"
+          height="76"
+          viewBox="0 0 76 76"
+          fill="none"
+          aria-hidden="true"
+        >
+          <!-- chat bubble -->
+          <rect
+            x="12"
+            y="16"
+            width="46"
+            height="34"
+            rx="15"
+            fill="var(--accent-soft)"
+            stroke="var(--accent)"
+            stroke-width="1.5"
+          />
+          <path
+            d="M24 50l5 -6h-9z"
+            fill="var(--accent-soft)"
+            stroke="var(--accent)"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+          />
+          <!-- text lines -->
+          <rect x="22" y="27" width="18" height="3.5" rx="1.75" fill="var(--accent)" opacity="0.45" />
+          <rect x="22" y="36" width="26" height="3.5" rx="1.75" fill="var(--accent)" opacity="0.28" />
+          <!-- sparkles -->
+          <path
+            d="M64 14l1.7 3.6 3.6 1.7-3.6 1.7L64 24.6l-1.7-3.6-3.6-1.7 3.6-1.7z"
+            fill="var(--warning)"
+            opacity="0.85"
+          />
+          <path
+            d="M54 6l1.2 2.6 2.6 1.2-2.6 1.2L54 13.8l-1.2-2.6-2.6-1.2 2.6-1.2z"
+            fill="var(--accent)"
+            opacity="0.7"
+          />
+        </svg>
+      </template>
+    </EmptyState>
 
     <MessageTurn v-for="turn in turns" :key="turn.id" :turn="turn" />
 
@@ -148,8 +195,8 @@ watch(() => props.currentThinking, scrollToBottom);
     <button
       v-if="isPaused"
       class="scroll-to-bottom-btn"
-      aria-label="Scroll to bottom"
-      title="Scroll to bottom"
+      :aria-label="$t('chat.scrollToBottom')"
+      :title="$t('chat.scrollToBottom')"
       @click="jumpToBottom"
     >
       <ArrowDown :size="18" />
@@ -159,19 +206,16 @@ watch(() => props.currentThinking, scrollToBottom);
 
 <style scoped>
 .timeline { flex:1; overflow-y:auto; overflow-x:hidden; padding:16px 12px; display:flex; flex-direction:column; gap:12px; }
-.empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:var(--color-text-tertiary); text-align:center; gap:4px; }
-.empty-icon { font-size:2.5rem; }
-.empty-hint { font-size:11px; }
 
 .turn { display:flex; flex-direction:column; gap:6px; min-width:0; }
 .msg { display:flex; max-width:90%; min-width:0; }
 .assistant-msg { align-self:flex-start; }
-.msg-bubble { border-radius:12px; padding:8px 12px; line-height:1.5; font-size:13px; position:relative; min-width:0; }
-.assistant-bubble { background:var(--color-bg-panel); border:1px solid var(--color-border-subtle); }
+.msg-bubble { border-radius:var(--radius-md); padding:8px 12px; line-height:1.5; font-size:13px; position:relative; min-width:0; }
+.assistant-bubble { background:var(--bg-panel); border:1px solid var(--border); }
 
 .thinking-bubble { min-height:32px; display:flex; align-items:center; }
 .thinking-dots { display:flex; gap:4px; padding:4px 0; }
-.thinking-dot { width:6px; height:6px; border-radius:50%; background:var(--color-text-tertiary); animation:thinkBounce 1.4s ease-in-out infinite; }
+.thinking-dot { width:6px; height:6px; border-radius:50%; background:var(--text-tertiary); animation:thinkBounce 1.4s ease-in-out infinite; }
 .thinking-dot:nth-child(1) { animation-delay:0s; }
 .thinking-dot:nth-child(2) { animation-delay:0.2s; }
 .thinking-dot:nth-child(3) { animation-delay:0.4s; }
@@ -193,13 +237,13 @@ watch(() => props.currentThinking, scrollToBottom);
   height: 38px;
   margin-top: auto;
   border-radius: 50%;
-  border: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-panel);
-  color: var(--color-text-secondary);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
   cursor: pointer;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
-  transition: background 0.15s var(--ease), color 0.15s var(--ease), transform 0.1s var(--ease);
+  box-shadow: var(--shadow-md);
+  transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease), transform 0.1s var(--ease);
 }
-.scroll-to-bottom-btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.scroll-to-bottom-btn:hover { background: var(--bg-hover); color: var(--text); }
 .scroll-to-bottom-btn:active { transform: scale(0.94); }
 </style>

@@ -58,8 +58,8 @@ onUnmounted(() => {
   <Teleport to="body">
     <div v-if="open" ref="fsViewportRef" class="composer-fullscreen">
       <div class="fs-header">
-        <span class="fs-title">Edit prompt</span>
-        <button class="fs-close" aria-label="Close" @click="emit('close')">
+        <span class="fs-title">{{ $t("chat.editPrompt") }}</span>
+        <button class="fs-close" :aria-label="$t('common.close')" @click="emit('close')">
           <X :size="18" />
         </button>
       </div>
@@ -67,18 +67,18 @@ onUnmounted(() => {
         ref="fsInputRef"
         :value="modelValue"
         class="fs-input"
-        :placeholder="isRunning ? 'Type your prompt here...' : 'Disconnected'"
+        :placeholder="isRunning ? $t('chat.fsPlaceholder') : $t('chat.disconnected')"
         :disabled="!isRunning"
         @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
       />
       <div class="fs-footer">
-        <span class="fs-hint">{{ isStreaming ? "Send waits for the current run to finish" : "Enter adds a newline — send from the button below" }}</span>
+        <span class="fs-hint">{{ isStreaming ? $t("chat.fsHintStreaming") : $t("chat.fsHintIdle") }}</span>
         <div class="fs-actions">
           <button
             v-if="isStreaming"
             class="fs-stop"
-            title="Stop generation"
-            aria-label="Stop generation"
+            :title="$t('chat.stopGeneration')"
+            :aria-label="$t('chat.stopGeneration')"
             @click="emit('abort')"
           >
             <Square :size="14" />
@@ -88,7 +88,7 @@ onUnmounted(() => {
             :disabled="!isRunning || !modelValue.trim()"
             @click="emit('send')"
           >
-            {{ isStreaming ? "Send after" : "Send" }}
+            {{ isStreaming ? $t("chat.sendAfterRun") : $t("chat.send") }}
           </button>
         </div>
       </div>
@@ -100,46 +100,46 @@ onUnmounted(() => {
 .composer-fullscreen {
   position:fixed; left:0; top:0; width:100%; height:100vh; z-index:100;
   display:flex; flex-direction:column;
-  background:var(--color-bg-app);
+  background:var(--bg);
   padding-top:env(safe-area-inset-top);
   padding-bottom:env(safe-area-inset-bottom);
 }
 .fs-header {
   display:flex; align-items:center; justify-content:space-between;
   padding:8px 12px; flex-shrink:0;
-  border-bottom:1px solid var(--color-border-subtle);
-  background:var(--color-bg-panel);
+  border-bottom:1px solid var(--border);
+  background:var(--bg-panel);
 }
-.fs-title { font-size:13px; font-weight:600; color:var(--color-text-primary); }
+.fs-title { font-size:13px; font-weight:600; color:var(--text); }
 .fs-close {
   display:flex; align-items:center; justify-content:center;
-  width:30px; height:30px; border-radius:8px; border:none;
-  background:transparent; color:var(--color-text-secondary); cursor:pointer;
-  transition:background 0.15s var(--ease), color 0.15s var(--ease);
+  width:30px; height:30px; border-radius:var(--radius-sm); border:none;
+  background:transparent; color:var(--text-secondary); cursor:pointer;
+  transition:background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
 }
-.fs-close:hover { background:var(--color-bg-hover); color:var(--color-text-primary); }
+.fs-close:hover { background:var(--bg-hover); color:var(--text); }
 .fs-input {
   flex:1; width:100%; min-height:0;
   padding:14px 16px;
-  border:none; background:transparent; color:var(--color-text-primary);
+  border:none; background:transparent; color:var(--text);
   font-size:15px; line-height:1.6; resize:none; outline:none;
-  font-family:var(--font-family-base);
+  font-family:var(--font);
 }
 .fs-input:disabled { opacity:0.4; }
 .fs-footer {
   display:flex; align-items:center; justify-content:space-between; gap:12px;
   padding:10px 16px; flex-shrink:0;
-  border-top:1px solid var(--color-border-subtle);
-  background:var(--color-bg-panel);
+  border-top:1px solid var(--border);
+  background:var(--bg-panel);
 }
-.fs-hint { font-size:10px; color:var(--color-text-tertiary); }
+.fs-hint { font-size:10px; color:var(--text-tertiary); }
 .fs-actions { display:flex; align-items:center; gap:8px; }
 .fs-stop {
   display:flex; align-items:center; justify-content:center;
-  width:32px; height:32px; border-radius:8px; border:1px solid var(--color-border-subtle);
-  background:var(--color-bg-app); color:var(--color-danger, #ef4444); cursor:pointer;
-  transition:background 0.15s var(--ease), color 0.15s var(--ease);
+  width:32px; height:32px; border-radius:var(--radius-sm); border:1px solid var(--border);
+  background:var(--bg); color:var(--danger); cursor:pointer;
+  transition:background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
 }
-.fs-stop:hover { background:rgba(239,68,68,0.12); color:var(--color-danger, #ef4444); }
+.fs-stop:hover { background:var(--danger-soft); color:var(--danger); }
 .fs-send { height:32px; padding:0 18px; font-size:13px; }
 </style>

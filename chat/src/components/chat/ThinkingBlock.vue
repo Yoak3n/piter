@@ -21,7 +21,7 @@ const emit = defineEmits<{
     >
       <ChevronRight :size="12" class="thinking-chevron" :class="{ expanded }" />
       <Brain :size="12" />
-      <span class="thinking-label">Thinking</span>
+      <span class="thinking-label">{{ $t("chat.thinking") }}</span>
       <span v-if="streaming" class="thinking-dots-inline">
         <span class="thinking-dot" />
         <span class="thinking-dot" />
@@ -36,38 +36,38 @@ const emit = defineEmits<{
 
 <style scoped>
 .thinking-block {
-  background:var(--color-bg-muted);
-  border:1px solid var(--color-border-subtle);
-  border-radius:10px;
+  background:var(--bg-muted);
+  border:1px solid var(--border);
+  border-radius:var(--radius-md);
   overflow:hidden;
   align-self:flex-start;
   max-width:90%;
   font-size:13px;
-  transition:border-color 0.2s var(--ease);
+  transition:border-color var(--duration-fast) var(--ease);
 }
-.thinking-block:hover { border-color:var(--color-border-strong); }
+.thinking-block:hover { border-color:var(--border-strong); }
 .thinking-header {
   display:flex; align-items:center; gap:8px;
   padding:8px 12px; cursor:pointer; user-select:none;
-  font-size:12px; color:var(--color-text-tertiary);
+  font-size:12px; color:var(--text-tertiary);
   transition:background 0.15s var(--ease);
 }
 .thinking-block.streaming .thinking-header { cursor:default; }
-.thinking-header:hover { background:var(--color-bg-hover); }
-.thinking-label { font-family:var(--font-family-mono); font-size:11px; }
+.thinking-header:hover { background:var(--bg-hover); }
+.thinking-label { font-family:var(--font-mono); font-size:11px; }
 .thinking-chevron { transition:transform 0.2s var(--ease); opacity:0.4; flex-shrink:0; }
 .thinking-chevron.expanded { transform:rotate(90deg); }
 .thinking-content {
   padding:0 12px 12px; white-space:pre-wrap; overflow-wrap:anywhere;
-  font-style:italic; border-top:1px solid var(--color-border-subtle);
+  font-style:italic; border-top:1px solid var(--border);
   max-height:260px; overflow-y:auto; overscroll-behavior:auto;
-  font-size:12px; line-height:1.5; color:var(--color-text-secondary);
+  font-size:12px; line-height:1.5; color:var(--text-secondary);
 }
 .thinking-content.expanded { display:block; }
 .thinking-dots-inline { display:flex; gap:3px; margin-left:4px; }
 .thinking-dot {
   width:6px; height:6px; border-radius:50%;
-  background:var(--color-text-tertiary);
+  background:var(--text-tertiary);
   animation:thinkBounce 1.4s ease-in-out infinite;
 }
 .thinking-dot:nth-child(1) { animation-delay:0s; }

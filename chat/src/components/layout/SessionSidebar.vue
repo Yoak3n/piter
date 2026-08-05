@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
-import { Trash2, Plus, Search, X, RefreshCw, Pin, PinOff, Archive, ArchiveRestore } from "lucide-vue-next";
-import type { ProjectGroup } from "../../types";
+import { useI18n } from "vue-i18n";
+import { Plus, Search, X, RefreshCw } from "lucide-vue-next";
+import { EmptyState, SkeletonList } from "@piter/ui";
+import ProjectGroup from "./ProjectGroup.vue";
+import type { ProjectGroup as ProjectGroupType } from "../../types";
 
 const props = defineProps<{
   activeSessionId: string | null;
-  projects?: ProjectGroup[];
+  projects?: ProjectGroupType[];
   sessionStatus?: "running" | "idle" | null;
   mobileMode?: boolean;
 }>();
+
+const { t } = useI18n();
 
 const emit = defineEmits<{
   (e: "select-session", instanceId: string): void;
@@ -16,7 +21,7 @@ const emit = defineEmits<{
   (e: "new-session", cwd?: string, name?: string): void;
 }>();
 
-const projects = ref<ProjectGroup[]>([]);
+const projects = ref<ProjectGroupType[]>([]);
 const loading = ref(true);
 const error = ref("");
 const searchQuery = ref("");
@@ -28,7 +33,7 @@ const deleteLoading = ref(false);
 const archiveConfirm = ref<string | null>(null);
 const actionLoading = ref(false);
 
-async function togglePin(project: ProjectGroup) {
+async function togglePin(project: ProjectGroupType) {
   if (!project.id || actionLoading.value) return;
   actionLoading.value = true;
   try {
@@ -45,7 +50,7 @@ async function togglePin(project: ProjectGroup) {
   }
 }
 
-function confirmArchive(project: ProjectGroup) {
+function confirmArchive(project: ProjectGroupType) {
   if (!project.id) return;
   archiveConfirm.value = project.id;
 }
@@ -143,7 +148,7 @@ async function fetchSessions() {
     const data = await res.json();
     projects.value = data.projects || [];
   } catch (e: any) {
-    error.value = e.message || "Failed to load sessions";
+    error.value = e.message || t("chat.loadErrorTitle");
   } finally {
     loading.value = false;
   }
@@ -154,27 +159,6 @@ function toggleProject(projectName: string) {
   if (s.has(projectName)) s.delete(projectName);
   else s.add(projectName);
   collapsedProjects.value = s;
-}
-
-function formatTime(updatedAt: number): string {
-  const now = Date.now();
-  const diffMs = now - updatedAt * 1000;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const days = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (days === 1) return "Yesterday";
-  if (days < 7)
-    return new Date(updatedAt * 1000).toLocaleDateString([], {
-      weekday: "long",
-    });
-  return new Date(updatedAt * 1000).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-  });
 }
 
 async function handleDelete(instanceId: string) {
@@ -206,14 +190,14 @@ onMounted(fetchSessions);
           v-model="searchQuery"
           type="text"
           class="sidebar-search-input"
-          placeholder="Search sessions..."
+          :placeholder="$t('chat.searchSessions')"
           autocomplete="off"
         />
         <button
           v-if="searchQuery"
           class="search-clear"
           @click="searchQuery = ''"
-          title="Clear search"
+          :title="$t('chat.clearSearch')"
         >
           <X :size="12" />
         </button>
@@ -221,7 +205,7 @@ onMounted(fetchSessions);
       <div class="sidebar-actions">
         <button
           class="btn btn-ghost btn-icon btn-sm"
-          title="Refresh sessions"
+          :title="$t('chat.refreshSessions')"
           @click="fetchSessions"
           :disabled="loading"
         >
@@ -229,7 +213,7 @@ onMounted(fetchSessions);
         </button>
         <button
           class="btn btn-ghost btn-icon btn-sm"
-          title="New session"
+          :title="$t('chat.newSession')"
           @click="handleNewSession"
         >
           <Plus :size="16" />
@@ -240,31 +224,29 @@ onMounted(fetchSessions);
     <!-- Session list -->
     <div class="sidebar-sessions">
       <!-- Loading skeleton -->
-      <div v-if="loading" class="skeleton-list">
-        <div
-          v-for="i in 6"
-          :key="i"
-          class="skeleton-item"
-        >
-          <div class="skeleton-line skeleton-title" />
-          <div class="skeleton-line skeleton-meta" />
-        </div>
-      </div>
+      <SkeletonList v-if="loading" :rows="6" />
 
       <!-- Error state -->
-      <div v-else-if="error" class="sidebar-empty">
-        <p class="empty-text">Failed to load sessions</p>
-        <button class="btn btn-ghost btn-sm" @click="fetchSessions">
-          Retry
-        </button>
-      </div>
+      <EmptyState
+        v-else-if="error"
+        error
+        :title="$t('chat.loadErrorTitle')"
+        :hint="$t('chat.loadErrorHint')"
+      >
+        <template #actions>
+          <button class="btn btn-ghost btn-sm" @click="fetchSessions">
+            {{ $t("common.retry") }}
+          </button>
+        </template>
+      </EmptyState>
 
       <!-- Empty state -->
-      <div
+      <EmptyState
         v-else-if="projects.length === 0"
-        class="sidebar-empty"
+        :title="$t('chat.noSessionsTitle')"
+        :hint="$t('chat.noSessionsHint')"
       >
-        <div class="empty-icon">
+        <template #icon>
           <svg
             width="36"
             height="36"
@@ -281,288 +263,58 @@ onMounted(fetchSessions);
             <line x1="12" y1="12" x2="12" y2="18" />
             <line x1="9" y1="15" x2="15" y2="15" />
           </svg>
-        </div>
-        <p class="empty-title">No sessions yet</p>
-        <p class="empty-hint">
-          Start a new chat to create your first session.
-        </p>
-      </div>
+        </template>
+      </EmptyState>
 
       <!-- Project groups -->
       <template v-else>
-        <div
+        <ProjectGroup
           v-for="project in normalProjects"
           :key="project.path"
-          class="project-group"
-        >
-          <div
-            class="project-header"
-            role="button"
-            :title="project.path"
-            @click="toggleProject(project.name)"
-          >
-            <span
-              class="project-chevron"
-              :class="{ collapsed: collapsedProjects.has(project.name) }"
-            >&#9660;</span>
-            <span class="project-name">{{ project.name }}</span>
-            <Pin
-              v-if="project.pinned"
-              :size="11"
-              class="project-pinned-icon"
-              fill="currentColor"
-            />
-            <Archive
-              v-if="project.archived"
-              :size="11"
-              class="project-archived-icon"
-            />
-            <span class="project-count">{{ project.sessions.length }}</span>
-            <template v-if="project.id">
-              <span
-                v-if="archiveConfirm === project.id"
-                class="archive-confirm"
-                @click.stop
-              >
-                <span class="archive-confirm-text">Archive?</span>
-                <button
-                  class="btn btn-sm btn-danger"
-                  :disabled="actionLoading"
-                  @click="doArchive"
-                >
-                  Yes
-                </button>
-                <button
-                  class="btn btn-sm btn-ghost"
-                  @click="archiveConfirm = null"
-                >
-                  No
-                </button>
-              </span>
-              <template v-else-if="project.archived">
-                <button
-                  class="project-action-btn"
-                  title="Restore project"
-                  :disabled="actionLoading"
-                  @click.stop="restoreProject(project.id)"
-                >
-                  <ArchiveRestore :size="12" />
-                </button>
-              </template>
-              <template v-else>
-                <button
-                  class="project-action-btn"
-                  :title="project.pinned ? 'Unpin project' : 'Pin project'"
-                  :disabled="actionLoading"
-                  @click.stop="togglePin(project)"
-                >
-                  <PinOff v-if="project.pinned" :size="12" />
-                  <Pin v-else :size="12" />
-                </button>
-                <button
-                  class="project-action-btn"
-                  title="Archive project"
-                  :disabled="actionLoading"
-                  @click.stop="confirmArchive(project)"
-                >
-                  <Archive :size="12" />
-                </button>
-              </template>
-            </template>
-            <button
-              class="project-new-btn"
-              title="New chat"
-              @click.stop="emit('new-session', project.path, project.name)"
-            >
-              <Plus :size="12" />
-            </button>
-          </div>
-
-          <div
-            v-if="!collapsedProjects.has(project.name)"
-            class="project-sessions"
-          >
-            <button
-              v-for="session in project.sessions"
-              :key="session.instanceId ?? session.id"
-              class="session-item"
-              :class="{
-                active: (session.instanceId ?? session.id) === activeSessionId,
-              }"
-              @click="emit('select-session', session.instanceId ?? session.id)"
-            >
-              <div class="session-item-main">
-                <div class="session-title">
-                  <span
-                    class="session-status-dot"
-                    :class="{
-                      'status-idle': session.state === 'idle',
-                      'status-busy': session.state === 'busy',
-                      'status-review': session.state === 'waiting_review',
-                      'status-unloaded': session.state === 'unloaded',
-                    }"
-                    :title="session.state || 'unloaded'"
-                  />
-                  <span
-                    v-if="(session.instanceId ?? session.id) === activeSessionId && sessionStatus === 'running'"
-                    class="session-running-indicator"
-                    title="Pi is processing..."
-                  />
-                  {{ session.label || "Untitled" }}
-                </div>
-                <div class="session-meta">
-                  <span class="session-time">{{
-                    formatTime(session.updatedAt)
-                  }}</span>
-                </div>
-              </div>
-
-              <!-- Delete confirm -->
-              <template v-if="showDeleteConfirm === session.instanceId">
-                <div class="delete-confirm" @click.stop>
-                  <span class="delete-confirm-text">Delete?</span>
-                  <button
-                    class="btn btn-sm btn-danger"
-                    :disabled="deleteLoading"
-                    @click="handleDelete(session.instanceId)"
-                  >
-                    Yes
-                  </button>
-                  <button
-                    class="btn btn-sm btn-ghost"
-                    @click="showDeleteConfirm = null"
-                  >
-                    No
-                  </button>
-                </div>
-              </template>
-              <template v-else>
-                <button
-                  class="session-delete-btn"
-                  title="Delete session"
-                  @click.stop="showDeleteConfirm = session.instanceId ?? null"
-                >
-                  <Trash2 :size="12" />
-                </button>
-              </template>
-            </button>
-          </div>
-        </div>
+          :project="project"
+          :collapsed="collapsedProjects.has(project.name)"
+          :active-session-id="activeSessionId"
+          :session-status="sessionStatus ?? null"
+          :archive-confirm="archiveConfirm === project.id"
+          :action-loading="actionLoading"
+          :delete-confirm-id="showDeleteConfirm"
+          :delete-loading="deleteLoading"
+          @toggle="toggleProject(project.name)"
+          @pin="togglePin(project)"
+          @archive="confirmArchive(project)"
+          @confirm-archive="doArchive"
+          @cancel-archive="archiveConfirm = null"
+          @restore="project.id && restoreProject(project.id)"
+          @new-session="emit('new-session', project.path, project.name)"
+          @select-session="emit('select-session', $event)"
+          @request-delete="showDeleteConfirm = $event ?? null"
+          @confirm-delete="handleDelete($event)"
+          @cancel-delete="showDeleteConfirm = null"
+        />
 
         <!-- Archived projects stay visible under an "Archive" section -->
-        <div v-if="archivedFiltered.length > 0" class="archived-section">
-          <div class="archived-section-title">Archive</div>
-          <div
+        <template v-if="archivedFiltered.length > 0">
+          <div class="archived-section-title">{{ $t("chat.archiveSection") }}</div>
+          <ProjectGroup
             v-for="project in archivedFiltered"
             :key="'arch-' + project.path"
-            class="project-group"
-          >
-            <div
-              class="project-header"
-              role="button"
-              :title="project.path"
-              @click="toggleProject(project.name)"
-            >
-              <span
-                class="project-chevron"
-                :class="{ collapsed: collapsedProjects.has(project.name) }"
-              >&#9660;</span>
-              <span class="project-name">{{ project.name }}</span>
-              <Archive
-                :size="11"
-                class="project-archived-icon"
-              />
-              <span class="project-count">{{ project.sessions.length }}</span>
-              <template v-if="project.id">
-                <button
-                  class="project-action-btn"
-                  title="Restore project"
-                  :disabled="actionLoading"
-                  @click.stop="restoreProject(project.id)"
-                >
-                  <ArchiveRestore :size="12" />
-                </button>
-              </template>
-              <button
-                class="project-new-btn"
-                title="New chat"
-                @click.stop="emit('new-session', project.path, project.name)"
-              >
-                <Plus :size="12" />
-              </button>
-            </div>
-
-            <div
-              v-if="!collapsedProjects.has(project.name)"
-              class="project-sessions"
-            >
-              <button
-                v-for="session in project.sessions"
-                :key="session.instanceId ?? session.id"
-                class="session-item"
-                :class="{
-                  active: (session.instanceId ?? session.id) === activeSessionId,
-                }"
-                @click="emit('select-session', session.instanceId ?? session.id)"
-              >
-                <div class="session-item-main">
-                  <div class="session-title">
-                    <span
-                      class="session-status-dot"
-                      :class="{
-                        'status-idle': session.state === 'idle',
-                        'status-busy': session.state === 'busy',
-                        'status-review': session.state === 'waiting_review',
-                        'status-unloaded': session.state === 'unloaded',
-                      }"
-                      :title="session.state || 'unloaded'"
-                    />
-                    <span
-                      v-if="(session.instanceId ?? session.id) === activeSessionId && sessionStatus === 'running'"
-                      class="session-running-indicator"
-                      title="Pi is processing..."
-                    />
-                    {{ session.label || "Untitled" }}
-                  </div>
-                  <div class="session-meta">
-                    <span class="session-time">{{
-                      formatTime(session.updatedAt)
-                    }}</span>
-                  </div>
-                </div>
-
-                <!-- Delete confirm -->
-                <template v-if="showDeleteConfirm === session.instanceId">
-                  <div class="delete-confirm" @click.stop>
-                    <span class="delete-confirm-text">Delete?</span>
-                    <button
-                      class="btn btn-sm btn-danger"
-                      :disabled="deleteLoading"
-                      @click="handleDelete(session.instanceId)"
-                    >
-                      Yes
-                    </button>
-                    <button
-                      class="btn btn-sm btn-ghost"
-                      @click="showDeleteConfirm = null"
-                    >
-                      No
-                    </button>
-                  </div>
-                </template>
-                <template v-else>
-                  <button
-                    class="session-delete-btn"
-                    title="Delete session"
-                    @click.stop="showDeleteConfirm = session.instanceId ?? null"
-                  >
-                    <Trash2 :size="12" />
-                  </button>
-                </template>
-              </button>
-            </div>
-          </div>
-        </div>
+            :project="project"
+            :collapsed="collapsedProjects.has(project.name)"
+            :active-session-id="activeSessionId"
+            :session-status="sessionStatus ?? null"
+            :archive-confirm="false"
+            :action-loading="actionLoading"
+            :delete-confirm-id="showDeleteConfirm"
+            :delete-loading="deleteLoading"
+            @toggle="toggleProject(project.name)"
+            @restore="project.id && restoreProject(project.id)"
+            @new-session="emit('new-session', project.path, project.name)"
+            @select-session="emit('select-session', $event)"
+            @request-delete="showDeleteConfirm = $event ?? null"
+            @confirm-delete="handleDelete($event)"
+            @cancel-delete="showDeleteConfirm = null"
+          />
+        </template>
       </template>
     </div>
   </div>
@@ -573,8 +325,8 @@ onMounted(fetchSessions);
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--color-bg-sidebar);
-  border-right: 1px solid var(--color-border-subtle);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
 }
 
 .sidebar-header {
@@ -582,7 +334,7 @@ onMounted(fetchSessions);
   align-items: center;
   gap: 6px;
   padding: 10px 10px;
-  border-bottom: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
@@ -592,14 +344,14 @@ onMounted(fetchSessions);
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
-  background: var(--color-bg-panel);
-  border: 1px solid var(--color-border-subtle);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   min-width: 0;
 }
 
 .search-icon {
-  color: var(--color-text-tertiary);
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
@@ -608,13 +360,13 @@ onMounted(fetchSessions);
   border: none;
   background: none;
   outline: none;
-  color: var(--color-text-primary);
+  color: var(--text);
   font-size: 12px;
   min-width: 0;
 }
 
 .sidebar-search-input::placeholder {
-  color: var(--color-text-tertiary);
+  color: var(--text-tertiary);
 }
 
 .search-clear {
@@ -622,15 +374,15 @@ onMounted(fetchSessions);
   align-items: center;
   justify-content: center;
   padding: 2px;
-  border-radius: 3px;
-  color: var(--color-text-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .search-clear:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .sidebar-actions {
@@ -646,188 +398,6 @@ onMounted(fetchSessions);
   padding: 6px 0;
 }
 
-/* Skeleton */
-.skeleton-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 0 8px;
-}
-
-.skeleton-item {
-  padding: 10px 10px;
-  border-radius: var(--radius-md);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.skeleton-line {
-  height: 10px;
-  border-radius: 4px;
-  background: var(--color-bg-muted);
-  animation: shimmer 1.5s ease-in-out infinite;
-}
-
-.skeleton-title {
-  width: 70%;
-}
-
-.skeleton-meta {
-  width: 40%;
-}
-
-@keyframes shimmer {
-  0%,
-  100% {
-    opacity: 0.4;
-  }
-  50% {
-    opacity: 0.8;
-  }
-}
-
-/* Empty */
-.sidebar-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 16px;
-  gap: 8px;
-  text-align: center;
-}
-
-.empty-icon {
-  color: var(--color-text-tertiary);
-  opacity: 0.6;
-}
-
-.empty-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  margin: 0;
-}
-
-.empty-text,
-.empty-hint {
-  font-size: 11px;
-  color: var(--color-text-tertiary);
-  margin: 0;
-}
-
-/* Project group */
-.project-group {
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.project-group:last-child {
-  border-bottom: none;
-}
-
-.project-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  border: none;
-  background: none;
-  text-align: left;
-}
-
-.project-header:hover {
-  background: var(--color-bg-hover);
-}
-
-.project-chevron {
-  font-size: 8px;
-  transition: transform 0.15s ease;
-  flex-shrink: 0;
-}
-
-.project-chevron.collapsed {
-  transform: rotate(-90deg);
-}
-
-.project-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.project-count {
-  font-size: 10px;
-  color: var(--color-text-tertiary);
-  font-weight: 400;
-}
-
-.project-new-btn,
-.project-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.project-header:hover .project-new-btn,
-.project-header:hover .project-action-btn {
-  opacity: 1;
-}
-
-.project-new-btn:hover,
-.project-action-btn:hover {
-  background: var(--color-bg-active);
-  color: var(--color-text-primary);
-}
-
-.project-action-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.project-pinned-icon {
-  color: var(--color-accent);
-  flex-shrink: 0;
-}
-
-.project-archived-icon {
-  color: var(--color-text-tertiary);
-  flex-shrink: 0;
-}
-
-/* Archive confirm inline (mirrors delete-confirm) */
-.archive-confirm {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px;
-  background: var(--color-bg-panel);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-sm);
-  flex-shrink: 0;
-}
-
-.archive-confirm-text {
-  font-size: 11px;
-  color: var(--color-danger);
-  white-space: nowrap;
-}
-
 /* Archive section */
 .archived-section-title {
   padding: 10px 10px 4px;
@@ -835,153 +405,9 @@ onMounted(fetchSessions);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--color-text-tertiary);
-  border-top: 1px solid var(--color-border-subtle);
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--border);
   margin-top: 4px;
-}
-
-/* Session item */
-.project-sessions {
-  display: flex;
-  flex-direction: column;
-}
-
-.session-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px 8px 22px;
-  cursor: pointer;
-  border: none;
-  background: none;
-  width: 100%;
-  text-align: left;
-  font-size: 12px;
-  color: var(--color-text-primary);
-  gap: 6px;
-}
-
-.session-item:hover {
-  background: var(--color-bg-hover);
-}
-
-.session-item.active {
-  background: var(--color-accent-soft);
-  border-left: 2px solid var(--color-accent);
-  padding-left: 20px;
-}
-
-.session-item-main {
-  flex: 1;
-  min-width: 0;
-}
-
-.session-title {
-  font-size: 12px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.session-running-indicator {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  flex-shrink: 0;
-  animation: pulse-dot 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-.session-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--color-text-tertiary);
-  opacity: 0.3;
-}
-
-.session-status-dot.status-idle {
-  background: #34d399;
-  opacity: 1;
-}
-
-.session-status-dot.status-busy {
-  background: #f59e0b;
-  opacity: 1;
-  animation: pulse-dot 1.2s ease-in-out infinite;
-}
-
-.session-status-dot.status-review {
-  background: #60a5fa;
-  opacity: 1;
-}
-
-.session-status-dot.status-unloaded {
-  background: var(--color-text-tertiary);
-  opacity: 0.3;
-}
-
-.session-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-}
-
-.session-time {
-  font-size: 10px;
-  color: var(--color-text-tertiary);
-}
-
-.session-delete-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.session-item:hover .session-delete-btn {
-  opacity: 1;
-}
-
-.session-delete-btn:hover {
-  background: var(--color-danger-soft);
-  color: var(--color-danger);
-}
-
-/* Delete confirm inline */
-.delete-confirm {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px;
-  background: var(--color-bg-panel);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-sm);
-  flex-shrink: 0;
-}
-
-.delete-confirm-text {
-  font-size: 11px;
-  color: var(--color-danger);
-  white-space: nowrap;
 }
 
 .spinning {
@@ -1001,12 +427,6 @@ onMounted(fetchSessions);
     inset: 0;
     z-index: 40;
     max-width: 300px;
-  }
-
-  .session-item .session-delete-btn,
-  .project-new-btn,
-  .project-action-btn {
-    opacity: 1;
   }
 }
 </style>
