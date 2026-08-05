@@ -1,8 +1,8 @@
 [package]
 name = "piter"
 version = "0.1.1"
-description = "A Tauri App"
-authors = ["you"]
+description = "AI coding agent client — Tauri desktop shell + web chat UI driving pi coding agent sessions over WebSocket & REST"
+authors = ["Yoak3n <3354590676@qq.com>"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
