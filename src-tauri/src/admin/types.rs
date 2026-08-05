@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 fn default_theme() -> String {
     "system".into()
 }
+fn default_language() -> String {
+    "system".into()
+}
 fn default_true() -> bool {
     true
 }
@@ -31,6 +34,9 @@ impl Default for AdminConfig {
 pub struct AppSettings {
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// "system" | "zh" | "en" — follows the OS locale when "system".
+    #[serde(default = "default_language")]
+    pub language: String,
     #[serde(default = "default_true")]
     pub auto_start: bool,
     #[serde(default = "default_true")]
@@ -41,6 +47,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: default_theme(),
+            language: default_language(),
             auto_start: true,
             start_minimized: true,
         }

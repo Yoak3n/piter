@@ -162,7 +162,7 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
             let url = if web_url.is_empty() {
                 "/".to_string()
             } else {
-                crate::base::cmd::web_url_with_theme(&format!("{}chat", web_url))
+                crate::base::cmd::web_url_with_prefs(&format!("{}chat", web_url))
             };
             let _ = WM::global().show_window(WindowType::Main, Some(&url));
         }
