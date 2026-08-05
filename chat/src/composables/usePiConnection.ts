@@ -559,10 +559,19 @@ export function usePiConnection() {
             suspendReconnect = true;
             ws?.close();
           }).catch(() => {});
+          // 窗口从托盘恢复可见 → 复位并重连。
+          // 桌面 WebView 隐藏窗口不会触发 visibilitychange（窗口隐藏≠页面不可见），
+          // 恢复侧必须由 Rust 在 Focused(true) 时显式发信号（见 init.rs）。
+          listen("piter-window-shown", () => {
+            if (suspendReconnect) {
+              suspendReconnect = false;
+              if (!ws || ws.readyState !== WebSocket.OPEN) connectWebSocket();
+            }
+          }).catch(() => {});
         })
         .catch(() => {});
     }
-    // 恢复可见 → 复位并重连（纯前端感知，不依赖后端信号）
+    // 浏览器/移动端兜底：页面从后台恢复时复位并重连（桌面 WebView 不触发此事件）
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && suspendReconnect) {
         suspendReconnect = false;

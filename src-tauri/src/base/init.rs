@@ -5,7 +5,10 @@ use crate::base::{
     handle::Handle,
     state::{AppState, GatewaySlot},
     tray::create_tray_icon,
-    window::{manager::Manager as WM, schema::WindowType},
+    window::{
+        manager::Manager as WM,
+        schema::{WindowState, WindowType},
+    },
 };
 use crate::pi::{try_resolve_pi_binary, locked_pi_version};
 
@@ -23,6 +26,11 @@ pub fn generate_handlers(
         get_broker_url,
         navigate_to_admin,
         navigate_to_web,
+        minimize_window,
+        toggle_maximize_window,
+        close_window,
+        is_maximized_window,
+        show_window,
         get_admin_config,
         update_admin_config,
         get_admin_status,
@@ -260,13 +268,29 @@ pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let window = app_handle.get_webview_window(&label).unwrap();
+                // 同步 WM 缓存状态：所有关闭路径（标题栏 invoke close → WM::close_window →
+                // window.close()、Alt+F4 等）最终都汇聚到 CloseRequested，在此统一同步为 Hidden，
+                // 否则托盘 toggle / are_all_windows_closed 会误判"窗口仍可见"。
+                if let Some(wt) = WindowType::from_label(&label) {
+                    WM::global().update_window_state(wt, WindowState::Hidden);
+                }
                 // 窗口关闭（隐藏到托盘）：通知前端主动断开 WS，
                 // 让订阅清理走 onclose → subscribers.remove → disconnected_since 最优路径，
                 // 而不是等轻量模式 10min 计时后 destroy_window 才触发。
                 let _ = window.emit("piter-window-hidden", ());
                 let _ = window.hide();
             }
-            tauri::WindowEvent::Focused(true) => {}
+            tauri::WindowEvent::Focused(true) => {
+                // 窗口从托盘恢复可见：同步 WM 缓存状态 + 通知前端复位并重连 WS。
+                // 桌面 WebView 隐藏窗口不触发 visibilitychange（窗口隐藏≠页面不可见），
+                // 恢复侧必须由这里显式发信号，与隐藏侧的 piter-window-hidden 对称。
+                if let Some(window) = app_handle.get_webview_window(&label) {
+                    if let Some(wt) = WindowType::from_label(&label) {
+                        WM::global().update_window_state(wt, WindowState::VisibleFocused);
+                    }
+                    let _ = window.emit("piter-window-shown", ());
+                }
+            }
             tauri::WindowEvent::Focused(false) => {}
             tauri::WindowEvent::Destroyed => {}
             _ => {}

@@ -313,9 +313,24 @@ impl Manager {
                 }
             }
             WindowState::VisibleFocused => {
-                println!("窗口可见，将隐藏窗口");
-                update_tray(false);
-                self.close_window(window_type)
+                // 缓存状态只是内部记录，防御性兜底：以窗口实际可见性为准（如最小化后未更新、
+                // 未来其他绕过本管理器的路径），避免"窗口已隐藏却仍提示可见、反复隐藏"的死循环。
+                let actually_visible = self
+                    .get_window(window_type)
+                    .map(|w| w.is_visible().unwrap_or(false))
+                    .unwrap_or(false);
+                if actually_visible {
+                    println!("窗口可见，将隐藏窗口");
+                    update_tray(false);
+                    self.close_window(window_type)
+                } else {
+                    println!("缓存可见但窗口实际不可见，将激活窗口");
+                    update_tray(true);
+                    match self.get_window(window_type) {
+                        Some(window) => self.activate_window(&window, window_type),
+                        None => WindowOperationResult::Failed,
+                    }
+                }
             }
             WindowState::Minimized | WindowState::Hidden => {
                 println!("窗口存在但被隐藏或最小化，将激活窗口");
@@ -360,6 +375,27 @@ impl Manager {
             }
             None => false,
         }
+    }
+
+    /// 最大化 / 还原窗口（标题栏双击或按钮）。窗口状态由前端查询 is_maximized 刷新，
+    /// 缓存状态不含 Maximized 态，故此处不更新缓存。
+    pub fn toggle_maximize_window(&self, window_type: WindowType) -> bool {
+        match self.get_window(window_type) {
+            Some(window) => {
+                if window.is_maximized().unwrap_or(false) {
+                    window.unmaximize().is_ok()
+                } else {
+                    window.maximize().is_ok()
+                }
+            }
+            None => false,
+        }
+    }
+
+    /// 查询窗口是否最大化（标题栏图标状态）
+    pub fn is_maximized_window(&self, window_type: WindowType) -> Option<bool> {
+        self.get_window(window_type)
+            .map(|w| w.is_maximized().unwrap_or(false))
     }
 
     /// 检查是否所有窗口都已关闭（隐藏或不存在）
