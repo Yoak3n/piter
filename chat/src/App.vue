@@ -61,7 +61,7 @@ const { sessions, fetchSessions } = useSessions();
 
 const sidebarOpen = ref(window.innerWidth > 640);
 const sessionName = ref("");
-const modelId = ref<ModelRef | null>(null);
+const modelRef = ref<ModelRef | null>(null);
 const showNewSession = ref(true);
 const newSessionCwd = ref("");
 const newSessionName = ref("");
@@ -82,9 +82,9 @@ function handleDraftUpdate(text: string) {
   }
 }
 
-// Sync model from WS events into the modelId ref
+// Sync model from WS events into the modelRef
 watch(currentModel, (m) => {
-  if (m) modelId.value = m;
+  if (m) modelRef.value = m;
 });
 
 const mobileMode = ref(
@@ -101,12 +101,12 @@ function closeSidebar() {
 }
 
 function handleSend(text: string) {
-  sendPrompt(text, modelId.value);
+  sendPrompt(text, modelRef.value);
 }
 
 // 插队：在流式输出中立即投递（steer）
 function handleSteer(text: string) {
-  sendPrompt(text, modelId.value, "steer");
+  sendPrompt(text, modelRef.value, "steer");
 }
 
 // 终止当前生成
@@ -155,13 +155,13 @@ function handleNewSession(cwd?: string, name?: string) {
 async function handleCreateSession(payload: { cwd: string; name: string; message?: string }) {
   sessionName.value = payload.name;
   pendingFirstMessage.value = payload.message || null;
-  newSession(payload.cwd, payload.name, modelId.value);
+  newSession(payload.cwd, payload.name, modelRef.value);
   clearMessages();
   showNewSession.value = false;
 }
 
 function handleModelSelect(model: ModelRef) {
-  modelId.value = model;
+  modelRef.value = model;
 }
 
 onMounted(() => {
@@ -179,7 +179,7 @@ watch(activeInstanceId, (id) => {
     if (pendingFirstMessage.value) {
       const msg = pendingFirstMessage.value;
       pendingFirstMessage.value = null;
-      setTimeout(() => sendPrompt(msg, modelId.value), 100);
+      setTimeout(() => sendPrompt(msg, modelRef.value), 100);
     }
   }
 });
@@ -232,7 +232,7 @@ watch(sessionStatus, (status) => {
           :show-session-name="!showNewSession"
           :is-running="isRunning"
           :status-text="statusText"
-          :model-id="modelId"
+          :model-ref="modelRef"
           :session-status="sessionStatus"
           :mobile-mode="mobileMode"
           @toggle-sidebar="toggleSidebar"

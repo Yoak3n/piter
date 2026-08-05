@@ -90,7 +90,7 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
 
         let group = ProjectGroup {
             path: proj.cwd.clone(),
-            dir_name: proj.name.clone(),
+            name: proj.name.clone(),
             id: Some(proj.id.clone()),
             pinned: proj.pinned,
             archived: proj.archived,
@@ -138,7 +138,7 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
     if !orphans.is_empty() {
         result.push(ProjectGroup {
             path: String::new(),
-            dir_name: "Other".to_string(),
+            name: "Other".to_string(),
             id: None,
             pinned: 0,
             archived: false,

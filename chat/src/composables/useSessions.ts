@@ -1,4 +1,5 @@
 import { ref } from "vue";
+import { mapProjectGroups } from "../utils/projects";
 import type { ProjectGroup } from "../types";
 
 export function useSessions() {
@@ -11,14 +12,7 @@ export function useSessions() {
       const res = await fetch("/api/sessions");
       const data = await res.json();
       const raw = data.projects || [];
-      sessions.value = raw.map((p: Record<string, unknown>) => ({
-        id: p.id as string | undefined,
-        path: p.path as string || "",
-        name: (p.name ?? p.dirName) as string || "",
-        pinned: (p.pinned as number) || 0,
-        archived: (p.archived as boolean) || false,
-        sessions: p.sessions as any[] || [],
-      }));
+      sessions.value = mapProjectGroups(raw);
     } catch (e) {
       console.error("Failed to load sessions:", e);
     } finally {

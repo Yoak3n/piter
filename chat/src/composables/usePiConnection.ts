@@ -6,6 +6,7 @@ import {
   extractThinkingContent,
   formatToolOutput,
 } from "../utils/message";
+import { mapProjectGroups } from "../utils/projects";
 
 // ─── Per-session state ─────────────────────────────────────────────
 
@@ -426,14 +427,7 @@ export function usePiConnection() {
 
       case "sessions_list": {
         const raw = data.projects as Array<Record<string, unknown>> || [];
-        wsSessions.value = raw.map((p) => ({
-          id: p.id as string | undefined,
-          path: p.path as string || "",
-          name: (p.name ?? p.dirName) as string || "",
-          pinned: (p.pinned as number) || 0,
-          archived: (p.archived as boolean) || false,
-          sessions: p.sessions as any[] || [],
-        }));
+        wsSessions.value = mapProjectGroups(raw);
         break;
       }
 

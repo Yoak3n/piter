@@ -9,7 +9,7 @@ defineProps<{
   showSessionName: boolean;
   isRunning: boolean;
   statusText: string;
-  modelId?: ModelRef | null;
+  modelRef?: ModelRef | null;
   sessionStatus: "running" | "idle" | null;
   mobileMode: boolean;
 }>();
@@ -41,7 +41,7 @@ async function openAdmin() {
     </div>
     <div class="header-right">
       <ModelSelector
-        :model-id="modelId"
+        :model-ref="modelRef"
         :session-status="sessionStatus"
         @select-model="emit('select-model', $event)"
       />

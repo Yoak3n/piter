@@ -57,7 +57,8 @@ pub struct SessionInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectGroup {
     pub path: String,
-    pub dir_name: String,
+    /// Project display name (stored as `projects.name` in the DB).
+    pub name: String,
     /// Database project id; None for the synthetic "Other" orphan group.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,

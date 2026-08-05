@@ -238,7 +238,7 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 ```json
 {
   "path": "/absolute/cwd",
-  "dirName": "项目名",
+  "name": "项目名",
   "sessions": [SessionInfo...]
 }
 ```

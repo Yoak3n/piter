@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { Plus, Search, X, RefreshCw } from "lucide-vue-next";
 import { EmptyState, SkeletonList } from "@piter/ui";
 import ProjectGroup from "./ProjectGroup.vue";
+import { mapProjectGroups } from "../../utils/projects";
 import type { ProjectGroup as ProjectGroupType } from "../../types";
 
 const props = defineProps<{
@@ -25,7 +26,11 @@ const projects = ref<ProjectGroupType[]>([]);
 const loading = ref(true);
 const error = ref("");
 const searchQuery = ref("");
-const collapsedProjects = ref<Set<string>>(new Set());
+// Explicit collapse choices keyed by unique project identity (id ?? path).
+// Absence means "use the default": expanded for active projects, collapsed
+// for archived ones. Keyed by id/path instead of name so same-named projects
+// (different cwd) don't share a collapse state.
+const collapseChoice = ref<Map<string, boolean>>(new Map());
 const showDeleteConfirm = ref<string | null>(null);
 const deleteLoading = ref(false);
 
@@ -146,7 +151,9 @@ async function fetchSessions() {
     const res = await fetch("/api/sessions");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    projects.value = data.projects || [];
+    // Same normalization as the WS sessions_list path / useSessions, so the
+    // sidebar list stays consistent no matter which path refreshed it.
+    projects.value = mapProjectGroups(data.projects || []);
   } catch (e: any) {
     error.value = e.message || t("chat.loadErrorTitle");
   } finally {
@@ -154,11 +161,19 @@ async function fetchSessions() {
   }
 }
 
-function toggleProject(projectName: string) {
-  const s = new Set(collapsedProjects.value);
-  if (s.has(projectName)) s.delete(projectName);
-  else s.add(projectName);
-  collapsedProjects.value = s;
+function projectKey(p: ProjectGroupType): string {
+  return p.id ?? p.path;
+}
+
+function isCollapsed(p: ProjectGroupType): boolean {
+  const choice = collapseChoice.value.get(projectKey(p));
+  return choice === undefined ? !!p.archived : choice;
+}
+
+function toggleProject(p: ProjectGroupType) {
+  const m = new Map(collapseChoice.value);
+  m.set(projectKey(p), !isCollapsed(p));
+  collapseChoice.value = m;
 }
 
 async function handleDelete(instanceId: string) {
@@ -272,14 +287,14 @@ onMounted(fetchSessions);
           v-for="project in normalProjects"
           :key="project.path"
           :project="project"
-          :collapsed="collapsedProjects.has(project.name)"
+          :collapsed="isCollapsed(project)"
           :active-session-id="activeSessionId"
           :session-status="sessionStatus ?? null"
           :archive-confirm="archiveConfirm === project.id"
           :action-loading="actionLoading"
           :delete-confirm-id="showDeleteConfirm"
           :delete-loading="deleteLoading"
-          @toggle="toggleProject(project.name)"
+          @toggle="toggleProject(project)"
           @pin="togglePin(project)"
           @archive="confirmArchive(project)"
           @confirm-archive="doArchive"
@@ -290,6 +305,7 @@ onMounted(fetchSessions);
           @request-delete="showDeleteConfirm = $event ?? null"
           @confirm-delete="handleDelete($event)"
           @cancel-delete="showDeleteConfirm = null"
+          @renamed="fetchSessions"
         />
 
         <!-- Archived projects stay visible under an "Archive" section -->
@@ -299,20 +315,21 @@ onMounted(fetchSessions);
             v-for="project in archivedFiltered"
             :key="'arch-' + project.path"
             :project="project"
-            :collapsed="collapsedProjects.has(project.name)"
+            :collapsed="isCollapsed(project)"
             :active-session-id="activeSessionId"
             :session-status="sessionStatus ?? null"
             :archive-confirm="false"
             :action-loading="actionLoading"
             :delete-confirm-id="showDeleteConfirm"
             :delete-loading="deleteLoading"
-            @toggle="toggleProject(project.name)"
+            @toggle="toggleProject(project)"
             @restore="project.id && restoreProject(project.id)"
             @new-session="emit('new-session', project.path, project.name)"
             @select-session="emit('select-session', $event)"
             @request-delete="showDeleteConfirm = $event ?? null"
             @confirm-delete="handleDelete($event)"
             @cancel-delete="showDeleteConfirm = null"
+            @renamed="fetchSessions"
           />
         </template>
       </template>
