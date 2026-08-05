@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+> 版本主线：UI 重构（设计系统单源 + 明亮蓝令牌）+ 国际化（zh/en）。
+
+### 新增
+
+- **i18n 国际化**：vue-i18n en/zh 双语言——共享消息集（packages/ui/src/i18n），双端接入；admin 设置页语言切换即时生效并持久化，chat 端经 nav.rs 注入 `?lang=` 跟随；相对时间改用 `Intl.RelativeTimeFormat`（随语言变化）；Rust 侧 `AppSettings.language` 字段
+- **共享 UI 组件**：@piter/ui 新增 EmptyState / InlineConfirm / StatusDot / SkeletonList / PanelCard / StatCard / ChartCard
+- **首启三步引导**：欢迎页引导（配置 provider → 创建会话 → 提问），localStorage 一次后跳过
+
+### 重构
+
+- **design-system 单源治理**：双份 design-system.css 合并为 @piter/ui 单源（exports `./styles/*`），消除漂移
+- **UI 令牌升级**：主色 #6a7a8a → #2f6fed 明亮蓝（暗色 #6ea8ff）、圆角体系 12/16/20、主色色调投影、动效 .16-.25s；新增语义状态 token（--state-idle/busy/review/error）与图表色板（--chart-1..6）；主按钮改软填充+描边（蓝只点缀不做大面积背景）
+- **SessionSidebar 拆分**：1012 → 433 行，拆出 ProjectGroup / SessionItem，正常/归档重复渲染消除，删除确认统一走 sessionKey
+- **UsageTab 图表主题化**：OVERVIEW_TONES 硬编码色板 → 运行时读 --chart-1..6（跟随明暗主题）
+- **全量 i18n 文案**：chat 与 admin 所有界面文案抽取，错误提示友好化（给“怎么办”）
+
+### 修复
+
+- 会话删除/归档确认在无 instanceId 会话上失效（确认框不弹出）——统一改用 sessionKey（instanceId 兑底 id）
+
 ## [0.1.1] - 2026-08-05
 
 > 版本主线：统一自定义标题栏 + Bug 修复批次 + Linux 构建支持。
