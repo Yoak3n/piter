@@ -235,6 +235,17 @@ pub async fn pi_settings_handler() -> Json<serde_json::Value> {
     }
 }
 
+/// Model capability catalog: read pi's persisted model store from disk and
+/// return `{ success, models: [{ id, provider, input }] }`. Works without a
+/// running pi process so the frontend can warm its vision-capability registry
+/// immediately at startup.
+pub async fn pi_model_catalog_handler() -> Json<serde_json::Value> {
+    match crate::broker::util::read_pi_model_catalog() {
+        Ok(models) => Json(serde_json::json!({ "success": true, "models": models })),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e })),
+    }
+}
+
 // ─── RPC core logic ────────────────────────────────────────────────────────
 
 async fn rpc_to_instance(state: &Arc<GatewayState>, mut body: Value) -> Json<Value> {

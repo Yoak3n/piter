@@ -18,6 +18,7 @@ pub fn identifier() -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init::configure(tauri::Builder::default())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(init::generate_handlers())
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

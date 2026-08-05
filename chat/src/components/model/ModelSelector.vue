@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue"
 import { ChevronDown } from "lucide-vue-next"
 import type { ModelInfo, ModelRef } from "../../types"
+import { registerModelCapabilities } from "../../utils/modelCapability"
 
 const props = defineProps<{
   modelRef?: ModelRef | null
@@ -77,6 +78,8 @@ async function fetchModels() {
     const data = await res.json()
     if (data.success && Array.isArray(data.data?.models)) {
       models.value = data.data.models
+      // 登记模态声明（含自定义 provider 的最新模型），供多模态预检即时生效
+      registerModelCapabilities(data.data.models)
       return
     }
   } catch {

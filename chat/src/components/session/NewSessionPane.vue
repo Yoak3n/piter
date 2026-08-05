@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Paperclip, FileText, X } from 'lucide-vue-next'
+import type { Attachment, ModelRef } from '../../types'
+import { useFileDrop } from '../../composables/useFileDrop'
+import { filesToAttachments, clipboardImageFiles } from '../../utils/attachments'
+import { formatBytes, imageContentToSrc } from '../../utils/image'
 
 const { t } = useI18n()
 
@@ -13,10 +18,14 @@ const props = defineProps<{
   initialCwd?: string
   /** 预选的项目名（与 initialCwd 配套，用于选中 DB 中匹配的项目） */
   initialName?: string
+  /** pi 是否已连接（未连接时不响应文件拖拽） */
+  isRunning: boolean
+  /** 当前会话模型（用于多模态预检弱提示） */
+  currentModel?: ModelRef | null
 }>()
 
 const emit = defineEmits<{
-  (e: 'create', payload: { cwd: string; name: string; message?: string }): void
+  (e: 'create', payload: { cwd: string; name: string; message?: string; attachments?: Attachment[] }): void
 }>()
 
 const selectedCwd = ref('')
@@ -25,6 +34,59 @@ const createNewProject = ref(false)
 const newProjectName = ref('')
 const firstMessage = ref('')
 const error = ref('')
+/** 拖拽命中测试目标（Tauri 原生拖拽需按坐标判断是否落在输入区） */
+const promptAreaRef = ref<HTMLElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// ─── 附件（拖入文件暂存，随首条消息发送） ───────────────────────────────
+const pendingAttachments = ref<Attachment[]>([])
+
+const hintMsg = ref('')
+let hintTimer: ReturnType<typeof setTimeout> | null = null
+function showHint(msg: string) {
+  hintMsg.value = msg
+  if (hintTimer) clearTimeout(hintTimer)
+  hintTimer = setTimeout(() => { hintMsg.value = '' }, 4000)
+}
+
+function removeAttachment(id: string) {
+  pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== id)
+}
+
+/** 处理拖入/选中的文件（与 Composer 共用 filesToAttachments） */
+async function addFiles(files: File[]) {
+  const added = await filesToAttachments(files, {
+    t: (k) => t(k),
+    currentModel: props.currentModel,
+    onHint: showHint,
+  })
+  if (added.length) pendingAttachments.value.push(...added)
+}
+
+/** 按钮选择文件（移动端/浏览器没有 OS 拖拽时的入口） */
+function handleFiles(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  // 清空 value 以便再次选择同一文件
+  input.value = ''
+  if (!files.length) return
+  addFiles(files)
+}
+
+/** 粘贴图片（如 QQ 截图 Ctrl+V）→ 进入附件链路；剪贴板无图片时走默认文本粘贴 */
+function handlePaste(e: ClipboardEvent) {
+  if (!props.isRunning) return
+  const files = clipboardImageFiles(e)
+  if (!files.length) return
+  e.preventDefault()
+  addFiles(files)
+}
+
+const { isDragging, onDragEnter, onDragOver, onDragLeave, onDrop } = useFileDrop({
+  enabled: () => props.isRunning,
+  onFiles: addFiles,
+  target: promptAreaRef,
+})
 
 // ─── First-launch onboarding ───────────────────────────────────────────
 // Shown once until dismissed or the first session is created — three quick
@@ -100,14 +162,31 @@ const autoProjectName = computed(() =>
     : ''
 )
 
+/** 应用预选：挂载时 + 面板已打开再点其他项目 "+"（props 变化）时都要生效 */
+function applyInitialSelection() {
+  const cwd = props.initialCwd
+  if (cwd) {
+    selectedCwd.value = cwd
+    // preselectProject 依赖异步加载的 dbProjects；DB 未收录时退化为新建项目并预填名称
+    preselectProject()
+  } else {
+    selectedCwd.value = uniqueDirs.value[0]?.path ?? ''
+    selectedProjectId.value = ''
+    createNewProject.value = false
+  }
+}
+
 onMounted(() => {
   fetchProjects()
-  if (props.initialCwd) {
-    selectedCwd.value = props.initialCwd
-  } else if (uniqueDirs.value.length > 0) {
-    selectedCwd.value = uniqueDirs.value[0].path
-  }
+  applyInitialSelection()
 })
+
+// 准备页可能已经打开（showNewSession 未变、组件未重挂载）：
+// 此时点侧栏其他项目的 "+" 只改 props，需重新预选，否则停留在旧目录。
+watch(
+  () => [props.initialCwd, props.initialName] as const,
+  () => applyInitialSelection(),
+)
 
 function selectDir(path: string) {
   selectedCwd.value = path
@@ -162,12 +241,15 @@ function handleCreate() {
     name = selectedCwd.value.split(/[/\\]/).filter(Boolean).pop() || 'New Session'
   }
 
-  const payload: { cwd: string; name: string; message?: string } = {
+  const payload: { cwd: string; name: string; message?: string; attachments?: Attachment[] } = {
     cwd: selectedCwd.value,
     name,
   }
   if (firstMessage.value.trim()) {
     payload.message = firstMessage.value.trim()
+  }
+  if (pendingAttachments.value.length) {
+    payload.attachments = pendingAttachments.value
   }
   emit('create', payload)
 }
@@ -305,21 +387,75 @@ function handleCreate() {
       </div>
 
       <!-- Prompt input — the actual first message -->
-      <div class="prompt-area">
-        <input
-          v-model="firstMessage"
-          type="text"
-          class="prompt-input"
-          :placeholder="$t('chat.promptPlaceholder')"
-          @keydown.enter="handleCreate"
-        />
-        <button class="send-btn" @click="handleCreate" :disabled="!selectedCwd">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-          </svg>
-        </button>
+      <div class="prompt-wrap">
+        <div v-if="pendingAttachments.length" class="pending-attachments">
+          <div
+            v-for="att in pendingAttachments"
+            :key="att.id"
+            class="attachment-chip"
+            :title="att.fileName"
+          >
+            <img v-if="att.type === 'image' && att.data" :src="imageContentToSrc(att)" class="attachment-thumb" alt="" />
+            <span v-else class="attachment-file-icon"><FileText :size="14" /></span>
+            <span class="attachment-name">{{ att.fileName }}</span>
+            <span class="attachment-size">{{ formatBytes(att.size) }}</span>
+            <button
+              class="attachment-remove"
+              :title="t('chat.removeAttachment')"
+              :aria-label="t('chat.removeAttachment')"
+              @click="removeAttachment(att.id)"
+            >
+              <X :size="12" />
+            </button>
+          </div>
+        </div>
+        <div
+          ref="promptAreaRef"
+          class="prompt-area"
+          :class="{ 'is-dragging': isDragging }"
+          @dragenter="onDragEnter"
+          @dragover="onDragOver"
+          @dragleave="onDragLeave"
+          @drop="onDrop"
+        >
+          <div v-if="isDragging" class="prompt-drop-overlay" aria-hidden="true">
+            <Paperclip :size="18" />
+            <span>{{ $t("chat.dropFilesHint") }}</span>
+          </div>
+          <input
+            v-model="firstMessage"
+            type="text"
+            class="prompt-input"
+            :placeholder="$t('chat.promptPlaceholder')"
+            @keydown.enter="handleCreate"
+            @paste="handlePaste"
+          />
+          <input
+            ref="fileInputRef"
+            type="file"
+            class="file-input"
+            accept="image/*,.txt,.md,.json,.csv,.log"
+            multiple
+            @change="handleFiles"
+          />
+          <button
+            v-if="isRunning"
+            class="attach-btn"
+            :title="t('chat.attachFiles')"
+            :aria-label="t('chat.attachFiles')"
+            @click="fileInputRef?.click()"
+          >
+            <Paperclip :size="16" />
+          </button>
+          <button class="send-btn" @click="handleCreate" :disabled="!selectedCwd">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+            </svg>
+          </button>
+        </div>
+        <p v-if="hintMsg" class="prompt-hint" role="status">{{ hintMsg }}</p>
+        <p class="hint">{{ $t("chat.paneHint") }}</p>
       </div>
-      <p class="hint">{{ $t("chat.paneHint") }}</p>
     </div>
   </div>
 </template>
@@ -460,9 +596,120 @@ function handleCreate() {
 }
 
 /* Prompt area */
+.prompt-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
 .prompt-area {
+  position: relative;
   display: flex;
   gap: 0.75rem;
+}
+
+.prompt-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1.5px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.prompt-area.is-dragging .prompt-input {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.pending-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 3px 6px 3px 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+}
+
+.attachment-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.attachment-file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border);
+}
+
+.attachment-name {
+  font-size: 0.75rem;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size {
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.attachment-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.attachment-remove:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.prompt-hint {
+  color: var(--warning);
+  font-size: 0.85rem;
+  margin: 0;
 }
 
 .prompt-input {
@@ -475,6 +722,29 @@ function handleCreate() {
   font-size: 1.1rem;
   outline: none;
   box-shadow: var(--shadow-sm);
+}
+
+.file-input { display: none; }
+
+.attach-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.attach-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
 }
 
 .prompt-input:focus {

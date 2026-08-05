@@ -150,3 +150,69 @@ pub fn read_pi_settings() -> Result<PiAgentSettings, String> {
     serde_json::from_str(&json)
         .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
 }
+
+/// Read pi's cached **dynamic** provider catalogs (`~/.pi/agent/models-store.json`)
+/// directly from disk — no pi process needed. Note: this file only caches
+/// providers whose catalogs pi refreshes from the network (e.g. opencode-go's
+/// pi.dev catalog overlay, Radius); built-in catalogs (DeepSeek, OpenAI, …)
+/// ship inside pi and are NOT here. The complete list must come from pi's
+/// `get_available_models` RPC. Flattens the provider-grouped store into a
+/// minimal `[{ id, provider, input }]` list.
+pub fn read_pi_model_catalog() -> Result<serde_json::Value, String> {
+    let path = get_pi_agent_dir().join("models-store.json");
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+
+    let mut models: Vec<serde_json::Value> = Vec::new();
+    let Some(obj) = value.as_object() else {
+        return Ok(serde_json::Value::Array(models));
+    };
+    for (provider, group) in obj {
+        let Some(entries) = group.get("models").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for m in entries {
+            let Some(id) = m.get("id").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let input: Vec<String> = m
+                .get("input")
+                .and_then(serde_json::Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            models.push(serde_json::json!({
+                "id": id,
+                "provider": provider,
+                "input": input,
+            }));
+        }
+    }
+    Ok(serde_json::Value::Array(models))
+}
+
+/// Restore the default model in settings.json after pi's `set_model` rewrote
+/// it. Uses partial JSON updates (not the typed struct) so unknown fields
+/// (skills, etc.) are preserved.
+pub fn set_default_model(provider: &str, model: &str) -> Result<(), String> {
+    let path = get_pi_agent_dir().join("settings.json");
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    let mut value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("defaultProvider".to_string(), serde_json::Value::String(provider.to_string()));
+        obj.insert("defaultModel".to_string(), serde_json::Value::String(model.to_string()));
+    }
+    let json = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    std::fs::write(&path, json)
+        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+    log::info!("[gateway] restored default model to {}/{} in settings.json", provider, model);
+    Ok(())
+}

@@ -86,6 +86,10 @@ pub struct ManagedSession {
     pub pi_state: Option<PiSessionState>,
     /// Auto-generated or user-set session name.
     pub session_name: Option<String>,
+    /// 切模型前备份的 settings.json 默认模型（provider, model）。
+    /// pi 的 set_model 会把所选模型写进 default，收到成功响应后需恢复——
+    /// default model 只允许 admin 修改。
+    pub pending_default_restore: Option<(String, String)>,
     /// Number of completed turns (for auto-title timing).
     turn_count: u32,
     /// Whether a title has been generated/set.
@@ -212,6 +216,7 @@ impl SessionManager {
                     message_seq: 0,
                     pi_state: None,
                     session_name: None,
+                    pending_default_restore: None,
                     turn_count: 0,
                     title_set: false,
                     title_candidates: Vec::new(),
@@ -292,6 +297,7 @@ impl SessionManager {
                     message_seq: 0,
                     pi_state: None,
                     session_name: None,
+                    pending_default_restore: None,
                     turn_count: 0,
                     title_set: false,
                     title_candidates: Vec::new(),

@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { Message, ToolExecution, ChatTurn } from "../../types";
+import { useI18n } from "vue-i18n";
+import type { Message, ToolExecution, ChatTurn, Attachment, ImageContent, ModelRef } from "../../types";
 import type { PendingItem } from "../../composables/usePiConnection";
+import { buildPromptPayload } from "../../utils/attachments";
 import MessageTimeline from "./MessageTimeline.vue";
 import Composer from "./Composer.vue";
 import FullscreenEditor from "./FullscreenEditor.vue";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   messages: Message[];
@@ -16,15 +20,19 @@ const props = defineProps<{
   draft?: string;
   outbox?: PendingItem[];
   steeringQueue?: string[];
+  attachments?: Attachment[];
+  currentModel?: ModelRef | null;
+  visionHint?: { text: string; key: number } | null;
 }>();
 
 const emit = defineEmits<{
-  (e: "send", text: string): void;
-  (e: "steer", text: string): void;
+  (e: "send", payload: { text: string; images: ImageContent[] }): void;
+  (e: "steer", payload: { text: string; images: ImageContent[] }): void;
   (e: "abort"): void;
   (e: "cancel-queued", id: number): void;
   (e: "upgrade-queued", id: number): void;
   (e: "update:draft", text: string): void;
+  (e: "update:attachments", attachments: Attachment[]): void;
   (e: "restart-pi"): void;
 }>();
 
@@ -59,18 +67,27 @@ const turns = computed<ChatTurn[]>(() => {
   return result;
 });
 
+/** 把当前草稿 + 附件组装成发送载荷（与首条消息共用于 utils/attachments） */
+function buildPayload(text: string): { text: string; images: ImageContent[] } {
+  return buildPromptPayload(text, props.attachments, (k) => t(k));
+}
+
 function send() {
-  const text = inputText.value.trim();
-  if (!text || !props.isRunning) return;
-  emit("send", text);
+  if (!props.isRunning) return;
+  const payload = buildPayload(inputText.value);
+  if (!payload.text.trim() && payload.images.length === 0) return;
+  emit("send", payload);
   inputText.value = "";
+  emit("update:attachments", []);
 }
 
 function steer() {
-  const text = inputText.value.trim();
-  if (!text || !props.isRunning) return;
-  emit("steer", text);
+  if (!props.isRunning) return;
+  const payload = buildPayload(inputText.value);
+  if (!payload.text.trim() && payload.images.length === 0) return;
+  emit("steer", payload);
   inputText.value = "";
+  emit("update:attachments", []);
 }
 
 function sendAndClose() {
@@ -94,11 +111,15 @@ function sendAndClose() {
       :is-streaming="isStreaming"
       :outbox="outbox"
       :steering-queue="steeringQueue"
+      :attachments="attachments"
+      :current-model="currentModel"
+      :vision-hint="visionHint"
       @send="send"
       @steer="steer"
       @abort="emit('abort')"
       @cancel-queued="emit('cancel-queued', $event)"
       @upgrade-queued="emit('upgrade-queued', $event)"
+      @update:attachments="emit('update:attachments', $event)"
       @expand="expanded = true"
       @restart-pi="emit('restart-pi')"
     />

@@ -79,6 +79,17 @@ fn sync_model_if_needed(
     drop(mgr);
 
     if needs_switch {
+        // pi 的 set_model 会把所选模型写进 settings.json 的 default；
+        // 先备份当前 default，收到 set_model 成功响应后恢复——default 只允许 admin 修改。
+        if let Ok(current) = crate::broker::util::read_pi_settings() {
+            let backup = (current.default_provider, current.default_model);
+            state
+                .session_manager
+                .lock()
+                .sessions
+                .get_mut(instance_id)
+                .map(|s| s.pending_default_restore = Some(backup));
+        }
         let set_model_cmd = serde_json::json!({
             "type": "set_model",
             "provider": desired.provider,

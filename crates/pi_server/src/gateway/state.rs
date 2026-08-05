@@ -22,6 +22,7 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
                 session_manager::SessionActivity::Unloaded => "unloaded".to_string(),
             },
             model: session.pi_state.as_ref().and_then(|p| p.model_id.clone()),
+            model_provider: session.pi_state.as_ref().and_then(|p| p.model_provider.clone()),
             thinking_level: session.pi_state.as_ref().and_then(|p| p.thinking_level.clone()),
             message_count: session.messages.len() as u32,
             message_seq: session.message_seq,
@@ -79,7 +80,14 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
                 cwd: proj.cwd.clone(),
                 instance_id: Some(iid.clone()),
                 state: Some(state_str),
-                model: rt.and_then(|r| r.model.clone()),
+                // Runtime state wins; fall back to the persisted DB model so a
+                // session's own model survives a gateway restart.
+                model: rt
+                    .and_then(|r| r.model.clone())
+                    .or_else(|| db_row.and_then(|r| r.model_id.clone())),
+                model_provider: rt
+                    .and_then(|r| r.model_provider.clone())
+                    .or_else(|| db_row.and_then(|r| r.model_provider.clone())),
                 thinking_level: rt.and_then(|r| r.thinking_level.clone()),
                 message_count: rt.map(|r| r.message_count).unwrap_or(0),
                 message_seq: rt.map(|r| r.message_seq).unwrap_or(0),
@@ -127,7 +135,10 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
                 cwd: s.cwd.clone(),
                 instance_id: Some(s.instance_id.clone()),
                 state: Some(rt.map(|r| r.state.clone()).unwrap_or_else(|| "unloaded".to_string())),
-                model: rt.and_then(|r| r.model.clone()),
+                model: rt.and_then(|r| r.model.clone()).or_else(|| s.model_id.clone()),
+                model_provider: rt
+                    .and_then(|r| r.model_provider.clone())
+                    .or_else(|| s.model_provider.clone()),
                 thinking_level: None,
                 message_count: rt.map(|r| r.message_count).unwrap_or(0),
                 message_seq: rt.map(|r| r.message_seq).unwrap_or(0),

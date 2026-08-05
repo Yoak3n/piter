@@ -1,7 +1,7 @@
 {
   "name": "piter-chat",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "build": "vue-tsc --noEmit && vite build",
@@ -11,6 +11,7 @@
     "@piter/ui": "workspace:*",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-fs": "^2",
     "lucide-vue-next": "^1.0.0",
     "marked": "^18.0.5",
     "vue": "^3.5.13",

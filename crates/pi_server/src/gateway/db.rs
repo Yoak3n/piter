@@ -108,6 +108,24 @@ impl Db {
         )
         .map_err(|e| format!("migrate: {}", e))?;
 
+        // Additive migrations: persist the per-instance model (id + provider)
+        // so each session can restore its own model after a restart.
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(sessions)")
+            .map_err(|e| format!("migrate pragma: {}", e))?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| format!("migrate pragma rows: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !cols.iter().any(|c| c == "model_id") {
+            conn.execute("ALTER TABLE sessions ADD COLUMN model_id TEXT", [])
+                .map_err(|e| format!("migrate add model_id: {}", e))?;
+        }
+        if !cols.iter().any(|c| c == "model_provider") {
+            conn.execute("ALTER TABLE sessions ADD COLUMN model_provider TEXT", [])
+                .map_err(|e| format!("migrate add model_provider: {}", e))?;
+        }
+
         Ok(())
     }
 
@@ -422,11 +440,31 @@ impl Db {
         Ok(())
     }
 
+    /// Persist the model (id + provider) this instance is currently using,
+    /// so the session can restore its own model after a restart.
+    pub fn set_session_model(
+        &self,
+        instance_id: &str,
+        model_id: Option<&str>,
+        model_provider: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET model_id = ?1, model_provider = ?2 WHERE instance_id = ?3",
+            params![model_id, model_provider, instance_id],
+        )
+        .map_err(|e| format!("set_session_model: {}", e))?;
+        Ok(())
+    }
+
     /// Get all sessions.
     pub fn all_sessions(&self) -> Vec<SessionRow> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT instance_id, session_path, project_id, cwd, name, created_at FROM sessions")
+            .prepare(
+                "SELECT instance_id, session_path, project_id, cwd, name, created_at, \
+                        model_id, model_provider FROM sessions",
+            )
             .unwrap();
         stmt.query_map([], |row| {
             Ok(SessionRow {
@@ -436,6 +474,8 @@ impl Db {
                 cwd: row.get(3)?,
                 name: row.get(4)?,
                 created_at: row.get(5)?,
+                model_id: row.get(6)?,
+                model_provider: row.get(7)?,
             })
         })
         .unwrap()
@@ -591,6 +631,10 @@ pub struct SessionRow {
     pub cwd: String,
     pub name: Option<String>,
     pub created_at: String,
+    /// Persisted model id (None until the first get_state/set_model report).
+    pub model_id: Option<String>,
+    /// Persisted provider for `model_id`.
+    pub model_provider: Option<String>,
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

@@ -1,20 +1,22 @@
 import { ref, reactive, computed, onUnmounted } from "vue";
 import { i18n } from "../i18n";
-import type { Message, ToolExecution, ProjectGroup, ModelRef } from "../types";
+import type { Message, ToolExecution, ProjectGroup, ModelRef, ImageContent } from "../types";
 import {
   extractTextContent,
   extractThinkingContent,
+  extractImages,
   formatToolOutput,
 } from "../utils/message";
 import { mapProjectGroups } from "../utils/projects";
 
-// ─── Per-session state ─────────────────────────────────────────────
+// ─── Per-session state ─────────────────────────────────────────────────────
 
 /** A message queued locally (outbox) while the agent is streaming. */
 export interface PendingItem {
   id: number;
   text: string;
   model?: ModelRef;
+  images?: ImageContent[];
 }
 
 interface SessionState {
@@ -92,9 +94,17 @@ export function usePiConnection() {
 
   // ── Active session helpers ──
 
+  // 未选会话时的哨兵 state（activeInstanceId === null）。必须缓存同一个对象：
+  // 否则 setCurrentModel 写入的 transient 与 computed 读取的不是同一实例，
+  // 启动时 seed 的默认模型永远无法反映到 ModelSelector。
+  let transientState: SessionState | null = null;
+
   /** Get the active session state, creating it if needed. */
   function getOrCreateState(instanceId: string | null): SessionState {
-    if (!instanceId) return createSessionState("__transient__");
+    if (!instanceId) {
+      if (!transientState) transientState = createSessionState("__transient__");
+      return transientState;
+    }
     let s = sessionStates.get(instanceId);
     if (!s) {
       s = createSessionState(instanceId);
@@ -260,12 +270,17 @@ export function usePiConnection() {
       case "agent_end": {
         const s = getOrCreateState(instanceId);
         const msgs = data.messages as Array<Record<string, unknown>> | undefined;
+        // message_end 未触发的兜底：从 agent_end 消息里提取 model 与图片
+        let finalImages: ImageContent[] | undefined;
         if (Array.isArray(msgs)) {
           for (const m of msgs) {
             const modelId = m.model as string | undefined;
             if (modelId) {
               s.currentModel = { id: modelId, provider: s.currentModel?.provider };
-              break;
+            }
+            if (!finalImages && (m.role as string) === "assistant") {
+              const imgs = extractImages(m);
+              if (imgs.length > 0) finalImages = imgs;
             }
           }
         }
@@ -275,6 +290,7 @@ export function usePiConnection() {
           addMessage(s, "assistant", s.currentAssistantContent, {
             thinking: s.currentThinking || undefined,
             toolExecutions: s.toolExecutions.length > 0 ? [...s.toolExecutions] : undefined,
+            images: finalImages,
           });
           s.currentAssistantContent = "";
           s.currentThinking = "";
@@ -315,9 +331,11 @@ export function usePiConnection() {
         if (msg?.role === "assistant") {
           const content = extractTextContent(msg);
           const thinking = extractThinkingContent(msg);
+          const images = extractImages(msg);
           addMessage(s, "assistant", content || s.currentAssistantContent, {
             thinking: thinking || s.currentThinking || undefined,
             toolExecutions: s.toolExecutions.length > 0 ? [...s.toolExecutions] : undefined,
+            images: images.length > 0 ? images : undefined,
           });
           s.currentAssistantContent = "";
           s.currentThinking = "";
@@ -515,11 +533,13 @@ export function usePiConnection() {
           }
         }
       }
+      const images = extractImages(m);
       parsed.push({
         id: i,
         role: role as Message["role"],
         content: extractTextContent(m),
         thinking: extractThinkingContent(m) || undefined,
+        images: images.length > 0 ? images : undefined,
         toolExecutions: toolExecs.length > 0 ? toolExecs : undefined,
         timestamp: (m.timestamp as number) || Date.now(),
       });
@@ -620,21 +640,43 @@ export function usePiConnection() {
 
   // ─── Commands ───────────────────────────────────────────────────────
 
-  function sendPrompt(text: string, desiredModel?: ModelRef | null, behavior?: DeliveryBehavior) {
-    if (!text.trim()) return;
+  /** 用户选择模型：写回当前会话的 per-session model 状态（切换会话后仍保留）。 */
+  function setCurrentModel(model: ModelRef) {
+    const s = getOrCreateState(activeInstanceId.value);
+    s.currentModel = model;
+  }
+
+  /** 给 prompt 类 payload 附上 images（非空才加，保持字段最小化） */
+  function withImages(
+    payload: Record<string, unknown>,
+    images?: ImageContent[],
+  ): Record<string, unknown> {
+    if (images && images.length > 0) payload.images = images;
+    return payload;
+  }
+
+  function sendPrompt(
+    text: string,
+    desiredModel?: ModelRef | null,
+    behavior?: DeliveryBehavior,
+    images?: ImageContent[],
+  ) {
+    if (!text.trim() && (!images || images.length === 0)) return;
     const s = getOrCreateState(activeInstanceId.value);
     const iid = activeInstanceId.value;
     const streaming = s.isStreaming;
+    // 未显式指定时回退到当前会话自身的 model 状态——发送永远跟随会话，而非全局残留值。
+    const model = desiredModel ?? s.currentModel;
 
     if (behavior === "steer") {
       // 插队：流式中立即以 steer 投递（pi 原生队列，turn 边界生效）；空闲时直接发普通 prompt
-      addMessage(s, "user", text);
+      addMessage(s, "user", text, images?.length ? { images } : undefined);
       if (!iid) {
         addMessage(s, "system", "No active session yet — please wait for the session to be ready.");
         return;
       }
-      const payload: Record<string, unknown> = { type: "prompt", message: text };
-      if (desiredModel) payload.desiredModel = desiredModel;
+      const payload = withImages({ type: "prompt", message: text }, images);
+      if (model) payload.desiredModel = model;
       if (streaming) payload.streamingBehavior = "steer";
       sendCommand(payload);
       return;
@@ -645,18 +687,18 @@ export function usePiConnection() {
       // 排队期间不进入消息时间线（仅队列条展示），投递时才 addMessage 进时间线。
       // 不调用 pi 的 follow_up 命令，这样投递前可以取消/升级为插队。
       const oid = s.msgId++;
-      s.outbox = [...s.outbox, { id: oid, text, model: desiredModel ?? undefined }];
+      s.outbox = [...s.outbox, { id: oid, text, model: model ?? undefined, images }];
       return;
     }
 
-    addMessage(s, "user", text);
+    addMessage(s, "user", text, images?.length ? { images } : undefined);
     // 空闲：立即发送
     if (!iid) {
       addMessage(s, "system", "No active session yet — please wait for the session to be ready.");
       return;
     }
-    const payload: Record<string, unknown> = { type: "prompt", message: text };
-    if (desiredModel) payload.desiredModel = desiredModel;
+    const payload = withImages({ type: "prompt", message: text }, images);
+    if (model) payload.desiredModel = model;
     sendCommand(payload);
   }
 
@@ -677,8 +719,8 @@ export function usePiConnection() {
     const [first, ...rest] = s.outbox;
     s.outbox = rest;
     // 投递时刻才进入消息时间线（排队期间仅显示在队列条）
-    addMessage(s, "user", first.text);
-    const payload: Record<string, unknown> = { type: "prompt", message: first.text };
+    addMessage(s, "user", first.text, first.images?.length ? { images: first.images } : undefined);
+    const payload = withImages({ type: "prompt", message: first.text }, first.images);
     if (first.model) payload.desiredModel = first.model;
     // 投递到 outbox 所属会话（s.instanceId），而非当前活动会话——
     // 防止用户在等待期间切换到其他会话时，排队消息被发到错误的会话。
@@ -698,7 +740,7 @@ export function usePiConnection() {
     const dropped = s.outbox.slice(0, -1);
     s.outbox = [];
     // 投递时刻才进入消息时间线（排队期间仅显示在队列条）
-    addMessage(s, "user", latest.text);
+    addMessage(s, "user", latest.text, latest.images?.length ? { images: latest.images } : undefined);
     if (dropped.length > 0) {
       addMessage(
         s,
@@ -706,7 +748,7 @@ export function usePiConnection() {
         `[Aborted] Dropped ${dropped.length} queued message${dropped.length > 1 ? "s" : ""} — sent only the latest.`,
       );
     }
-    const payload: Record<string, unknown> = { type: "prompt", message: latest.text };
+    const payload = withImages({ type: "prompt", message: latest.text }, latest.images);
     if (latest.model) payload.desiredModel = latest.model;
     // 同样投递到 outbox 所属会话，避免切换会话后发错
     sendCommand(payload, s.instanceId);
@@ -729,8 +771,8 @@ export function usePiConnection() {
     if (!item) return;
     s.outbox = s.outbox.filter((o) => o.id !== id);
     // 升级为插队即立即投递，此刻才进入消息时间线
-    addMessage(s, "user", item.text);
-    const payload: Record<string, unknown> = { type: "prompt", message: item.text };
+    addMessage(s, "user", item.text, item.images?.length ? { images: item.images } : undefined);
+    const payload = withImages({ type: "prompt", message: item.text }, item.images);
     if (item.model) payload.desiredModel = item.model;
     if (s.isStreaming) payload.streamingBehavior = "steer";
     sendCommand(payload);
@@ -849,6 +891,7 @@ export function usePiConnection() {
     currentModel,
     steeringQueue,
     outbox,
+    setCurrentModel,
     connectWebSocket,
     sendPrompt,
     sendCommand,

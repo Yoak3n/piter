@@ -1,4 +1,4 @@
-import type { ToolExecution } from "../types";
+import type { ImageContent, ToolExecution } from "../types";
 
 /** Extract plain text from a message's content field (string or content blocks). */
 export function extractTextContent(
@@ -12,6 +12,28 @@ export function extractTextContent(
       .join("\n");
   }
   return "";
+}
+
+/**
+ * Extract image content blocks (`{ type: "image", data, mimeType }`) from a
+ * message's content array. `extractTextContent` intentionally drops these,
+ * so rendering image blocks needs this separate pass.
+ */
+export function extractImages(
+  msg: Record<string, unknown> | { content: unknown },
+): ImageContent[] {
+  if (!Array.isArray(msg.content)) return [];
+  const images: ImageContent[] = [];
+  for (const b of msg.content as Record<string, unknown>[]) {
+    if (b.type === "image" && typeof b.data === "string" && b.data) {
+      images.push({
+        type: "image",
+        data: b.data,
+        mimeType: typeof b.mimeType === "string" ? b.mimeType : "",
+      });
+    }
+  }
+  return images;
 }
 
 /** Extract thinking text from a message's content blocks. */

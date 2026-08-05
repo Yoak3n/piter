@@ -1,6 +1,6 @@
 [package]
 name = "piter"
-version = "0.1.1"
+version = "0.1.2"
 description = "AI coding agent client — Tauri desktop shell + web chat UI driving pi coding agent sessions over WebSocket & REST"
 authors = ["Yoak3n <3354590676@qq.com>"]
 edition = "2021"
@@ -22,6 +22,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 tauri-plugin-updater = "2"
 log = { workspace = true}
 serde = { workspace = true}
