@@ -41,7 +41,7 @@ async function openAdmin() {
     </div>
     <div class="header-right">
       <ModelSelector
-        :model-id="modelId?.id"
+        :model-id="modelId"
         :session-status="sessionStatus"
         @select-model="emit('select-model', $event)"
       />

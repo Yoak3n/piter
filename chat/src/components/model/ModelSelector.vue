@@ -1,86 +1,99 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { ChevronDown } from "lucide-vue-next";
-import type { ModelInfo, ModelRef } from "../../types";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue"
+import { ChevronDown } from "lucide-vue-next"
+import type { ModelInfo, ModelRef } from "../../types"
 
 const props = defineProps<{
-  modelId?: string;
-  sessionStatus?: "running" | "idle" | null;
-}>();
+  modelRef?: ModelRef | null
+  sessionStatus?: "running" | "idle" | null
+}>()
 
 const emit = defineEmits<{
-  (e: "select-model", model: ModelRef): void;
-}>();
+  (e: "select-model", model: ModelRef): void
+}>()
 
-const isOpen = ref(false);
-const searchText = ref("");
-const models = ref<ModelInfo[]>([]);
-const loading = ref(false);
-const unavailable = ref(false);
-const dropdownRef = ref<HTMLDivElement | null>(null);
+const isOpen = ref(false)
+const searchText = ref("")
+const models = ref<ModelInfo[]>([])
+const loading = ref(false)
+const unavailable = ref(false)
+const dropdownRef = ref<HTMLDivElement | null>(null)
 
 const displayName = computed(() => {
-  if (!props.modelId) return "model";
-  return props.modelId.replace(/^claude-/, "").replace(/-\d{8}$/, "");
-});
+  if (!props.modelRef?.id) return "model"
+  return props.modelRef.id.replace(/^claude-/, "").replace(/-\d{8}$/, "")
+})
+
+// 同一模型 id 可能来自多个 provider——key 必须带 provider 保证唯一
+function modelKey(m: ModelInfo): string {
+  return m.provider ? `${m.provider}/${m.id}` : m.id
+}
+
+// 高亮须同时匹配 id + provider，否则不同 provider 的同 id 模型会全部高亮
+function isActive(m: ModelInfo): boolean {
+  const sel = props.modelRef
+  if (!sel || m.id !== sel.id) return false
+  if (sel.provider && m.provider && m.provider !== sel.provider) return false
+  return true
+}
 
 const filteredModels = computed(() => {
-  const q = searchText.value.toLowerCase().trim();
-  if (!q) return models.value;
+  const q = searchText.value.toLowerCase().trim()
+  if (!q) return models.value
   return models.value.filter(
     (m) =>
       m.id.toLowerCase().includes(q) ||
       (m.provider || "").toLowerCase().includes(q),
-  );
-});
+  )
+})
 
 function toggle() {
-  isOpen.value = !isOpen.value;
+  isOpen.value = !isOpen.value
   if (isOpen.value) {
-    searchText.value = "";
+    searchText.value = ""
     if (models.value.length === 0 && !unavailable.value) {
-      fetchModels();
+      fetchModels()
     }
   }
 }
 
 function close() {
-  isOpen.value = false;
+  isOpen.value = false
 }
 
 function select(model: ModelInfo) {
-  emit("select-model", { id: model.id, provider: model.provider });
-  close();
+  emit("select-model", { id: model.id, provider: model.provider })
+  close()
 }
 
 async function fetchModels() {
-  loading.value = true;
+  loading.value = true
   try {
     const res = await fetch("/api/rpc", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "get_available_models" }),
-    });
-    const data = await res.json();
+    })
+    const data = await res.json()
     if (data.success && Array.isArray(data.data?.models)) {
-      models.value = data.data.models;
-      return;
+      models.value = data.data.models
+      return
     }
   } catch {
     // network error
   } finally {
-    loading.value = false;
+    loading.value = false
   }
-  unavailable.value = true;
+  unavailable.value = true
 }
 
 async function fetchCurrentModel() {
   try {
-    const res = await fetch("/api/pi/settings");
-    const data = await res.json();
-    console.log("[model] fetchCurrentModel:", data);
+    const res = await fetch("/api/pi/settings")
+    const data = await res.json()
+    console.log("[model] fetchCurrentModel:", data)
     if (data.success && data.default_model) {
-      emit("select-model", { id: data.default_model, provider: data.default_provider });
+      emit("select-model", { id: data.default_model, provider: data.default_provider })
     }
   } catch {
     // non-critical
@@ -90,30 +103,30 @@ async function fetchCurrentModel() {
 // When session status changes, clear stale model list so it refetches on next open
 watch(() => props.sessionStatus, (status, oldStatus) => {
   if (status === "running" && oldStatus !== "running") {
-    unavailable.value = false;
-    models.value = [];
-    fetchCurrentModel();
+    unavailable.value = false
+    models.value = []
+    fetchCurrentModel()
   }
   if (status === "idle" && oldStatus === "running") {
-    if (!props.modelId) {
-      fetchCurrentModel();
+    if (!props.modelRef) {
+      fetchCurrentModel()
     }
   }
-});
+})
 
 function handleClickOutside(e: MouseEvent) {
   if (dropdownRef.value && !dropdownRef.value.contains(e.target as Node)) {
-    close();
+    close()
   }
 }
 
 onMounted(() => {
-  document.addEventListener("click", handleClickOutside);
-  fetchCurrentModel();
-});
+  document.addEventListener("click", handleClickOutside)
+  fetchCurrentModel()
+})
 onUnmounted(() => {
-  document.removeEventListener("click", handleClickOutside);
-});
+  document.removeEventListener("click", handleClickOutside)
+})
 </script>
 
 <template>
@@ -147,9 +160,9 @@ onUnmounted(() => {
         </div>
         <button
           v-for="model in filteredModels"
-          :key="model.id"
+          :key="modelKey(model)"
           class="model-item"
-          :class="{ active: model.id === modelId }"
+          :class="{ active: isActive(model) }"
           @click="select(model)"
         >
           <span class="model-item-name">
