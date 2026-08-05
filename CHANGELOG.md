@@ -11,6 +11,7 @@
 - **i18n 国际化**：vue-i18n en/zh 双语言——共享消息集（packages/ui/src/i18n），双端接入；admin 设置页语言切换即时生效并持久化，chat 端经 nav.rs 注入 `?lang=` 跟随；相对时间改用 `Intl.RelativeTimeFormat`（随语言变化）；Rust 侧 `AppSettings.language` 字段
 - **共享 UI 组件**：@piter/ui 新增 EmptyState / InlineConfirm / StatusDot / SkeletonList / PanelCard / StatCard / ChartCard
 - **首启三步引导**：欢迎页引导（配置 provider → 创建会话 → 提问），localStorage 一次后跳过
+- **会话手动重命名**：侧栏会话项内联编辑（铅笔 → 输入框，Enter 保存/Esc 取消）；后端同步 DB + 内存会话名（防自动命名覆盖）并推送所有客户端
 
 ### 重构
 
@@ -23,6 +24,8 @@
 ### 修复
 
 - 会话删除/归档确认在无 instanceId 会话上失效（确认框不弹出）——统一改用 sessionKey（instanceId 兑底 id）
+- ModelSelector 同 id 跨 provider 模型双双高亮——高亮对比补 provider 维度 + 列表 key 改 provider/id 组合
+- 窗口关闭/恢复：托盘恢复不重连 WS（桌面 WebView 不触发 visibilitychange）——Rust Focused(true) 发 piter-window-shown；标题栏关闭后 WM 缓存不同步导致托盘 toggle 误判——CloseRequested 统一同步缓存；标题栏窗口操作统一走 invoke → WindowManager
 
 ## [0.1.1] - 2026-08-05
 
