@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
+import type { Component } from "vue";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
@@ -12,6 +14,7 @@ import {
   VisualMapComponent,
 } from "echarts/components";
 import VChart from "vue-echarts";
+import { StatCard, ChartCard } from "@piter/ui";
 import {
   RefreshCw,
   DollarSign,
@@ -45,6 +48,8 @@ use([
 const RANGE_OPTIONS = ["7d", "30d", "90d"] as const;
 type RangeKey = (typeof RANGE_OPTIONS)[number];
 
+const { t, locale } = useI18n();
+
 // ─── State ────────────────────────────────────────────────────────────────
 
 const range = ref<RangeKey>(loadRange());
@@ -70,7 +75,7 @@ async function fetchData() {
       scope: "all",
     });
   } catch (e) {
-    error.value = `Failed to load usage dashboard: ${e}`;
+    error.value = t("admin.usageLoadFailed", { msg: `${e}` });
   } finally {
     loading.value = false;
   }
@@ -80,10 +85,11 @@ async function fetchData() {
 const themeColors = reactive({
   text: "#1d1d1f",
   textSecondary: "#8a8a8e",
-  border: "#dfdeda",
-  accent: "#6a7a8a",
-  accentSoft: "#d8d7d2",
+  border: "#e4e4e2",
+  accent: "#2f6fed",
+  accentSoft: "#dfdfdd",
   panel: "#ffffff",
+  chart: ["#4f8ff7", "#5fbf76", "#f3a64f", "#8c7cf7", "#ef6b73", "#38a89d"],
 });
 let themeObserver: MutationObserver | null = null;
 
@@ -97,6 +103,9 @@ function readThemeColors() {
   themeColors.accent = read("--accent", themeColors.accent);
   themeColors.accentSoft = read("--bg-active", themeColors.accentSoft);
   themeColors.panel = read("--bg-panel", themeColors.panel);
+  themeColors.chart = [1, 2, 3, 4, 5, 6].map(
+    (i) => read(`--chart-${i}`, themeColors.chart[i - 1]),
+  );
 }
 
 onMounted(() => {
@@ -122,11 +131,11 @@ function formatUsd(value: number): string {
 }
 
 function formatInt(value: number): string {
-  return Number(value || 0).toLocaleString();
+  return Number(value || 0).toLocaleString(locale.value);
 }
 
 function formatCompact(value: number): string {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat(locale.value, {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(Number(value) || 0);
@@ -141,7 +150,7 @@ function formatSessionDate(time: string): string {
   if (!time) return "";
   const d = new Date(time);
   if (!Number.isFinite(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return d.toLocaleDateString(locale.value, { month: "short", day: "numeric" });
 }
 
 // ─── Overview cards ───────────────────────────────────────────────────────
@@ -150,39 +159,41 @@ interface StatCard {
   title: string;
   value: string;
   tone: string;
-  icon: unknown;
+  icon: Component;
 }
 
-const OVERVIEW_TONES: Record<string, string> = {
-  green: "#5fbf76",
-  blue: "#5b8def",
-  violet: "#8e6ad8",
-  amber: "#d39a46",
-  teal: "#38a89d",
-  rose: "#cf6a7a",
+// Tone → chart palette slot (index into themeColors.chart).
+const OVERVIEW_TONE_KEYS: Record<string, number> = {
+  green: 2,
+  blue: 1,
+  violet: 4,
+  amber: 3,
+  teal: 6,
+  rose: 5,
 };
 
 const statCards = computed<StatCard[]>(() => {
   const o = payload.value?.overview;
   if (!o) return [];
   return [
-    { title: "Total cost", value: formatUsd(o.total_cost), tone: "green", icon: DollarSign },
-    { title: "Sessions", value: formatInt(o.sessions), tone: "blue", icon: MessagesSquare },
-    { title: "Messages", value: formatInt(o.messages), tone: "violet", icon: Zap },
-    { title: "Total tokens", value: formatCompact(o.total_tokens), tone: "teal", icon: Coins },
-    { title: "Active days", value: formatInt(o.active_days), tone: "amber", icon: CalendarDays },
-    { title: "Current streak", value: `${formatInt(o.current_streak)}d`, tone: "blue", icon: Flame },
-    { title: "Longest streak", value: `${formatInt(o.longest_streak)}d`, tone: "violet", icon: Trophy },
-    { title: "Input", value: formatCompact(o.input_tokens), tone: "teal", icon: ArrowUpDown },
-    { title: "Output", value: formatCompact(o.output_tokens), tone: "green", icon: TrendingUp },
-    { title: "Cache Read", value: formatCompact(o.cache_read), tone: "amber", icon: Database },
-    { title: "Cache Write", value: formatCompact(o.cache_write), tone: "violet", icon: Layers },
-    { title: "Tool Calls", value: formatInt(o.tool_calls), tone: "rose", icon: Wrench },
+    { title: t("admin.totalCost"), value: formatUsd(o.total_cost), tone: "green", icon: DollarSign },
+    { title: t("admin.sessions"), value: formatInt(o.sessions), tone: "blue", icon: MessagesSquare },
+    { title: t("admin.messages"), value: formatInt(o.messages), tone: "violet", icon: Zap },
+    { title: t("admin.totalTokens"), value: formatCompact(o.total_tokens), tone: "teal", icon: Coins },
+    { title: t("admin.activeDays"), value: formatInt(o.active_days), tone: "amber", icon: CalendarDays },
+    { title: t("admin.currentStreak"), value: `${formatInt(o.current_streak)}d`, tone: "blue", icon: Flame },
+    { title: t("admin.longestStreak"), value: `${formatInt(o.longest_streak)}d`, tone: "violet", icon: Trophy },
+    { title: t("admin.input"), value: formatCompact(o.input_tokens), tone: "teal", icon: ArrowUpDown },
+    { title: t("admin.output"), value: formatCompact(o.output_tokens), tone: "green", icon: TrendingUp },
+    { title: t("admin.cacheRead"), value: formatCompact(o.cache_read), tone: "amber", icon: Database },
+    { title: t("admin.cacheWrite"), value: formatCompact(o.cache_write), tone: "violet", icon: Layers },
+    { title: t("admin.toolCalls"), value: formatInt(o.tool_calls), tone: "rose", icon: Wrench },
   ];
 });
 
 function toneColor(tone: string): string {
-  return OVERVIEW_TONES[tone] ?? "#5b8def";
+  const idx = OVERVIEW_TONE_KEYS[tone];
+  return idx ? themeColors.chart[idx - 1] : themeColors.chart[0];
 }
 
 // ─── Activity heatmap (ECharts calendar) ─────────────────────────────────
@@ -197,7 +208,7 @@ const heatmapOption = computed(() => {
       backgroundColor: c.panel,
       borderColor: c.border,
       textStyle: { color: c.text, fontSize: 12 },
-      formatter: (p: any) => `${p.data[0]}: ${formatCompact(p.data[1] ?? 0)} tokens`,
+      formatter: (p: any) => `${p.data[0]}: ${formatCompact(p.data[1] ?? 0)} ${t("admin.tokens")}`,
     },
     visualMap: {
       min: 0,
@@ -216,7 +227,7 @@ const heatmapOption = computed(() => {
       splitLine: { show: false },
       yearLabel: { show: false },
       dayLabel: { show: false },
-      monthLabel: { color: c.textSecondary, fontSize: 10, nameMap: "EN" },
+      monthLabel: { color: c.textSecondary, fontSize: 10, nameMap: locale.value.startsWith("zh") ? "ZH" : "EN" },
     },
     series: [
       {
@@ -230,7 +241,7 @@ const heatmapOption = computed(() => {
 
 // ─── Models chart (stacked bars) ─────────────────────────────────────────
 
-const MODEL_PALETTE = ["#5b8def", "#67c587", "#f3a64f"];
+const MODEL_PALETTE = computed(() => themeColors.chart.slice(0, 3));
 
 const topModels = computed<CostModelStat[]>(() => (payload.value?.models ?? []).slice(0, 3));
 
@@ -255,7 +266,7 @@ const modelsOption = computed(() => {
       backgroundColor: c.panel,
       borderColor: c.border,
       textStyle: { color: c.text, fontSize: 12 },
-      valueFormatter: (value: any) => `${formatCompact(value)} tokens`,
+      valueFormatter: (value: any) => `${formatCompact(value)} ${t("admin.tokens")}`,
     },
     legend: {
       bottom: 0,
@@ -296,7 +307,7 @@ const modelsOption = computed(() => {
 
 // ─── Tool cost doughnut ───────────────────────────────────────────────────
 
-const TOOL_PALETTE = ["#4f8ff7", "#67c587", "#f3a64f", "#8c7cf7", "#ef6b73", "#4fc3d9"];
+const TOOL_PALETTE = computed(() => [...themeColors.chart]);
 
 const topTools = computed<CostToolStat[]>(() => (payload.value?.usage.tools ?? []).slice(0, 6));
 
@@ -336,7 +347,7 @@ const toolsOption = computed(() => {
         data: topTools.value.map((t, i) => ({
           name: t.name,
           value: t.cost,
-          itemStyle: { color: TOOL_PALETTE[i % TOOL_PALETTE.length] },
+          itemStyle: { color: TOOL_PALETTE.value[i % TOOL_PALETTE.value.length] },
         })),
         label: { show: false },
         emphasis: { scaleSize: 5 },
@@ -374,7 +385,7 @@ const funNote = computed(() => {
   const total = payload.value?.overview.total_tokens ?? 0;
   const warAndPeace = 587000;
   const ratio = Math.max(1, Math.round(total / warAndPeace));
-  return `You've used ~${ratio}× more tokens than War and Peace.`;
+  return t("admin.funNote", { n: ratio });
 });
 
 const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
@@ -384,11 +395,11 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
   <div class="tab-content usage-tab">
     <div class="tab-header">
       <div class="tab-header-info">
-        <h3 class="tab-title">Usage</h3>
-        <p class="tab-desc">Cost and activity across pi sessions</p>
+        <h3 class="tab-title">{{ $t("admin.usage") }}</h3>
+        <p class="tab-desc">{{ $t("admin.usageDesc") }}</p>
       </div>
       <div class="tab-header-actions">
-        <div class="range-chips" role="group" aria-label="Time range">
+        <div class="range-chips" role="group" :aria-label="$t('admin.timeRange')">
           <button
             v-for="r in RANGE_OPTIONS"
             :key="r"
@@ -402,7 +413,7 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
         </div>
         <button class="btn btn-sm" :disabled="loading" @click="fetchData">
           <RefreshCw :size="12" :class="{ spin: loading }" />
-          {{ loading ? "Loading..." : "Refresh" }}
+          {{ loading ? $t("common.loading") : $t("admin.refresh") }}
         </button>
       </div>
     </div>
@@ -410,110 +421,86 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
     <div v-if="error" class="usage-error">{{ error }}</div>
 
     <template v-if="payload">
-      <div v-if="!hasData" class="usage-empty">No usage data in the selected range.</div>
+      <div v-if="!hasData" class="usage-empty">{{ $t("admin.noUsageData") }}</div>
 
       <template v-else>
         <!-- Overview cards -->
         <div class="overview-grid">
-          <article
+          <StatCard
             v-for="card in statCards"
             :key="card.title"
-            class="stat-card"
-            :style="{ '--card-tone': toneColor(card.tone) }"
-          >
-            <div class="stat-title">
-              <span class="stat-icon"><component :is="card.icon" :size="13" /></span>
-              <span>{{ card.title }}</span>
-            </div>
-            <div class="stat-value">{{ card.value }}</div>
-          </article>
+            :title="card.title"
+            :value="card.value"
+            :icon="card.icon"
+            :tone="toneColor(card.tone)"
+          />
         </div>
 
         <!-- Models (range-sensitive, placed up top for quick feedback) -->
-        <section class="usage-section">
-          <div class="usage-section-head">
-            <h4>Models</h4>
-            <span>Daily token split</span>
-          </div>
-          <div class="models-card">
-            <VChart class="models-chart" :option="modelsOption" autoresize />
-            <div class="models-legend">
-              <div v-for="(m, index) in topModels" :key="m.name" class="legend-row">
-                <div class="legend-main">
-                  <span class="legend-dot" :style="{ background: MODEL_PALETTE[index % MODEL_PALETTE.length] }"></span>
-                  <span class="legend-name">{{ m.name }}</span>
-                </div>
-                <div class="legend-meta">
-                  <span>{{ formatCompact(m.input_tokens) }} in · {{ formatCompact(m.output_tokens) }} out</span>
-                  <span>{{ Math.round((m.fraction || 0) * 100) }}%</span>
-                </div>
+        <ChartCard class="usage-section" :title="$t('admin.models')" :subtitle="$t('admin.dailyTokenSplit')">
+          <VChart class="models-chart" :option="modelsOption" autoresize />
+          <div class="models-legend">
+            <div v-for="(m, index) in topModels" :key="m.name" class="legend-row">
+              <div class="legend-main">
+                <span class="legend-dot" :style="{ background: MODEL_PALETTE[index % MODEL_PALETTE.length] }"></span>
+                <span class="legend-name">{{ m.name }}</span>
+              </div>
+              <div class="legend-meta">
+                <span>{{ $t("admin.inOut", { input: formatCompact(m.input_tokens), output: formatCompact(m.output_tokens) }) }}</span>
+                <span>{{ Math.round((m.fraction || 0) * 100) }}%</span>
               </div>
             </div>
           </div>
-        </section>
+        </ChartCard>
 
         <!-- Activity heatmap -->
-        <section class="usage-section">
-          <div class="usage-section-head">
-            <h4>Activity</h4>
-            <span>Daily token intensity · last 365 days</span>
-          </div>
+        <ChartCard class="usage-section" :title="$t('admin.activity')" :subtitle="$t('admin.activityDesc')">
           <div class="heatmap-wrap">
             <VChart class="heatmap-chart" :option="heatmapOption" autoresize />
           </div>
           <p class="overview-note">{{ funNote }}</p>
-        </section>
+        </ChartCard>
 
         <!-- Tool cost / Projects -->
         <div class="usage-columns">
-          <section class="usage-section">
-            <div class="usage-section-head">
-              <h4>Tool Cost</h4>
-              <span>{{ payload.usage.tools.length }} tracked</span>
-            </div>
-            <div class="tool-cost-card">
-              <template v-if="payload.usage.tools.length">
-                <div class="tool-chart-layout">
-                  <VChart class="doughnut" :option="toolsOption" autoresize />
-                  <div class="tool-legend">
-                    <div v-for="(t, index) in topTools" :key="t.name" class="legend-row tool-row">
-                      <div class="legend-main">
-                        <span class="legend-dot" :style="{ background: TOOL_PALETTE[index % TOOL_PALETTE.length] }"></span>
-                        <div class="tool-legend-text">
-                          <div class="tool-legend-title">{{ t.name }}</div>
-                          <div class="tool-legend-subtitle">{{ formatInt(t.count) }} calls</div>
-                        </div>
-                      </div>
-                      <div class="legend-values">
-                        <span>{{ formatUsd(t.cost) }}</span>
-                        <span>{{ Math.round((Number(t.cost || 0) / Math.max(toolTotalCost, 0.000001)) * 100) }}%</span>
+          <ChartCard class="usage-section" :title="$t('admin.toolCost')" :subtitle="$t('admin.tracked', { n: payload.usage.tools.length })">
+            <template v-if="payload.usage.tools.length">
+              <div class="tool-chart-layout">
+                <VChart class="doughnut" :option="toolsOption" autoresize />
+                <div class="tool-legend">
+                  <div v-for="(t, index) in topTools" :key="t.name" class="legend-row tool-row">
+                    <div class="legend-main">
+                      <span class="legend-dot" :style="{ background: TOOL_PALETTE[index % TOOL_PALETTE.length] }"></span>
+                      <div class="tool-legend-text">
+                        <div class="tool-legend-title">{{ t.name }}</div>
+                        <div class="tool-legend-subtitle">{{ $t("admin.calls", { n: formatInt(t.count) }) }}</div>
                       </div>
                     </div>
-                    <div v-if="otherTools.length" class="legend-row tool-row">
-                      <div class="legend-main">
-                        <span class="legend-dot" style="background: var(--bg-active)"></span>
-                        <div class="tool-legend-text">
-                          <div class="tool-legend-title">Other ({{ otherTools.length }} tools)</div>
-                          <div class="tool-legend-subtitle">{{ formatInt(otherToolCalls) }} calls</div>
-                        </div>
+                    <div class="legend-values">
+                      <span>{{ formatUsd(t.cost) }}</span>
+                      <span>{{ Math.round((Number(t.cost || 0) / Math.max(toolTotalCost, 0.000001)) * 100) }}%</span>
+                    </div>
+                  </div>
+                  <div v-if="otherTools.length" class="legend-row tool-row">
+                    <div class="legend-main">
+                      <span class="legend-dot" style="background: var(--bg-active)"></span>
+                      <div class="tool-legend-text">
+                        <div class="tool-legend-title">{{ $t("admin.otherTools", { n: otherTools.length }) }}</div>
+                        <div class="tool-legend-subtitle">{{ $t("admin.calls", { n: formatInt(otherToolCalls) }) }}</div>
                       </div>
-                      <div class="legend-values">
-                        <span>{{ formatUsd(otherToolCost) }}</span>
-                        <span>{{ otherToolPercent }}%</span>
-                      </div>
+                    </div>
+                    <div class="legend-values">
+                      <span>{{ formatUsd(otherToolCost) }}</span>
+                      <span>{{ otherToolPercent }}%</span>
                     </div>
                   </div>
                 </div>
-              </template>
-              <div v-else class="usage-empty">No tool usage in range.</div>
-            </div>
-          </section>
+              </div>
+            </template>
+            <div v-else class="usage-empty">{{ $t("admin.noToolUsage") }}</div>
+          </ChartCard>
 
-          <section class="usage-section">
-            <div class="usage-section-head">
-              <h4>Projects</h4>
-              <span>By cost</span>
-            </div>
+          <ChartCard class="usage-section" :title="$t('admin.projects')" :subtitle="$t('admin.byCost')">
             <div class="projects-card">
               <div v-for="(p, index) in topProjects" :key="p.cwd" class="project-row">
                 <div class="project-head">
@@ -533,51 +520,45 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
                   <div class="project-bar-fill" :style="{ width: projectPercent(p) + '%' }"></div>
                 </div>
               </div>
-              <div v-if="!topProjects.length" class="usage-empty">No project usage in range.</div>
+              <div v-if="!topProjects.length" class="usage-empty">{{ $t("admin.noProjectUsage") }}</div>
             </div>
-          </section>
+          </ChartCard>
         </div>
 
         <!-- Sessions -->
-        <section class="usage-section">
-          <div class="usage-section-head">
-            <h4>Sessions</h4>
-            <span>Recent sessions in range</span>
+        <ChartCard class="usage-section" :title="$t('admin.sessions')" :subtitle="$t('admin.recentSessions')">
+          <div class="sessions-table-wrap">
+            <table class="sessions-table">
+              <thead>
+                <tr>
+                  <th>{{ $t("admin.colSession") }}</th>
+                  <th>{{ $t("admin.colModel") }}</th>
+                  <th class="num">{{ $t("admin.colTokens") }}</th>
+                  <th class="num">{{ $t("admin.colTools") }}</th>
+                  <th class="num">{{ $t("admin.colCost") }}</th>
+                  <th>{{ $t("admin.colDate") }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(s, i) in payload.sessions" :key="i">
+                  <td class="td-title">
+                    <div class="session-title">{{ s.title || $t("common.untitled") }}</div>
+                    <div v-if="s.workspace" class="session-workspace">{{ s.workspace }}</div>
+                  </td>
+                  <td class="td-model">{{ s.model }}</td>
+                  <td class="num">{{ formatCompact(s.total_tokens) }}</td>
+                  <td class="num">{{ formatInt(s.tool_calls) }}</td>
+                  <td class="num td-cost">{{ formatUsd(s.total_cost) }}</td>
+                  <td class="td-date">{{ formatSessionDate(s.time) }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div class="sessions-card">
-            <div class="sessions-table-wrap">
-              <table class="sessions-table">
-                <thead>
-                  <tr>
-                    <th>Session</th>
-                    <th>Model</th>
-                    <th class="num">Tokens</th>
-                    <th class="num">Tools</th>
-                    <th class="num">Cost</th>
-                    <th>Date</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(s, i) in payload.sessions" :key="i">
-                    <td class="td-title">
-                      <div class="session-title">{{ s.title || "Untitled" }}</div>
-                      <div v-if="s.workspace" class="session-workspace">{{ s.workspace }}</div>
-                    </td>
-                    <td class="td-model">{{ s.model }}</td>
-                    <td class="num">{{ formatCompact(s.total_tokens) }}</td>
-                    <td class="num">{{ formatInt(s.tool_calls) }}</td>
-                    <td class="num td-cost">{{ formatUsd(s.total_cost) }}</td>
-                    <td class="td-date">{{ formatSessionDate(s.time) }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
+        </ChartCard>
       </template>
     </template>
 
-    <div v-else-if="loading" class="usage-loading">Loading usage data…</div>
+    <div v-else-if="loading" class="usage-loading">{{ $t("admin.loadingUsage") }}</div>
   </div>
 </template>
 
@@ -692,64 +673,9 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
   margin-bottom: var(--space-lg);
 }
 
-.stat-card {
-  padding: var(--space-md);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel);
-}
-
-.stat-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-size-caption);
-  color: var(--text-tertiary);
-  line-height: 1.2;
-}
-
-.stat-icon {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  color: var(--card-tone);
-  opacity: 0.8;
-}
-
-.stat-value {
-  margin-top: var(--space-sm);
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-
 /* ── Sections ── */
 .usage-section {
   margin-bottom: var(--space-lg);
-}
-
-.usage-section-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-md);
-  margin-bottom: var(--space-sm);
-}
-
-.usage-section-head h4 {
-  margin: 0;
-  font-size: var(--font-size-control);
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.01em;
-}
-
-.usage-section-head span {
-  font-size: var(--font-size-micro);
-  color: var(--text-tertiary);
 }
 
 .usage-columns {
@@ -782,16 +708,6 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
 }
 
 /* ── Models chart ── */
-.models-card,
-.tool-cost-card,
-.projects-card,
-.sessions-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel);
-  padding: var(--space-md);
-}
-
 .models-chart {
   width: 100%;
   height: 300px;

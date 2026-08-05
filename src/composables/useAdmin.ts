@@ -3,6 +3,8 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 
 export interface AppSettings {
   theme: string;
+  /** "system" | "zh" | "en" — follows the OS locale when "system". */
+  language: string;
   auto_start: boolean;
   start_minimized: boolean;
 }

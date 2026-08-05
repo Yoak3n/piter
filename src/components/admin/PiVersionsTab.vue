@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, watch, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { Download, Check, RotateCcw, Trash2, Loader2, HardDrive, Link, Globe } from "lucide-vue-next";
 import { invoke } from "@tauri-apps/api/core";
 import type { PiInstallInfo, DownloadProgressEvent } from "../../composables/useAdmin";
 
 const PI_RELEASES_URL = "https://github.com/earendil-works/pi/releases";
 const PI_HOMEPAGE_URL = "https://pi.dev";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   installInfo: PiInstallInfo | null;
@@ -63,7 +66,7 @@ async function handleDownload() {
 }
 
 async function handleUninstall() {
-  actionFeedback.value = "Uninstalling...";
+  actionFeedback.value = t("admin.feedbackUninstalling");
   emit("uninstall");
   setTimeout(() => { actionFeedback.value = ""; }, 3000);
 }
@@ -101,18 +104,18 @@ const progressText = computed(() => {
       const pct = p.total
         ? ` ${Math.round(((p.downloaded ?? 0) / p.total) * 100)}%`
         : "";
-      return `Downloading ${mb(p.downloaded)} / ${mb(p.total)} MB${pct}`;
+      return `${t("admin.progressDownloading", { current: mb(p.downloaded), total: mb(p.total) })}${pct}`;
     }
     case "extracting": {
       const pct = p.total_entries
         ? ` ${Math.round(((p.current ?? 0) / p.total_entries) * 100)}%`
         : "";
-      return `Extracting...${pct}`;
+      return `${t("admin.progressExtracting")}${pct}`;
     }
     case "verifying":
-      return "Verifying...";
+      return t("admin.progressVerifying");
     case "done":
-      return "Done";
+      return t("admin.progressDone");
     default:
       return "";
   }
@@ -121,37 +124,34 @@ const progressText = computed(() => {
 
 <template>
   <div class="tab-content">
-    <h3 class="tab-title">Pi Runtime</h3>
-    <p class="tab-desc">Manage the Pi runtime installed in resources/pi/. Piter only manages this directory.</p>
+    <h3 class="tab-title">{{ $t("admin.piRuntime") }}</h3>
+    <p class="tab-desc">{{ $t("admin.piRuntimeDesc") }}</p>
 
     <!-- Current install status -->
     <div v-if="loading" class="loading-state">
       <Loader2 :size="14" class="spin" />
-      <span>Checking installation...</span>
+      <span>{{ $t("admin.checkingInstall") }}</span>
     </div>
 
     <template v-else-if="installInfo">
       <div class="install-card" :class="{ 'install-card--installed': installInfo.binary_present }">
         <div v-if="networkHint" class="proxy-note">
           <Globe :size="14" class="proxy-note-icon" />
-          <span>
-            The download failed. This is often a network issue — check your
-            connection first; enabling a system proxy (e.g. Clash Verge: System
-            Proxy or TUN mode) or setting
-            <code>HTTPS_PROXY</code>/<code>HTTP_PROXY</code> may help, then
-            retry. Piter picks up both automatically.
-          </span>
+          <i18n-t keypath="admin.versionsNetworkNote" tag="span">
+            <template #https><code>HTTPS_PROXY</code></template>
+            <template #http><code>HTTP_PROXY</code></template>
+          </i18n-t>
         </div>
 
         <div class="install-card-header">
           <div class="install-card-title">
             <template v-if="installInfo.binary_present">
               <Check :size="16" />
-              <span>Pi is installed</span>
+              <span>{{ $t("admin.piInstalled") }}</span>
             </template>
             <template v-else>
               <HardDrive :size="16" />
-              <span>Pi is not installed</span>
+              <span>{{ $t("admin.piNotInstalled") }}</span>
             </template>
           </div>
         </div>
@@ -159,20 +159,20 @@ const progressText = computed(() => {
         <div class="install-card-body" v-if="installInfo.binary_present">
           <div class="info-grid">
             <div class="info-item">
-              <span class="info-label">Version</span>
-              <span class="info-value mono">{{ installInfo.version ?? "unknown" }}</span>
+              <span class="info-label">{{ $t("admin.infoVersion") }}</span>
+              <span class="info-value mono">{{ installInfo.version ?? $t("admin.unknown") }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">Origin</span>
+              <span class="info-label">{{ $t("admin.infoOrigin") }}</span>
               <span class="info-value">
                 <span class="badge" :class="installInfo.origin === 'downloaded' ? 'badge-success' : 'badge-accent'">
                   <Link v-if="installInfo.origin === 'linked'" :size="10" />
-                  {{ installInfo.origin === "downloaded" ? "Downloaded by Piter" : "Linked from external" }}
+                  {{ installInfo.origin === "downloaded" ? $t("admin.originDownloaded") : $t("admin.originLinked") }}
                 </span>
               </span>
             </div>
             <div class="info-item">
-              <span class="info-label">Pinned version</span>
+              <span class="info-label">{{ $t("admin.pinnedVersion") }}</span>
               <span class="info-value mono">v{{ installInfo.locked_version }}</span>
             </div>
           </div>
@@ -180,8 +180,11 @@ const progressText = computed(() => {
 
         <div class="install-card-body" v-else>
           <p class="install-hint">
-            Download Pi to enable runtime features. For available versions, check the
-            <a class="text-link" href="#" @click.prevent="openReleases">pi releases on GitHub</a>.
+            <i18n-t keypath="admin.installHint" tag="span">
+              <template #link>
+                <a class="text-link" href="#" @click.prevent="openReleases">{{ $t("admin.releasesGithub") }}</a>
+              </template>
+            </i18n-t>
           </p>
         </div>
 
@@ -193,22 +196,22 @@ const progressText = computed(() => {
                 class="input switch-input"
                 type="text"
                 v-model="downloadInput"
-                :placeholder="`e.g. ${installInfo.locked_version}`"
+                :placeholder="$t('admin.pinPlaceholder', { v: installInfo.locked_version })"
                 :disabled="busy()"
                 @keydown.enter="handleDownload"
               />
               <button class="btn" :disabled="busy() || !downloadInput.trim()" @click="handleDownload">
                 <RotateCcw :size="12" />
-                <span>Switch Version</span>
+                <span>{{ $t("admin.switchVersion") }}</span>
               </button>
             </div>
             <div class="footer-actions">
               <button class="btn btn-danger btn-sm" :disabled="busy()" @click="handleUninstall">
                 <Trash2 :size="12" />
-                <span>Uninstall Pi</span>
+                <span>{{ $t("admin.uninstallPi") }}</span>
               </button>
               <span class="origin-hint" v-if="installInfo.origin === 'linked'">
-                Uninstall only removes the link, not the original install.
+                {{ $t("admin.uninstallLinkHint") }}
               </span>
             </div>
           </template>
@@ -218,18 +221,18 @@ const progressText = computed(() => {
                 class="input download-input"
                 type="text"
                 v-model="downloadInput"
-                placeholder="e.g. 0.80.3"
+                :placeholder="$t('admin.versionPlaceholder')"
                 :disabled="busy()"
                 @keydown.enter="handleDownload"
               />
               <button class="btn btn-primary" :disabled="busy() || !downloadInput.trim()" @click="handleDownload">
                 <Download v-if="!downloading" :size="14" />
                 <Loader2 v-else :size="14" class="spin" />
-                <span>{{ downloading ? "Downloading..." : "Download" }}</span>
+                <span>{{ downloading ? $t("admin.downloading") : $t("admin.download") }}</span>
               </button>
             </div>
             <button class="btn btn-ghost btn-sm" :disabled="loading" @click="emit('refresh')" style="margin-top: 8px;">
-              <span>Refresh</span>
+              <span>{{ $t("admin.refresh") }}</span>
             </button>
           </template>
         </div>
@@ -244,18 +247,22 @@ const progressText = computed(() => {
     </template>
 
     <div class="help-card">
-      <h4 class="help-title">Installation tips</h4>
+      <h4 class="help-title">{{ $t("admin.helpTitle") }}</h4>
       <ul class="help-list">
         <li>
-          <strong>Find a version:</strong> version numbers change frequently — check the
-          <a class="text-link" href="#" @click.prevent="openReleases">official pi releases</a>
-          page for the latest version.
+          <i18n-t keypath="admin.tipFindVersion" tag="span">
+            <template #link>
+              <a class="text-link" href="#" @click.prevent="openReleases">{{ $t("admin.releasesLink") }}</a>
+            </template>
+          </i18n-t>
         </li>
         <li>
-          <strong>Manual install:</strong> prefer to install pi yourself? Use the official installer
-          (<a class="text-link" href="#" @click.prevent="openLink(PI_HOMEPAGE_URL)">pi.dev</a>)
-          or <code>npm i -g @earendil-works/pi-coding-agent</code>. Piter auto-detects pi from PATH
-          / npm globals and links it here — no download needed.
+          <i18n-t keypath="admin.tipManualInstall" tag="span">
+            <template #link>
+              <a class="text-link" href="#" @click.prevent="openLink(PI_HOMEPAGE_URL)">{{ $t("admin.piDevLink") }}</a>
+            </template>
+            <template #code><code>npm i -g @earendil-works/pi-coding-agent</code></template>
+          </i18n-t>
         </li>
       </ul>
     </div>

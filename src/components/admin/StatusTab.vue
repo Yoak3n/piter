@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { RefreshCw } from "lucide-vue-next";
 import type { AdminStatus, PiSettings } from "../../composables/useAdmin";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   status: AdminStatus | null;
@@ -62,13 +65,13 @@ function fmtUptime(secs: number): string {
 }
 
 function handleRestart() {
-  actionLabel.value = "Restarting...";
+  actionLabel.value = t("common.restarting");
   emit("restart-pi");
   setTimeout(() => (actionLabel.value = ""), 3000);
 }
 
 function handleStop() {
-  actionLabel.value = "Stopping...";
+  actionLabel.value = t("common.stopping");
   emit("stop-pi");
   setTimeout(() => (actionLabel.value = ""), 3000);
 }
@@ -85,32 +88,32 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
   <div class="tab-content">
     <div class="tab-header">
       <div class="tab-header-info">
-        <h3 class="tab-title">System Status</h3>
-        <p class="tab-desc">Pi runtime and application overview</p>
+        <h3 class="tab-title">{{ $t("admin.systemStatus") }}</h3>
+        <p class="tab-desc">{{ $t("admin.statusDesc") }}</p>
       </div>
       <button class="btn btn-sm" :disabled="loading" @click="emit('refresh')">
         <RefreshCw :size="12" :class="{ 'spin': loading }" />
-        {{ loading ? "Refreshing..." : "Refresh" }}
+        {{ loading ? $t("common.refreshing") : $t("admin.refresh") }}
       </button>
     </div>
 
     <div class="status-grid">
       <div class="status-card">
-        <div class="status-card-label">Pi Status</div>
+        <div class="status-card-label">{{ $t("admin.piStatus") }}</div>
         <div class="status-card-value">
           <span
             v-if="status"
             class="badge"
             :class="status.pi_running ? 'badge-success' : 'badge-muted'"
           >
-            {{ status.pi_running ? "Running" : "Stopped" }}
+            {{ status.pi_running ? $t("admin.running") : $t("admin.stopped") }}
           </span>
           <span v-else class="status-card-muted">&mdash;</span>
         </div>
       </div>
 
       <div class="status-card">
-        <div class="status-card-label">Uptime</div>
+        <div class="status-card-label">{{ $t("admin.uptime") }}</div>
         <div class="status-card-value">
           <span v-if="status" class="status-card-mono">{{ fmtUptime(liveUptime) }}</span>
           <span v-else class="status-card-muted">&mdash;</span>
@@ -118,7 +121,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
       </div>
 
       <div class="status-card">
-        <div class="status-card-label">App Version</div>
+        <div class="status-card-label">{{ $t("admin.appVersion") }}</div>
         <div class="status-card-value">
           <span v-if="status" class="status-card-mono">{{ status.app_version }}</span>
           <span v-else class="status-card-muted">&mdash;</span>
@@ -126,7 +129,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
       </div>
 
       <div class="status-card">
-        <div class="status-card-label">Pi Version</div>
+        <div class="status-card-label">{{ $t("admin.piVersion") }}</div>
         <div class="status-card-value">
           <span v-if="status" class="status-card-mono">{{ status.pi_version }}</span>
           <span v-else class="status-card-muted">&mdash;</span>
@@ -134,7 +137,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
       </div>
 
       <div class="status-card status-card-wide clickable-card" @click="status && emit('open-path', status.data_dir)">
-        <div class="status-card-label">Data Directory</div>
+        <div class="status-card-label">{{ $t("admin.dataDir") }}</div>
         <div class="status-card-value">
           <span v-if="status" class="status-card-path">{{ status.data_dir }}</span>
           <span v-else class="status-card-muted">&mdash;</span>
@@ -142,7 +145,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
       </div>
 
       <div class="status-card status-card-wide">
-        <div class="status-card-label">Active Sessions ({{ status?.active_sessions.length ?? 0 }})</div>
+        <div class="status-card-label">{{ $t("admin.activeSessions", { n: status?.active_sessions.length ?? 0 }) }}</div>
         <div v-if="status && status.active_sessions.length" class="session-list">
           <div v-for="s in status.active_sessions" :key="s.instance_id" class="session-item">
             <span class="status-card-mono">{{ s.instance_id.slice(0, 8) }}</span>
@@ -150,34 +153,34 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
             <span class="status-card-path">{{ s.cwd }}</span>
           </div>
         </div>
-        <div v-else class="status-card-muted">No active sessions</div>
+        <div v-else class="status-card-muted">{{ $t("admin.noActiveSessions") }}</div>
       </div>
     </div>
 
     <div class="section">
-      <h3 class="tab-title">Pi Controls</h3>
+      <h3 class="tab-title">{{ $t("admin.piControls") }}</h3>
       <div class="control-row">
-        <button class="btn" @click="handleRestart">Restart Pi</button>
-        <button class="btn btn-danger" @click="handleStop">Stop Pi</button>
+        <button class="btn" @click="handleRestart">{{ $t("admin.restartPi") }}</button>
+        <button class="btn btn-danger" @click="handleStop">{{ $t("admin.stopPi") }}</button>
         <span v-if="actionLabel" class="action-feedback">{{ actionLabel }}</span>
       </div>
     </div>
 
     <div class="section">
-      <h3 class="tab-title">Piter Settings</h3>
+      <h3 class="tab-title">{{ $t("admin.piterSettings") }}</h3>
       <div class="settings-card">
         <div class="settings-row">
           <div class="settings-label">
-            <span class="settings-label-title">Request timeout</span>
-            <span class="settings-label-desc">Seconds before a request is cancelled</span>
+            <span class="settings-label-title">{{ $t("admin.requestTimeout") }}</span>
+            <span class="settings-label-desc">{{ $t("admin.requestTimeoutDesc") }}</span>
           </div>
           <input class="input number-input" type="number" v-model.number="localPiSettings.request_timeout_secs" min="30" max="3600" :disabled="disabled" />
         </div>
 
         <div class="settings-row">
           <div class="settings-label">
-            <span class="settings-label-title">Auto-restart on crash</span>
-            <span class="settings-label-desc">Restart Pi process if it exits unexpectedly</span>
+            <span class="settings-label-title">{{ $t("admin.autoRestart") }}</span>
+            <span class="settings-label-desc">{{ $t("admin.autoRestartDesc") }}</span>
           </div>
           <label class="toggle" :class="{ on: localPiSettings.auto_restart_on_crash }">
             <input type="checkbox" v-model="localPiSettings.auto_restart_on_crash" :disabled="disabled" />
@@ -187,21 +190,21 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
 
         <div class="settings-footer">
           <button class="btn btn-primary" :disabled="disabled" @click="handleSavePiSettings">
-            {{ piSettingsSaved ? "Saved" : "Save Piter Settings" }}
+            {{ piSettingsSaved ? $t("common.saved") : $t("admin.savePiterSettings") }}
           </button>
         </div>
       </div>
     </div>
 
     <div class="section">
-      <h3 class="tab-title">Broker URLs</h3>
+      <h3 class="tab-title">{{ $t("admin.brokerUrls") }}</h3>
       <div class="info-block" v-if="status">
         <div class="info-row">
-          <span class="info-key">WebSocket</span>
+          <span class="info-key">{{ $t("admin.websocket") }}</span>
           <code class="info-value">{{ status.broker_ws_url }}</code>
         </div>
         <div class="info-row">
-          <span class="info-key">HTTP</span>
+          <span class="info-key">{{ $t("admin.http") }}</span>
           <code class="info-value">{{ status.broker_http_url }}</code>
         </div>
       </div>

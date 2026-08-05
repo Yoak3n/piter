@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Globe, FolderKanban, Loader2, RefreshCw, Inbox, Puzzle,
 } from "lucide-vue-next";
+import { EmptyState } from "@piter/ui";
 import {
   useAdmin,
   type ExtensionOverview,
@@ -129,15 +130,15 @@ function projectExtState(name: string): ExtState {
   return "off";
 }
 
-function extOptions(name: string): { value: ExtState; label: string }[] {
+function extOptions(name: string): { value: ExtState; labelKey: string }[] {
   return globalEnabled.value.has(name)
     ? [
-        { value: "inherit", label: "继承全局" },
-        { value: "excluded", label: "排除" },
+        { value: "inherit", labelKey: "admin.extStateInherit" },
+        { value: "excluded", labelKey: "admin.extStateExcluded" },
       ]
     : [
-        { value: "off", label: "Off" },
-        { value: "enabled", label: "Enabled" },
+        { value: "off", labelKey: "admin.extStateOff" },
+        { value: "enabled", labelKey: "admin.extStateEnabled" },
       ];
 }
 
@@ -171,15 +172,12 @@ function enqueueSaveProject(pid: string) {
   <div class="tab-content">
     <div class="tab-header">
       <div class="tab-header-info">
-        <h3 class="tab-title">Extensions</h3>
-        <p class="tab-desc">
-          Enable the extensions Pi uses. Checked extensions are persisted to the
-          gateway database. Installing/uninstalling packages is done in the Market tab.
-        </p>
+        <h3 class="tab-title">{{ $t("admin.extensionsTitle") }}</h3>
+        <p class="tab-desc">{{ $t("admin.extensionsDesc") }}</p>
       </div>
       <button class="btn btn-sm" :disabled="loading" @click="loadOverview()">
         <RefreshCw :size="12" :class="{ spin: loading }" />
-        {{ loading ? "Loading..." : "Refresh" }}
+        {{ loading ? $t("common.loading") : $t("admin.refresh") }}
       </button>
     </div>
 
@@ -188,21 +186,20 @@ function enqueueSaveProject(pid: string) {
       <div class="section-header">
         <div class="section-title">
           <Globe :size="14" class="section-icon" />
-          <span>Global Extensions</span>
+          <span>{{ $t("admin.globalExtensions") }}</span>
         </div>
-        <p class="section-desc">Discovered in ~/.pi/agent/extensions/ and from installed packages. Enabled for every Pi session. Only enabled extensions are passed to Pi — auto-discovery is disabled.</p>
+        <p class="section-desc">{{ $t("admin.globalExtensionsDesc") }}</p>
       </div>
 
       <div v-if="loading" class="loading-row">
         <Loader2 :size="12" class="spin" />
-        <span>Loading...</span>
+        <span>{{ $t("common.loading") }}</span>
       </div>
 
       <template v-else>
-        <div v-if="!overview || overview.global_extensions.length === 0" class="empty-row">
-          <Inbox :size="20" class="empty-icon" />
-          <span>No extensions or packages found</span>
-        </div>
+        <EmptyState v-if="!overview || overview.global_extensions.length === 0" compact :title="$t('admin.noExtensions')">
+          <template #icon><Inbox :size="20" /></template>
+        </EmptyState>
 
         <div v-else class="ext-list">
           <div v-for="ext in overview.global_extensions" :key="ext.name" class="ext-item">
@@ -228,25 +225,20 @@ function enqueueSaveProject(pid: string) {
       <div class="section-header">
         <div class="section-title">
           <FolderKanban :size="14" class="section-icon" />
-          <span>Project Extensions</span>
+          <span>{{ $t("admin.projectExtensions") }}</span>
         </div>
-        <p class="section-desc">
-          Based on the global list: global-enabled extensions are inherited by
-          default and can be excluded for this project; project-local/package
-          extensions can be enabled per project.
-        </p>
+        <p class="section-desc">{{ $t("admin.projectExtensionsDesc") }}</p>
       </div>
 
       <div v-if="loading" class="loading-row">
         <Loader2 :size="12" class="spin" />
-        <span>Loading...</span>
+        <span>{{ $t("common.loading") }}</span>
       </div>
 
       <template v-else>
-        <div v-if="!overview || overview.projects.length === 0" class="empty-row">
-          <Inbox :size="20" class="empty-icon" />
-          <span>No projects found</span>
-        </div>
+        <EmptyState v-if="!overview || overview.projects.length === 0" compact :title="$t('admin.noProjects')">
+          <template #icon><Inbox :size="20" /></template>
+        </EmptyState>
 
         <template v-else>
           <select
@@ -261,13 +253,12 @@ function enqueueSaveProject(pid: string) {
 
           <div v-if="selectedProject && (loadingProject || !projectCandidates.get(selectedProject.id))" class="loading-row">
             <Loader2 :size="12" class="spin" />
-            <span>Loading project extensions...</span>
+            <span>{{ $t("admin.loadingProjectExts") }}</span>
           </div>
 
-          <div v-else-if="selectedProject && (projectCandidates.get(selectedProject.id) ?? []).length === 0" class="empty-row">
-            <Inbox :size="20" class="empty-icon" />
-            <span>No extensions or packages found for this project</span>
-          </div>
+          <EmptyState v-else-if="selectedProject && (projectCandidates.get(selectedProject.id) ?? []).length === 0" compact :title="$t('admin.noProjectExts')">
+            <template #icon><Inbox :size="20" /></template>
+          </EmptyState>
 
           <div v-else-if="selectedProject" class="ext-list">
             <div
@@ -287,7 +278,7 @@ function enqueueSaveProject(pid: string) {
                   :class="{ active: projectExtState(ext.name) === opt.value }"
                   @click="setProjectExtState(ext.name, opt.value)"
                 >
-                  {{ opt.label }}
+                  {{ $t(opt.labelKey) }}
                 </button>
               </div>
             </div>
@@ -369,19 +360,13 @@ function enqueueSaveProject(pid: string) {
   line-height: var(--line-height-caption);
 }
 
-.loading-row,
-.empty-row {
+.loading-row {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
   color: var(--text-tertiary);
   font-size: var(--font-size-caption);
   padding: var(--space-sm) 0;
-}
-
-.empty-icon {
-  opacity: 0.4;
-  flex-shrink: 0;
 }
 
 .ext-list {
@@ -456,8 +441,8 @@ function enqueueSaveProject(pid: string) {
   color: var(--text);
 }
 .seg-btn.active {
-  background: var(--accent);
-  color: var(--bg-panel);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .spin {

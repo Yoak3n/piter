@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   Store, Search, Package, Download, ExternalLink, Globe,
   Loader2, RefreshCw, ChevronLeft, ChevronRight,
   Puzzle, Paintbrush, MessageSquare, Zap,
 } from "lucide-vue-next";
+import { EmptyState } from "@piter/ui";
 import { invoke } from "@tauri-apps/api/core";
 import {
   useMarketplace,
@@ -32,6 +34,8 @@ const {
 const searchInput = ref("");
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
+const { t } = useI18n();
+
 function onSearchInput(e: Event) {
   const val = (e.target as HTMLInputElement).value;
   searchInput.value = val;
@@ -39,18 +43,18 @@ function onSearchInput(e: Event) {
   searchTimer = setTimeout(() => setSearch(val), 180);
 }
 
-const typeFilters: { key: PackageType; label: string; icon: any }[] = [
-  { key: "all", label: "All", icon: Store },
-  { key: "extension", label: "Extensions", icon: Puzzle },
-  { key: "skill", label: "Skills", icon: Zap },
-  { key: "theme", label: "Themes", icon: Paintbrush },
-  { key: "prompt", label: "Prompts", icon: MessageSquare },
+const typeFilters: { key: PackageType; labelKey: string; icon: any }[] = [
+  { key: "all", labelKey: "admin.filterAll", icon: Store },
+  { key: "extension", labelKey: "admin.filterExtensions", icon: Puzzle },
+  { key: "skill", labelKey: "admin.filterSkills", icon: Zap },
+  { key: "theme", labelKey: "admin.filterThemes", icon: Paintbrush },
+  { key: "prompt", labelKey: "admin.filterPrompts", icon: MessageSquare },
 ];
 
-const sortOptions: { value: SortMode; label: string }[] = [
-  { value: "downloads", label: "Most Downloads" },
-  { value: "name", label: "Name A-Z" },
-  { value: "updated", label: "Recently Updated" },
+const sortOptions: { value: SortMode; labelKey: string }[] = [
+  { value: "downloads", labelKey: "admin.sortDownloads" },
+  { value: "name", labelKey: "admin.sortName" },
+  { value: "updated", labelKey: "admin.sortUpdated" },
 ];
 
 function fmtDownloads(n: number): string {
@@ -92,7 +96,7 @@ async function handleInstall(pkg: MarketPackage) {
     setInstalled(pkg.name, true);
     emit("packages-changed", installed);
   } catch (e) {
-    installError.value = `Failed to install ${pkg.name}: ${e}`;
+    installError.value = t("admin.installFailed", { msg: `${pkg.name}: ${e}` });
   } finally {
     installingPkg.value = null;
   }
@@ -107,7 +111,7 @@ async function handleUninstall(pkg: MarketPackage) {
     setInstalled(pkg.name, false);
     emit("packages-changed", installed);
   } catch (e) {
-    installError.value = `Failed to uninstall ${pkg.name}: ${e}`;
+    installError.value = t("admin.installFailed", { msg: `${pkg.name}: ${e}` });
   } finally {
     installingPkg.value = null;
   }
@@ -134,8 +138,8 @@ watch(() => props.packages, () => {
     <!-- Header -->
     <div class="mp-header">
       <div class="mp-header-info">
-        <h3 class="mp-title">Package Marketplace</h3>
-        <p class="mp-desc">Browse and install community packages for Pi agent.</p>
+        <h3 class="mp-title">{{ $t("admin.marketTitle") }}</h3>
+        <p class="mp-desc">{{ $t("admin.marketDesc") }}</p>
       </div>
       <button
         v-if="loaded"
@@ -144,30 +148,28 @@ watch(() => props.packages, () => {
         @click="loadAll"
       >
         <RefreshCw :size="12" :class="{ spin: loading }" />
-        {{ loading ? "Loading..." : "Refresh" }}
+        {{ loading ? $t("common.loading") : $t("admin.refresh") }}
       </button>
     </div>
 
     <!-- Network notice: only shown when a load/install has failed -->
     <div v-if="error || installError" class="mp-proxy-note">
       <Globe :size="14" class="mp-proxy-note-icon" />
-      <span>
-        This may be a network issue — check your connection first; enabling a
-        system proxy or TUN mode (e.g. Clash Verge), or configuring an npm
-        proxy (<code>npm config set proxy ...</code>) may help, then retry.
-      </span>
+      <i18n-t keypath="admin.marketNetworkNote" tag="span">
+        <template #code><code>npm config set proxy ...</code></template>
+      </i18n-t>
     </div>
 
     <!-- Loading state -->
     <div v-if="loading && !loaded" class="mp-loading">
       <Loader2 :size="20" class="spin" />
-      <span>Loading packages...</span>
+      <span>{{ $t("admin.loadingPackages") }}</span>
     </div>
 
     <!-- Error state -->
     <div v-else-if="error && !loaded" class="mp-error">
       <p>{{ error }}</p>
-      <button class="btn btn-sm" @click="loadAll">Retry</button>
+      <button class="btn btn-sm" @click="loadAll">{{ $t("common.retry") }}</button>
     </div>
 
     <!-- Content -->
@@ -180,7 +182,7 @@ watch(() => props.packages, () => {
           <input
             class="mp-search-input"
             type="text"
-            placeholder="Search packages..."
+            :placeholder="$t('admin.searchPackages')"
             :value="searchInput"
             @input="onSearchInput"
           />
@@ -196,7 +198,7 @@ watch(() => props.packages, () => {
             @click="setType(f.key)"
           >
             <component :is="f.icon" :size="12" />
-            {{ f.label }}
+            {{ $t(f.labelKey) }}
           </button>
         </div>
 
@@ -204,17 +206,17 @@ watch(() => props.packages, () => {
         <div class="mp-toolbar-row">
           <label class="mp-installed-toggle">
             <input type="checkbox" v-model="installedOnly" />
-            <span>Installed only</span>
+            <span>{{ $t("admin.installedOnly") }}</span>
           </label>
 
           <select class="mp-sort" v-model="sortMode">
             <option v-for="s in sortOptions" :key="s.value" :value="s.value">
-              {{ s.label }}
+              {{ $t(s.labelKey) }}
             </option>
           </select>
 
           <span class="mp-count">
-            {{ filteredPackages.length }} package{{ filteredPackages.length !== 1 ? "s" : "" }}
+            {{ $t("admin.packageCount", { n: filteredPackages.length }) }}
           </span>
         </div>
       </div>
@@ -225,11 +227,9 @@ watch(() => props.packages, () => {
       </div>
 
       <!-- Package grid -->
-      <div v-if="pagedPackages.length === 0" class="mp-empty">
-        <Package :size="32" class="mp-empty-icon" />
-        <p>No packages found</p>
-        <span class="mp-empty-hint">Try adjusting your filters or search query.</span>
-      </div>
+      <EmptyState v-if="pagedPackages.length === 0" :title="$t('admin.noPackages')" :hint="$t('admin.noPackagesHint')">
+        <template #icon><Package :size="32" /></template>
+      </EmptyState>
 
       <div v-else class="mp-grid">
         <div v-for="pkg in pagedPackages" :key="pkg.name" class="mp-card">
@@ -254,7 +254,7 @@ watch(() => props.packages, () => {
               <button
                 v-if="pkg.links?.npm"
                 class="mp-link"
-                title="npm"
+                :title="$t('admin.linkNpm')"
                 @click="openLink(pkg.links.npm!)"
               >
                 <ExternalLink :size="11" />
@@ -263,7 +263,7 @@ watch(() => props.packages, () => {
               <button
                 v-if="pkg.links?.repository"
                 class="mp-link"
-                title="Repository"
+                :title="$t('admin.linkRepo')"
                 @click="openLink(pkg.links.repository!)"
               >
                 <ExternalLink :size="11" />
@@ -272,7 +272,7 @@ watch(() => props.packages, () => {
               <button
                 v-if="pkg.links?.homepage"
                 class="mp-link"
-                title="Homepage"
+                :title="$t('admin.linkHome')"
                 @click="openLink(pkg.links.homepage!)"
               >
                 <ExternalLink :size="11" />
@@ -287,7 +287,7 @@ watch(() => props.packages, () => {
               @click="handleUninstall(pkg)"
             >
               <Loader2 v-if="installingPkg === pkg.name" :size="12" class="spin" />
-              Uninstall
+              {{ $t("admin.uninstall") }}
             </button>
             <button
               v-else
@@ -297,7 +297,7 @@ watch(() => props.packages, () => {
             >
               <Loader2 v-if="installingPkg === pkg.name" :size="12" class="spin" />
               <Download v-else :size="12" />
-              Install
+              {{ $t("admin.install") }}
             </button>
           </div>
         </div>
@@ -539,28 +539,6 @@ watch(() => props.packages, () => {
   background: var(--danger-soft);
   color: var(--danger);
   border-radius: var(--radius-sm);
-  font-size: var(--font-size-caption);
-}
-
-/* Empty */
-.mp-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-sm);
-  color: var(--text-tertiary);
-  padding: var(--space-xxl) 0;
-  text-align: center;
-}
-.mp-empty-icon {
-  opacity: 0.4;
-}
-.mp-empty p {
-  margin: 0;
-  font-size: var(--font-size-body);
-  color: var(--text-secondary);
-}
-.mp-empty-hint {
   font-size: var(--font-size-caption);
 }
 

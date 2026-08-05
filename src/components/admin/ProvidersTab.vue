@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from "vue";
+import { useI18n } from "vue-i18n";
 import { KeyRound, Loader2, RefreshCw, FileJson2, RotateCcw, CheckCircle2 } from "lucide-vue-next";
 import {
   useAdmin,
   type PiProviderStatus,
 } from "../../composables/useAdmin";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   brokerHttpUrl: string;
@@ -57,14 +60,14 @@ const modelCount = ref<number | null>(null);
 const modelCheckError = ref("");
 
 function statusText(p: PiProviderStatus): string {
-  if (!p.configured) return "Not configured";
+  if (!p.configured) return t("admin.providerNotConfigured");
   if (p.source === "stored") {
-    return p.custom ? "Configured · OAuth" : "Configured · auth.json";
+    return p.custom ? t("admin.providerConfiguredOAuth") : t("admin.providerConfiguredAuth");
   }
   if (p.source === "environment") {
-    return `From environment · ${p.env_var ?? "env var"}`;
+    return t("admin.providerConfiguredEnv", { var: p.env_var ?? "env" });
   }
-  return "Configured";
+  return t("admin.providerConfigured");
 }
 
 function dotClass(p: PiProviderStatus): string {
@@ -99,7 +102,7 @@ async function saveKey() {
   if (!provider) return;
   const key = keyInput.value.trim();
   if (!key) {
-    keyError.value = "Key cannot be empty.";
+    keyError.value = t("admin.keyErrorEmpty");
     return;
   }
   keySaving.value = true;
@@ -107,7 +110,7 @@ async function saveKey() {
   try {
     const ok = await setPiApiKey(provider, key);
     if (!ok) {
-      keyError.value = error.value || "Failed to save key.";
+      keyError.value = error.value || t("admin.keySaveFailed");
       return;
     }
     editingProvider.value = null;
@@ -119,10 +122,10 @@ async function saveKey() {
 
 async function removeKey(p: PiProviderStatus) {
   const label = p.custom ? p.display_name : `${p.display_name} (${p.provider})`;
-  if (!confirm(`Remove stored credentials for ${label}?`)) return;
+  if (!confirm(t("admin.removeKeyConfirm", { label }))) return;
   const ok = await removePiApiKey(p.provider);
   if (!ok) {
-    keyError.value = error.value || "Failed to remove key.";
+    keyError.value = error.value || t("admin.keyRemoveFailed");
   }
 }
 
@@ -131,7 +134,7 @@ async function removeKey(p: PiProviderStatus) {
 function insertOllamaExample() {
   const current = modelsText.value.trim();
   if (current && current !== "{}" && current !== "{\n  \"providers\": {}\n}") {
-    if (!confirm("Replace current content with the Ollama example?")) return;
+    if (!confirm(t("admin.replaceModelsConfirm"))) return;
   }
   modelsText.value = MODELS_JSON_EXAMPLE;
   modelsError.value = "";
@@ -142,7 +145,7 @@ async function saveModels() {
   try {
     JSON.parse(modelsText.value);
   } catch (e) {
-    modelsError.value = `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`;
+    modelsError.value = t("admin.modelsInvalidJson", { msg: e instanceof Error ? e.message : String(e) });
     return;
   }
   modelsSaving.value = true;
@@ -152,7 +155,7 @@ async function saveModels() {
       modelsSaved.value = true;
       setTimeout(() => (modelsSaved.value = false), 2000);
     } else {
-      modelsError.value = error.value || "Failed to save models.json";
+      modelsError.value = error.value || t("admin.modelsSaveFailed");
     }
   } finally {
     modelsSaving.value = false;
@@ -176,10 +179,10 @@ async function checkModels() {
     if (data.success && Array.isArray(data.data?.models)) {
       modelCount.value = data.data.models.length;
     } else {
-      modelCheckError.value = data.error || "Failed to fetch available models.";
+      modelCheckError.value = data.error || t("admin.modelsFetchFailed");
     }
   } catch (e) {
-    modelCheckError.value = `Gateway unreachable: ${e instanceof Error ? e.message : String(e)}`;
+    modelCheckError.value = t("admin.gatewayUnreachable", { msg: e instanceof Error ? e.message : String(e) });
   } finally {
     checkingModels.value = false;
   }
@@ -192,16 +195,12 @@ onMounted(loadAll);
   <div class="tab-content">
     <div class="tab-header">
       <div class="tab-header-info">
-        <h3 class="tab-title">Providers</h3>
-        <p class="tab-desc">
-          Configure the model providers Pi can use — API keys, environment
-          overrides, and custom providers. Changes apply to new sessions
-          immediately; running sessions pick them up after a Pi restart.
-        </p>
+        <h3 class="tab-title">{{ $t("admin.providersTitle") }}</h3>
+        <p class="tab-desc">{{ $t("admin.providersDesc") }}</p>
       </div>
       <button class="btn btn-sm" :disabled="loading.authStatus || loading.modelsConfig" @click="loadAll">
         <RefreshCw :size="12" :class="{ spin: loading.authStatus || loading.modelsConfig }" />
-        {{ loading.authStatus ? "Loading..." : "Refresh" }}
+        {{ loading.authStatus ? $t("common.loading") : $t("admin.refresh") }}
       </button>
     </div>
 
@@ -210,26 +209,25 @@ onMounted(loadAll);
       <div class="section-header">
         <div class="section-title">
           <KeyRound :size="14" class="section-icon" />
-          <span>API Keys</span>
+          <span>{{ $t("admin.apiKeys") }}</span>
         </div>
         <p class="section-desc">
-          Stored in <code>~/.pi/agent/auth.json</code> with 0600 permissions.
-          When no key is stored, Pi falls back to the matching environment
-          variable. OAuth subscriptions (e.g. ChatGPT/Claude plans) are managed
-          with <code>pi /login</code> and appear below as read-only entries.
+          <i18n-t keypath="admin.apiKeysDesc" tag="span">
+            <template #path><code>~/.pi/agent/auth.json</code></template>
+            <template #login><code>pi /login</code></template>
+          </i18n-t>
         </p>
       </div>
 
       <div v-if="loading.authStatus" class="loading-row">
         <Loader2 :size="12" class="spin" />
-        <span>Loading providers…</span>
+        <span>{{ $t("admin.loadingProviders") }}</span>
       </div>
 
       <template v-else>
-        <div v-if="!piAuthStatus || piAuthStatus.length === 0" class="empty-row">
-          <KeyRound :size="20" class="empty-icon" />
-          <span>No providers known.</span>
-        </div>
+        <EmptyState v-if="!piAuthStatus || piAuthStatus.length === 0" compact :title="$t('admin.noProviders')">
+          <template #icon><KeyRound :size="20" /></template>
+        </EmptyState>
 
         <div v-else class="provider-list">
           <div v-for="p in piAuthStatus" :key="p.provider" class="provider-item">
@@ -242,15 +240,15 @@ onMounted(loadAll);
                   class="input key-input"
                   autocomplete="off"
                   spellcheck="false"
-                  placeholder="Paste API key…"
+                  :placeholder="$t('admin.keyPlaceholder')"
                   @keydown.enter.prevent="saveKey"
                   @keydown.esc.prevent="cancelEdit"
                 />
                 <div v-if="keyError" class="inline-error">{{ keyError }}</div>
                 <div class="provider-edit-actions">
-                  <button class="btn btn-sm" :disabled="keySaving" @click="cancelEdit">Cancel</button>
+                  <button class="btn btn-sm" :disabled="keySaving" @click="cancelEdit">{{ $t("common.cancel") }}</button>
                   <button class="btn btn-sm btn-primary" :disabled="keySaving" @click="saveKey">
-                    {{ keySaving ? "Saving…" : "Save" }}
+                    {{ keySaving ? $t("admin.saving") : $t("common.save") }}
                   </button>
                 </div>
               </div>
@@ -269,14 +267,14 @@ onMounted(loadAll);
               </div>
               <div class="provider-actions">
                 <button v-if="!p.custom" class="btn btn-sm" @click="beginEdit(p)">
-                  {{ p.configured ? "Update" : "Set key" }}
+                  {{ p.configured ? $t("admin.updateKey") : $t("admin.setKey") }}
                 </button>
                 <button
                   v-if="p.configured && p.source === 'stored'"
                   class="btn btn-sm btn-remove"
                   @click="removeKey(p)"
                 >
-                  Remove
+                  {{ $t("admin.removeKey") }}
                 </button>
               </div>
             </template>
@@ -296,20 +294,20 @@ onMounted(loadAll);
           >
             <Loader2 v-if="checkingModels" :size="12" class="spin" />
             <CheckCircle2 v-else :size="12" />
-            {{ checkingModels ? "Checking…" : "Refresh model list" }}
+            {{ checkingModels ? $t("admin.checkingModels") : $t("admin.refreshModelList") }}
           </button>
           <button
             class="btn btn-sm"
             :disabled="!piRunning"
-            title="Restart Pi to apply key changes to running sessions"
+            :title="$t('admin.restartToApplyTitle')"
             @click="emit('restart-pi')"
           >
             <RotateCcw :size="12" />
-            Restart Pi to apply
+            {{ $t("admin.restartToApply") }}
           </button>
         </div>
         <div v-if="modelCount !== null" class="model-check-ok">
-          {{ modelCount }} model{{ modelCount === 1 ? "" : "s" }} available.
+          {{ $t("admin.modelsAvailable", modelCount) }}
         </div>
         <div v-if="modelCheckError" class="inline-error">{{ modelCheckError }}</div>
       </div>
@@ -320,66 +318,78 @@ onMounted(loadAll);
       <div class="section-header">
         <div class="section-title">
           <FileJson2 :size="14" class="section-icon" />
-          <span>Custom Providers</span>
+          <span>{{ $t("admin.customProviders") }}</span>
         </div>
         <p class="section-desc">
-          <code>~/.pi/agent/models.json</code> lets Pi talk to services that
-          aren't in the built-in list above — local models, company gateways,
-          or proxies.
+          <i18n-t keypath="admin.customProvidersDesc" tag="span">
+            <template #path><code>~/.pi/agent/models.json</code></template>
+          </i18n-t>
         </p>
       </div>
 
       <div class="info-box">
-        <div class="info-box-title">When do I need this?</div>
+        <div class="info-box-title">{{ $t("admin.whenNeedTitle") }}</div>
         <ul class="info-list">
           <li>
-            <strong>Use local models.</strong> Run models on your own machine
-            (Ollama, LM Studio, vLLM) instead of paying for a cloud API.
+            <strong>{{ $t("admin.needLocal") }}</strong> {{ $t("admin.needLocalDesc") }}
           </li>
           <li>
-            <strong>Use a proxy / gateway.</strong> Point a built-in provider
-            (Anthropic, OpenAI, …) at a custom <code>baseUrl</code> — common
-            with corporate proxies or API aggregators.
+            <strong>{{ $t("admin.needProxy") }}</strong> {{ $t("admin.needProxyDesc") }}
           </li>
           <li>
-            <strong>Custom key per endpoint.</strong> Some gateways require a
-            key that only works with their <code>baseUrl</code>; store it here
-            instead of in the API Keys list above.
+            <strong>{{ $t("admin.needCustomKey") }}</strong> {{ $t("admin.needCustomKeyDesc") }}
           </li>
         </ul>
 
-        <div class="info-box-title">What each field means</div>
+        <div class="info-box-title">{{ $t("admin.whatFieldsTitle") }}</div>
         <dl class="field-list">
           <div class="field-row">
-            <dt>baseUrl</dt>
-            <dd>The API endpoint. For Ollama it's usually <code>http://localhost:11434/v1</code>.</dd>
+            <dt>{{ $t("admin.fieldBaseUrl") }}</dt>
+            <dd>{{ $t("admin.fieldBaseUrlDesc") }}</dd>
           </div>
           <div class="field-row">
-            <dt>api</dt>
-            <dd>API format Pi uses to talk to it. <code>openai-completions</code> works for most tools (including Ollama).</dd>
+            <dt>{{ $t("admin.fieldApi") }}</dt>
+            <dd>{{ $t("admin.fieldApiDesc") }}</dd>
           </div>
           <div class="field-row">
-            <dt>apiKey</dt>
-            <dd>Optional. Only needed if the service requires one (Ollama accepts any value).</dd>
+            <dt>{{ $t("admin.fieldApiKey") }}</dt>
+            <dd>{{ $t("admin.fieldApiKeyDesc") }}</dd>
           </div>
           <div class="field-row">
-            <dt>models</dt>
-            <dd>The models to show in chat, each as <code>{ "id": "..." }</code>. Use the exact id from your service.</dd>
+            <dt>{{ $t("admin.fieldModels") }}</dt>
+            <dd>
+              <i18n-t keypath="admin.fieldModelsDesc" tag="span">
+                <template #code><code>{ "id": "..." }</code></template>
+              </i18n-t>
+            </dd>
           </div>
         </dl>
 
-        <div class="info-box-title">Quick start with Ollama</div>
+        <div class="info-box-title">{{ $t("admin.ollamaTitle") }}</div>
         <ol class="info-list">
-          <li>Install <a href="https://ollama.com" target="_blank" rel="noreferrer">Ollama</a> and pull a model, e.g. <code>ollama pull llama3.1:8b</code>.</li>
-          <li>Click <strong>Insert Ollama example</strong> below and adjust the model ids.</li>
-          <li>Click <strong>Save models.json</strong>, then <strong>Restart Pi</strong>.</li>
-          <li>Open a chat and pick your local model from the model selector.</li>
+          <li>
+            <i18n-t keypath="admin.ollamaStep1" tag="span">
+              <template #link>
+                <a href="https://ollama.com" target="_blank" rel="noreferrer">Ollama</a>
+              </template>
+              <template #code><code>ollama pull llama3.1:8b</code></template>
+            </i18n-t>
+          </li>
+          <li>
+            <i18n-t keypath="admin.ollamaStep2" tag="span">
+              <template #strong><strong>{{ $t("admin.insertOllamaExample") }}</strong></template>
+            </i18n-t>
+          </li>
+          <li>
+            <i18n-t keypath="admin.ollamaStep3" tag="span">
+              <template #strong1><strong>{{ $t("admin.saveModelsJson") }}</strong></template>
+              <template #strong2><strong>{{ $t("admin.restartToApply") }}</strong></template>
+            </i18n-t>
+          </li>
+          <li>{{ $t("admin.ollamaStep4") }}</li>
         </ol>
 
-        <p class="info-note">
-          Keys stored here are separate from the API Keys list above. Pi reads
-          this file when a session starts.
-        </p>
+        <p class="info-note">{{ $t("admin.providerInfoNote") }}</p>
       </div>
 
       <textarea
@@ -391,9 +401,9 @@ onMounted(loadAll);
       ></textarea>
 
       <div class="editor-actions">
-        <button class="btn btn-sm" @click="insertOllamaExample">Insert Ollama example</button>
+        <button class="btn btn-sm" @click="insertOllamaExample">{{ $t("admin.insertOllamaExample") }}</button>
         <button class="btn btn-sm btn-primary" :disabled="modelsSaving" @click="saveModels">
-          {{ modelsSaving ? "Saving…" : modelsSaved ? "Saved" : "Save models.json" }}
+          {{ modelsSaving ? $t("admin.saving") : modelsSaved ? $t("common.saved") : $t("admin.saveModelsJson") }}
         </button>
       </div>
       <div v-if="modelsError" class="inline-error">{{ modelsError }}</div>
@@ -481,19 +491,13 @@ code {
   padding: 0 4px;
 }
 
-.loading-row,
-.empty-row {
+.loading-row {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
   color: var(--text-tertiary);
   font-size: var(--font-size-caption);
   padding: var(--space-sm) 0;
-}
-
-.empty-icon {
-  opacity: 0.4;
-  flex-shrink: 0;
 }
 
 .provider-list {

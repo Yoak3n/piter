@@ -44,39 +44,39 @@ function handleSaveAgent() {
   <div class="tab-content">
     <div class="section-card">
       <div class="section-header">
-        <h3 class="tab-title">Pi Agent Defaults</h3>
-        <p class="tab-desc">Read from ~/.pi/agent/settings.json</p>
+        <h3 class="tab-title">{{ $t("admin.piAgentDefaults") }}</h3>
+        <p class="tab-desc">{{ $t("admin.piAgentDesc") }}</p>
       </div>
 
       <div class="settings-row">
         <div class="settings-label">
-          <span class="settings-label-title">Default Provider</span>
+          <span class="settings-label-title">{{ $t("admin.defaultProvider") }}</span>
         </div>
-        <input class="input model-input" type="text" v-model="agentProvider" :disabled="disabled" placeholder="e.g. openai" />
+        <input class="input model-input" type="text" v-model="agentProvider" :disabled="disabled" :placeholder="$t('admin.providerPlaceholder')" />
       </div>
 
       <div class="settings-row">
         <div class="settings-label">
-          <span class="settings-label-title">Default Model</span>
+          <span class="settings-label-title">{{ $t("admin.defaultModel") }}</span>
         </div>
-        <input class="input model-input" type="text" v-model="agentModel" :disabled="disabled" placeholder="e.g. gpt-4o" />
+        <input class="input model-input" type="text" v-model="agentModel" :disabled="disabled" :placeholder="$t('admin.modelPlaceholder')" />
       </div>
 
       <div class="settings-row">
         <div class="settings-label">
-          <span class="settings-label-title">Thinking Level</span>
+          <span class="settings-label-title">{{ $t("admin.thinkingLevel") }}</span>
         </div>
         <select class="input" v-model="agentThinking" :disabled="disabled">
-          <option value="off">Off</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
+          <option value="off">{{ $t("admin.thinkingOff") }}</option>
+          <option value="low">{{ $t("admin.thinkingLow") }}</option>
+          <option value="medium">{{ $t("admin.thinkingMedium") }}</option>
+          <option value="high">{{ $t("admin.thinkingHigh") }}</option>
         </select>
       </div>
 
       <div class="section-footer">
         <button class="btn btn-primary" :disabled="disabled" @click="handleSaveAgent">
-          {{ agentSaved ? "Saved" : "Save Agent Settings" }}
+          {{ agentSaved ? $t("common.saved") : $t("admin.saveAgentSettings") }}
         </button>
       </div>
     </div>

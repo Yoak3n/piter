@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount } from "vue";
+import { ref, watch } from "vue";
+import { setLocale } from "@piter/ui";
 import type { AppSettings } from "../../composables/useAdmin";
 import { applyTheme } from "../../utils/theme";
+import { i18n } from "../../i18n";
 
 const props = defineProps<{
   settings: AppSettings;
@@ -18,19 +20,25 @@ const saved = ref(false);
 
 watch(() => props.settings, (s) => { local.value = { ...s }; }, { immediate: true });
 
-// Preview the selected theme immediately; it persists on save. The parent
-// tracks the preview so system theme changes don't override it.
+// ─── Theme ───────────────────────────────────────────────────────────────
+// Applies immediately (preview) AND persists on change — no Save click needed.
+// The parent tracks the preview so system theme changes don't override it.
 watch(() => local.value.theme, (t) => {
   applyTheme(t);
   emit("preview", t);
+  if (!props.disabled) emit("update", { ...local.value });
 });
 
-// Leaving the tab restores the saved theme (an unsaved preview is transient).
-onBeforeUnmount(() => {
-  applyTheme(props.settings.theme);
-  emit("preview", props.settings.theme);
-});
+// ─── Language ───────────────────────────────────────────────────────────
+// Applies immediately and persists on change, like the theme.
+function pickLanguage(lang: string) {
+  local.value.language = lang;
+  setLocale(i18n, lang);
+  if (!props.disabled) emit("update", { ...local.value });
+}
 
+// The behavior toggles below (auto-start, start-minimized) are still
+// committed explicitly via the Save button.
 function handleSave() {
   saved.value = false;
   emit("update", { ...local.value });
@@ -39,9 +47,15 @@ function handleSave() {
 }
 
 const themes = [
-  { key: "light", label: "Light", preview: "bg-white text-gray-900" },
-  { key: "dark", label: "Dark", preview: "bg-gray-900 text-gray-100" },
-  { key: "system", label: "System", preview: "bg-gradient" },
+  { key: "light", labelKey: "admin.themeLight", preview: "preview-light" },
+  { key: "dark", labelKey: "admin.themeDark", preview: "preview-dark" },
+  { key: "system", labelKey: "admin.themeSystem", preview: "preview-system" },
+];
+
+const languages = [
+  { key: "system", labelKey: "admin.languageSystem" },
+  { key: "zh", label: "中文" },
+  { key: "en", label: "English" },
 ];
 </script>
 
@@ -49,8 +63,8 @@ const themes = [
   <div class="tab-content">
     <div class="section-card">
       <div class="section-header">
-        <h3 class="tab-title">Theme</h3>
-        <p class="tab-desc">Choose your preferred color scheme</p>
+        <h3 class="tab-title">{{ $t("admin.theme") }}</h3>
+        <p class="tab-desc">{{ $t("admin.themeDesc") }}</p>
       </div>
       <div class="theme-grid">
         <button
@@ -60,21 +74,40 @@ const themes = [
           :class="{ active: local.theme === t.key }"
           @click="local.theme = t.key"
         >
-          <span class="theme-card-preview" :class="`preview-${t.key}`"></span>
-          <span class="theme-card-label">{{ t.label }}</span>
+          <span class="theme-card-preview" :class="t.preview"></span>
+          <span class="theme-card-label">{{ $t(t.labelKey) }}</span>
         </button>
       </div>
     </div>
 
     <div class="section-card">
       <div class="section-header">
-        <h3 class="tab-title">Behavior</h3>
+        <h3 class="tab-title">{{ $t("admin.language") }}</h3>
+        <p class="tab-desc">{{ $t("admin.languageDesc") }}</p>
+      </div>
+      <div class="theme-grid">
+        <button
+          v-for="l in languages"
+          :key="l.key"
+          class="theme-card"
+          :class="{ active: local.language === l.key }"
+          @click="pickLanguage(l.key)"
+        >
+          <span class="language-preview">{{ l.key === "system" ? "A" : l.key.toUpperCase() }}</span>
+          <span class="theme-card-label">{{ l.label ?? $t(l.labelKey) }}</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="section-card">
+      <div class="section-header">
+        <h3 class="tab-title">{{ $t("admin.behavior") }}</h3>
       </div>
 
       <div class="settings-row">
         <div class="settings-label">
-          <span class="settings-label-title">Auto-start on login</span>
-          <span class="settings-label-desc">Launch Piter when you log in</span>
+          <span class="settings-label-title">{{ $t("admin.autoStart") }}</span>
+          <span class="settings-label-desc">{{ $t("admin.autoStartDesc") }}</span>
         </div>
         <label class="toggle" :class="{ on: local.auto_start }">
           <input type="checkbox" v-model="local.auto_start" :disabled="disabled" />
@@ -84,8 +117,8 @@ const themes = [
 
       <div class="settings-row">
         <div class="settings-label">
-          <span class="settings-label-title">Start minimized</span>
-          <span class="settings-label-desc">Hide window on launch</span>
+          <span class="settings-label-title">{{ $t("admin.startMinimized") }}</span>
+          <span class="settings-label-desc">{{ $t("admin.startMinimizedDesc") }}</span>
         </div>
         <label class="toggle" :class="{ on: local.start_minimized }">
           <input type="checkbox" v-model="local.start_minimized" :disabled="disabled" />
@@ -95,7 +128,7 @@ const themes = [
 
       <div class="section-footer">
         <button class="btn btn-primary" :disabled="disabled" @click="handleSave">
-          {{ saved ? "Saved" : "Save Settings" }}
+          {{ saved ? $t("common.saved") : $t("admin.saveSettings") }}
         </button>
       </div>
     </div>
@@ -182,8 +215,22 @@ const themes = [
   border: 1px solid var(--border);
 }
 
+.language-preview {
+  width: 100%;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-control);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 .preview-light {
-  background: #f8f7f4;
+  background: #fcfcfc;
 }
 
 .preview-dark {
@@ -191,7 +238,7 @@ const themes = [
 }
 
 .preview-system {
-  background: linear-gradient(90deg, #f8f7f4 50%, #1a1a1e 50%);
+  background: linear-gradient(90deg, #fcfcfc 50%, #1a1a1e 50%);
 }
 
 .theme-card-label {
