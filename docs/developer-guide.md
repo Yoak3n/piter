@@ -210,10 +210,13 @@ Gateway 负责管理多个 pi coding agent 进程实例，每个实例对应一�
 
 ### 前置要求
 
-- Node.js >= 18
-- pnpm
-- Rust 工具链
-- Tauri CLI（已包含在 devDependencies）
+以下依赖**每一项都需要单独安装**，详细的分平台安装命令见 [README → 源码构建的依赖与安装](../README.md#源码构建的依赖与安装)：
+
+- Node.js >= 18（推荐 20+ LTS）
+- pnpm（最新稳定版，依赖 Node.js）
+- Rust 工具链（stable，Tauri 2 要求 1.77.2+；推荐 rustup 安装）
+- C/C++ 编译环境（Windows MSVC / macOS Xcode CLT / Linux build-essential + Tauri 系统依赖）
+- Tauri CLI（^2，已包含在 devDependencies，无需单独安装）
 
 ### 安装依赖
 

@@ -33,7 +33,48 @@ pnpm install
 pnpm tauri build
 ```
 
-> 源码构建的前置要求：Node.js >= 18、pnpm、Rust 工具链、Tauri CLI（随 devDependencies 安装）。
+### 源码构建的依赖与安装
+
+本地构建需要以下工具链，**每一项都需要单独安装**（互相不包含）：
+
+| 依赖 | 版本要求 | 用途 |
+|------|---------|------|
+| Node.js | >= 18（推荐 20+ LTS） | 前端构建（Vite / Vue）与 Tauri CLI 的运行环境 |
+| pnpm | 最新稳定版 | 依赖管理与 workspace 构建（根目录 `pnpm-workspace.yaml`） |
+| Rust 工具链 | stable（Tauri 2 要求 1.77.2+） | 编译 pi_server 后端与 Tauri 应用 |
+| C/C++ 编译器 | MSVC / Xcode CLT / GCC | Rust 依赖中的 C 系库编译（平台相关） |
+| Tauri CLI | ^2 | **无需单独安装**：`@tauri-apps/cli` 已含在 devDependencies，`pnpm install` 自动装好 |
+
+**Node.js**
+
+- Windows：官网安装包 / `winget install OpenJS.NodeJS.LTS` / [nvm-windows](https://github.com/coreybutler/nvm-windows)
+- macOS：`brew install node`（或 nvm）
+- Linux：`nvm`（推荐）或发行版包管理器（`apt install nodejs` / `dnf install nodejs`）
+
+**pnpm**（依赖 Node.js，先装 Node）
+
+- 任选其一：`npm install -g pnpm`（npm 随 Node 自带）；或 `corepack enable && corepack prepare pnpm@latest --activate`；或独立脚本：Windows `iwr https://get.pnpm.io/install.ps1 -useb | iex`，macOS/Linux `curl -fsSL https://get.pnpm.io/install.sh | sh -`
+
+**Rust 工具链**（推荐 rustup 统一管理）
+
+- Windows：`winget install Rustlang.Rustup` 或从 [rustup.rs](https://rustup.rs) 下载 rustup-init.exe；默认工具链需配合 MSVC 编译环境（见下）
+- macOS / Linux：`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+**平台 C/C++ 编译环境（Rust 依赖需要）**
+
+- **Windows**：安装 [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) 并勾选「使用 C++ 的桌面开发」工作负载；WebView2 运行时 Win10/11 已自带，缺失时 Tauri 构建会自动引导安装
+- **macOS**：`xcode-select --install`（Xcode Command Line Tools）
+- **Linux（Debian/Ubuntu）**：`sudo apt install build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`（Tauri 2 系统依赖；Fedora 对应 `webkit2gtk4.1-devel`、`openssl-devel` 等）
+
+**验证安装**
+
+```bash
+node -v    # v18+
+pnpm -v    # 9+
+rustc -V && cargo -V   # stable
+```
+
+全部就绪后执行构建（见上方各平台的命令）。
 
 ### Web 版（开发 / 自托管）
 
@@ -46,7 +87,7 @@ cd chat && pnpm dev
 
 ## 首次使用
 
-Piter 依赖 [pi coding agent](https://github.com/earendil-works/pi)（当前锁定版本 `v0.80.3`，见 `scripts/pi-version.json`）作为对话引擎。首次启动需完成两步配置：
+Piter 依赖 [pi coding agent](https://github.com/earendil-works/pi)（当前锁定版本 `v0.83.0`，见 `scripts/pi-version.json`）作为对话引擎。首次启动需完成两步配置：
 
 ### 1. 下载 pi
 
