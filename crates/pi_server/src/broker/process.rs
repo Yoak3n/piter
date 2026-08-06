@@ -27,6 +27,25 @@ use super::util::{
 
 use std::process::{Command, Stdio};
 
+// ─── Startup diagnostics ────────────────────────────────────────────────────
+/// 启动宽限期：pi 在此窗口内自行退出视为"启动失败"，把 stderr 尾部通报给前端。
+const STARTUP_GRACE: Duration = Duration::from_secs(10);
+/// 启动期 stderr 缓冲上限（行数 / 字节数），防止大段启动日志撑爆事件。
+const STARTUP_STDERR_MAX_LINES: usize = 60;
+const STARTUP_STDERR_MAX_BYTES: usize = 8192;
+
+/// 从 pi 启动日志解析扩展加载失败：`Failed to load extension "path": error`。
+/// 返回 (extension_path, error_message)。
+fn parse_extension_load_failure(line: &str) -> Option<(String, String)> {
+    let marker = "Failed to load extension \"";
+    let idx = line.find(marker)?;
+    let rest = &line[idx + marker.len()..];
+    let close = rest.find('"')?;
+    let path = rest[..close].to_string();
+    let err = rest[close + 1..].trim().trim_start_matches(':').trim().to_string();
+    Some((path, err))
+}
+
 // ─── Spawn Builder ──────────────────────────────────────────────────────────
 
 /// Builder for spawning a pi process instance.
@@ -166,21 +185,77 @@ impl SpawnBuilder {
             .env("PI_STUDIO_PI_VERSION", &self.pi_version)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
 
         let mut child = child_cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn pi ({}): {}", pi_exe_str, e))?;
 
         let stdout = child.stdout.take().ok_or_else(|| "No stdout".to_string())?;
+        let stderr = child.stderr.take().ok_or_else(|| "No stderr".to_string())?;
         let mut stdin = child.stdin.take().ok_or_else(|| "No stdin".to_string())?;
 
         let running = Arc::new(AtomicBool::new(true));
         let running_r = running.clone();
         let running_w = running.clone();
+        let killed = Arc::new(AtomicBool::new(false));
+        let killed_r = killed.clone();
         let inner = self.inner.clone();
         let event_tx = self.event_tx.clone();
         let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
+
+        // ── Stderr reader thread: 启动期诊断（扩展加载失败 / 启动失败）通报前端 ──
+        // 之前 stderr 是 inherit（只进 broker 日志），扩展加载失败对前端完全不可见；
+        // 现在管道捕获：解析扩展加载失败行 → 结构化事件；启动宽限期内自退 → pi_startup_failed。
+        let event_tx_s = event_tx.clone();
+        let iid_s = instance_id.clone();
+        let persistent_s = self.persistent;
+        let start = std::time::Instant::now();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            let mut startup_lines: Vec<String> = Vec::new();
+            let mut startup_bytes: usize = 0;
+            for line in reader.lines() {
+                let Ok(text) = line else { break };
+                let trimmed = text.trim().to_string();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                log::info!("[broker][pi:{}] {}", iid_s, trimmed);
+                // 启动窗口内缓冲 stderr（用于进程过早退出时的失败通报）
+                if start.elapsed() < STARTUP_GRACE
+                    && startup_lines.len() < STARTUP_STDERR_MAX_LINES
+                    && startup_bytes < STARTUP_STDERR_MAX_BYTES
+                {
+                    startup_bytes += trimmed.len();
+                    startup_lines.push(trimmed.clone());
+                }
+                // 扩展加载失败 → 结构化通报前端
+                if let Some((ext_path, err)) = parse_extension_load_failure(&trimmed) {
+                    let evt = serde_json::json!({
+                        "type": "extension_load_failed",
+                        "instanceId": iid_s.clone(),
+                        "extensionPath": ext_path,
+                        "error": err,
+                    });
+                    let _ = event_tx_s.send(evt.to_string());
+                }
+            }
+            // 持久实例在启动宽限期内自行退出（未被主动 kill）且有 stderr 输出 → 启动失败。
+            // 非持久（一次性）实例查询完即退出属正常，不通报。
+            if persistent_s
+                && start.elapsed() < STARTUP_GRACE
+                && !killed_r.load(Ordering::SeqCst)
+                && !startup_lines.is_empty()
+            {
+                let evt = serde_json::json!({
+                    "type": "pi_startup_failed",
+                    "instanceId": iid_s,
+                    "error": startup_lines.join("\n"),
+                });
+                let _ = event_tx_s.send(evt.to_string());
+            }
+        });
 
         // ── Reader thread: pi stdout → event broadcast ────────────────
         let inner_clone = inner.clone();
@@ -267,6 +342,7 @@ impl SpawnBuilder {
             id: instance_id.clone(),
             child,
             running,
+            killed,
             stdin_tx: Some(stdin_tx),
             session_path: self.session_path,
             persistent: self.persistent,

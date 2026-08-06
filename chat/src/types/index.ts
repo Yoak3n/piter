@@ -39,6 +39,27 @@ export interface Attachment {
   truncated?: boolean;
 }
 
+/** Extension UI request card embedded in the message stream (pi extension_ui_request).
+ *  阻塞方法（select/confirm/input/editor）以卡片形式进入会话消息流；
+ *  未应答前 pi 阻塞等待，用户回到该会话点选/输入后回传 extension_ui_response。
+ *  应答后卡片保留为只读历史。 */
+export interface ExtensionUiCard {
+  id: string;
+  method: "select" | "confirm" | "input" | "editor";
+  title: string;
+  options?: string[];
+  message?: string;
+  placeholder?: string;
+  prefill?: string;
+  /** True once answered / cancelled — the card becomes read-only history. */
+  answered: boolean;
+  result?: { kind: "value" | "confirmed" | "rejected" | "cancelled"; text?: string };
+  /** 协议 timeout（毫秒，pi rpc.md：agent 到点自动以 undefined 解析；客户端定时器仅为 UI 显示） */
+  timeout?: number;
+  /** 卡片创建时间（ms），跨快照恢复时用于计算剩余超时 */
+  createdAt?: number;
+}
+
 /** Chat message */
 export interface Message {
   id: number;
@@ -48,6 +69,8 @@ export interface Message {
   /** Images attached to this message (user-sent or assistant content blocks). */
   images?: ImageContent[];
   toolExecutions?: ToolExecution[];
+  /** 内嵌的扩展 UI 请求卡片（仅 role="system" 且 content 为空时携带） */
+  extUi?: ExtensionUiCard;
   meta?: Record<string, unknown>;
   timestamp: number;
 }
@@ -58,7 +81,8 @@ export interface ChatTurn {
   user: Message | null;
   assistants: Message[];
   tools: Message[];
-  system: Message | null;
+  /** 多条 system 消息并存（[Error] 提示、扩展 UI 卡片等可能连续出现） */
+  system: Message[];
 }
 
 /** Session metadata */

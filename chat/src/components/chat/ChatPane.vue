@@ -34,6 +34,7 @@ const emit = defineEmits<{
   (e: "update:draft", text: string): void;
   (e: "update:attachments", attachments: Attachment[]): void;
   (e: "restart-pi"): void;
+  (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
 }>();
 
 // Draft is owned by the parent (keyed by session), so switching sessions
@@ -48,19 +49,21 @@ const expanded = ref(false);
 const turns = computed<ChatTurn[]>(() => {
   const result: ChatTurn[] = [];
   let current: ChatTurn | null = null;
+  const fresh = (id: number): ChatTurn => ({ id, user: null, assistants: [], tools: [], system: [] });
   for (const msg of props.messages) {
     if (msg.role === "user") {
       if (current) result.push(current);
-      current = { id: msg.id, user: msg, assistants: [], tools: [], system: null };
+      current = { id: msg.id, user: msg, assistants: [], tools: [], system: [] };
     } else if (msg.role === "assistant") {
-      if (!current) current = { id: msg.id, user: null, assistants: [], tools: [], system: null };
+      if (!current) current = fresh(msg.id);
       current.assistants.push(msg);
     } else if (msg.role === "tool") {
-      if (!current) current = { id: msg.id, user: null, assistants: [], tools: [], system: null };
+      if (!current) current = fresh(msg.id);
       current.tools.push(msg);
     } else if (msg.role === "system") {
-      if (!current) current = { id: msg.id, user: null, assistants: [], tools: [], system: null };
-      current.system = msg;
+      if (!current) current = fresh(msg.id);
+      // 多条 system 提示 / 扩展 UI 卡片并存，不再覆盖式赋值
+      current.system.push(msg);
     }
   }
   if (current) result.push(current);
@@ -104,6 +107,7 @@ function sendAndClose() {
       :current-assistant-content="currentAssistantContent"
       :current-thinking="currentThinking"
       :tool-executions="toolExecutions"
+      @respond-extension="emit('respond-extension', $event)"
     />
     <Composer
       v-model="inputText"

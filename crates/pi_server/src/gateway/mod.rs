@@ -361,6 +361,7 @@ impl GatewayState {
         let mut instances = self.inner.instances.lock();
         for (_, mut inst) in instances.drain() {
             inst.running.store(false, Ordering::SeqCst);
+            inst.killed.store(true, Ordering::SeqCst);
             let _ = inst.child.kill();
         }
         drop(instances);

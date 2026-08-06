@@ -29,6 +29,10 @@ pub struct PiInstance {
     pub id: String,
     pub child: Child,
     pub running: Arc<std::sync::atomic::AtomicBool>,
+    /// Set true when the instance is deliberately killed (kill_all / kill_instance /
+    /// cleanup). Distinguishes intentional termination from startup self-exit
+    /// (used to avoid false "startup failed" reports).
+    pub killed: Arc<std::sync::atomic::AtomicBool>,
     pub stdin_tx: Option<mpsc::UnboundedSender<String>>,
     /// Session file path (known when resuming, None for new sessions).
     pub session_path: Option<String>,

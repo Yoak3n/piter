@@ -5,9 +5,14 @@ import { imageContentToSrc } from "../../utils/image";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCard from "./ToolCard.vue";
 import MarkdownBubble from "./MarkdownBubble.vue";
+import ExtensionUiCard from "./ExtensionUiCard.vue";
 
 defineProps<{
   turn: ChatTurn;
+}>();
+
+const emit = defineEmits<{
+  (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
 }>();
 
 // Per-turn expand state (isolated per turn, no cross-turn collisions)
@@ -21,7 +26,14 @@ function toggleThinking(id: number) {
 
 <template>
   <div class="turn">
-    <div v-if="turn.system" class="msg system-msg">{{ turn.system.content }}</div>
+    <template v-for="sysMsg in turn.system" :key="sysMsg.id">
+      <ExtensionUiCard
+        v-if="sysMsg.extUi"
+        :request="sysMsg.extUi"
+        @respond="emit('respond-extension', $event)"
+      />
+      <div v-else class="msg system-msg">{{ sysMsg.content }}</div>
+    </template>
     <div v-if="turn.user" class="user-block">
       <div v-if="turn.user.images?.length" class="msg-images user-images">
         <div v-for="(img, i) in turn.user.images" :key="i" class="msg-image-item">

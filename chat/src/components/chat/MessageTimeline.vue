@@ -16,6 +16,10 @@ const props = defineProps<{
   toolExecutions?: ToolExecution[];
 }>();
 
+const emit = defineEmits<{
+  (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
+}>();
+
 const timelineRef = ref<HTMLDivElement | null>(null);
 
 // ─── Auto-scroll with user-override ──────────────────────────────────
@@ -165,7 +169,12 @@ watch(() => props.currentThinking, scrollToBottom);
       </template>
     </EmptyState>
 
-    <MessageTurn v-for="turn in turns" :key="turn.id" :turn="turn" />
+    <MessageTurn
+      v-for="turn in turns"
+      :key="turn.id"
+      :turn="turn"
+      @respond-extension="emit('respond-extension', $event)"
+    />
 
     <!-- Streaming state -->
     <div v-if="isStreaming" class="turn streaming-turn">

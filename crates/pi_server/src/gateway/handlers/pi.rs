@@ -433,6 +433,7 @@ pub fn kill_instance_for_gateway(state: &GatewayState, instance_id: &str) -> boo
     let mut instances = state.inner.instances.lock();
     if let Some(mut inst) = instances.remove(instance_id) {
         inst.running.store(false, Ordering::SeqCst);
+        inst.killed.store(true, Ordering::SeqCst);
         let _ = inst.child.kill();
 
         // Remove all route entries pointing to this instance

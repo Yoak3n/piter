@@ -47,10 +47,12 @@ const {
   currentModel,
   steeringQueue,
   outbox,
+  notifications,
   setCurrentModel,
   connectWebSocket,
   sendPrompt,
   abortGeneration,
+  respondExtensionDialog,
   cancelQueued,
   upgradeQueued,
   newSession,
@@ -196,6 +198,14 @@ function handleSteer(payload: { text: string; images: ImageContent[] }) {
 // 终止当前生成
 function handleAbort() {
   abortGeneration();
+}
+
+// 消息流中的扩展 UI 卡片作答：回传 extension_ui_response 到对应会话
+function handleRespondExtension(payload: {
+  id: string;
+  answer: { value?: string; confirmed?: boolean; cancelled?: boolean };
+}) {
+  respondExtensionDialog(payload.id, payload.answer);
 }
 
 async function handleSelectSession(instanceId: string) {
@@ -411,8 +421,21 @@ watch(sessionStatus, (status) => {
           @update:draft="handleDraftUpdate"
           @update:attachments="handleAttachmentsUpdate"
           @restart-pi="restartPi"
+          @respond-extension="handleRespondExtension"
         />
       </main>
+    </div>
+
+    <!-- 扩展通知 toast（notify，即发即弃） -->
+    <div v-if="notifications.length" class="ext-toasts" aria-live="polite">
+      <div
+        v-for="n in notifications"
+        :key="n.id"
+        class="ext-toast"
+        :class="`ext-toast--${n.type}`"
+      >
+        {{ n.message }}
+      </div>
     </div>
   </div>
 </template>
@@ -461,6 +484,44 @@ watch(sessionStatus, (status) => {
 
 .sidebar-overlay {
   display: none;
+}
+
+/* ─── 扩展通知 toast ─── */
+.ext-toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 90;
+  pointer-events: none;
+}
+.ext-toast {
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  animation: extToastIn 0.2s var(--ease);
+}
+.ext-toast--warning {
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  color: var(--warning);
+}
+.ext-toast--error {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+@keyframes extToastIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @media (max-width: 640px) {

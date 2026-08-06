@@ -157,7 +157,10 @@ onMounted(() => {
 
 <style scoped>
 .msg { display:flex; flex-direction:column; max-width:90%; min-width:0; }
-.user-msg { align-self:flex-end; align-items:flex-end; }
+/* 用户气泡的宽度上限由父级 .user-block（max-width:90%/95%）承担；
+   若这里再套 90%，会相对 shrink-to-fit 后的父宽再压缩一次（90%×90%），
+   导致短消息（如 8 个汉字）提前换行。 */
+.user-msg { align-self:flex-end; align-items:flex-end; max-width:100%; }
 .assistant-msg { align-self:flex-start; align-items:flex-start; }
 
 .msg-bubble { border-radius:var(--radius-md); padding:8px 12px; line-height:1.5; font-size:13px; position:relative; min-width:0; max-width:100%; }
@@ -213,5 +216,7 @@ onMounted(() => {
 
 @media (max-width: 640px) {
   .msg { max-width:95%; }
+  /* 移动端同样避免二次压缩（见 .user-msg 注释） */
+  .user-msg { max-width:100%; }
 }
 </style>

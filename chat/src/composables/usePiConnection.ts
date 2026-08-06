@@ -1,6 +1,13 @@
 import { ref, reactive, computed, onUnmounted } from "vue";
 import { i18n } from "../i18n";
-import type { Message, ToolExecution, ProjectGroup, ModelRef, ImageContent } from "../types";
+import type {
+  Message,
+  ToolExecution,
+  ProjectGroup,
+  ModelRef,
+  ImageContent,
+  ExtensionUiCard,
+} from "../types";
 import {
   extractTextContent,
   extractThinkingContent,
@@ -17,6 +24,13 @@ export interface PendingItem {
   text: string;
   model?: ModelRef;
   images?: ImageContent[];
+}
+
+/** 即发即弃的通知（extension_ui_request 的 notify 方法），不阻塞 pi */
+export interface ExtensionNotify {
+  id: number;
+  message: string;
+  type: "info" | "warning" | "error";
 }
 
 interface SessionState {
@@ -40,6 +54,8 @@ interface SessionState {
   lastProgressAt: number;
   /** 本轮生成是否已提示过"长时间无响应"（防重复，agent_start 时复位） */
   warnedNoOutput: boolean;
+  /** 扩展 UI 卡片超时自动取消的定时器（卡片本身以消息形式存在于 messages 中） */
+  dialogTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /** 流式发送的显式行为：目前仅插队（steer）会走 pi 原生队列 */
@@ -69,6 +85,7 @@ function createSessionState(instanceId: string): SessionState {
     abortTimer: null,
     lastProgressAt: 0,
     warnedNoOutput: false,
+    dialogTimer: null,
   });
 }
 
@@ -132,6 +149,89 @@ export function usePiConnection() {
   const steeringQueue = computed(() => activeSessionState.value.queue.steering);
   const outbox = computed(() => activeSessionState.value.outbox);
 
+  // ── 扩展通知（extension_ui_request notify，即发即弃）──
+  const notifications = ref<ExtensionNotify[]>([]);
+  let notifySeq = 0;
+  // 通知节流：同内容去重 + 全局限频 + 可见条数上限。
+  // piolium 等扩展会在 session_start / 阶段进度 / 重试时高频 notify，
+  // 若全部弹 toast 会形成轰炸；去重窗口内同一条只出现一次（加载时的首次提示仍会显示）。
+  const TOAST_DEDUP_MS = 30_000; // 同一 (type+message) 在 30s 内不再重复出现
+  const TOAST_MIN_INTERVAL_MS = 1_000; // 全局至少间隔 1s 才允许新增一条
+  const TOAST_MAX_VISIBLE = 3;
+  const recentToasts = new Map<string, number>(); // `${type}:${message}` → lastShownAt
+  let lastToastAt = 0;
+
+  function pushNotify(type: ExtensionNotify["type"], message: string) {
+    if (!message) return;
+    const now = Date.now();
+    const key = `${type}:${message}`;
+    const lastShown = recentToasts.get(key) ?? 0;
+    if (now - lastShown < TOAST_DEDUP_MS) return; // 去重：短时间内同一条不重复弹
+    if (now - lastToastAt < TOAST_MIN_INTERVAL_MS) return; // 限频：防止多来源连发成串
+    recentToasts.set(key, now);
+    lastToastAt = now;
+    if (recentToasts.size > 100) {
+      for (const [k, ts] of recentToasts) {
+        if (now - ts >= TOAST_DEDUP_MS) recentToasts.delete(k);
+      }
+    }
+    const id = ++notifySeq;
+    notifications.value = [...notifications.value, { id, message, type }].slice(-TOAST_MAX_VISIBLE);
+    setTimeout(() => {
+      notifications.value = notifications.value.filter((n) => n.id !== id);
+    }, 4000);
+  }
+
+  // ── 启动期会话诊断（扩展加载失败 / pi 启动失败）──
+  // 事件可能在会话状态创建之前到达，且会话快照重建会整体替换 messages；
+  // 先用 Map 暂存，快照重建时重新注入，保证用户打开该会话时仍能看到失败原因。
+  const sessionWarnings = new Map<string, string[]>();
+
+  function recordSessionWarning(iid: string | null, text: string) {
+    if (!iid) return;
+    const arr = sessionWarnings.get(iid) ?? [];
+    if (arr.includes(text)) return; // 同一条不重复记录
+    sessionWarnings.set(iid, [...arr, text]);
+    const s = getState(iid);
+    if (s && !s.messages.some((m) => m.role === "system" && m.content === text)) {
+      addMessage(s, "system", text);
+    }
+  }
+
+  // ── 未应答扩展 UI 卡片持久化（P0：切会话/刷新/重连后卡片不丢失，pi 不再永久阻塞）──
+  // 切会话触发 session_snapshot → messages 整体重建；页面刷新则连 sessionStates 都重置。
+  // 把未应答卡片按 instanceId 存 localStorage，快照重建时 merge 回消息流，回来仍可作答。
+  const EXT_UI_STORAGE_KEY = "piter:extUiPending";
+
+  function readStoredPendingCards(): Record<string, ExtensionUiCard[]> {
+    try {
+      const raw = localStorage.getItem(EXT_UI_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as Record<string, ExtensionUiCard[]>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeStoredPendingCards(map: Record<string, ExtensionUiCard[]>) {
+    try {
+      localStorage.setItem(EXT_UI_STORAGE_KEY, JSON.stringify(map));
+    } catch {
+      // localStorage 不可用（隐私模式等）时静默降级：卡片仅存于内存
+    }
+  }
+
+  /** 把某会话未应答卡片写入 localStorage（已应答/取消的不再持久化） */
+  function persistPendingCards(s: SessionState) {
+    if (!s.instanceId) return;
+    const pending = s.messages
+      .filter((m) => m.extUi && !m.extUi.answered)
+      .map((m) => m.extUi!);
+    const map = readStoredPendingCards();
+    if (pending.length > 0) map[s.instanceId] = pending;
+    else delete map[s.instanceId];
+    writeStoredPendingCards(map);
+  }
+
   // ── Message helpers (write to a specific session's state) ──
 
   /** Append a message and return its id (deduped against the last identical message). */
@@ -140,7 +240,9 @@ export function usePiConnection() {
     // last message. Guards against a final answer being appended twice via
     // overlapping snapshot/event paths.
     const last = state.messages[state.messages.length - 1];
-    if (last && last.role === role && last.content === content) {
+    // 卡片消息 content 为空，必须连 extUi.id 一起比较，否则连续两个对话框会去重漏掉第二个
+    const sameExtId = (last?.extUi?.id ?? null) === (extras?.extUi?.id ?? null);
+    if (last && last.role === role && last.content === content && sameExtId) {
       return last.id;
     }
     const id = state.msgId++;
@@ -221,9 +323,29 @@ export function usePiConnection() {
         break;
 
       case "pi_exited":
+        isRunning.value = false;
+        statusText.value = i18n.global.t("chat.disconnected");
+        // pi 进程已退出：卡片已无实例可回执，本地标成已取消并从持久化中移除
+        for (const s of sessionStates.values()) {
+          dismissDialog(s, false);
+          persistPendingCards(s);
+        }
+        scheduleReconnect();
+        break;
+
       case "disconnected":
         isRunning.value = false;
         statusText.value = i18n.global.t("chat.disconnected");
+        // 仅前端 WS 断连（刷新/网络抖动/窗口恢复）：pi 进程在 gateway 里仍存活且阻塞。
+        // 不清卡片、不回执 —— 卡片连同会话快照一起在重连后恢复，回来仍可作答。
+        for (const s of sessionStates.values()) {
+          // 断线期间定时器不应触发（发送必然失败且会把卡片误标成已取消）
+          if (s.dialogTimer) {
+            clearTimeout(s.dialogTimer);
+            s.dialogTimer = null;
+          }
+          persistPendingCards(s);
+        }
         scheduleReconnect();
         break;
 
@@ -244,12 +366,16 @@ export function usePiConnection() {
           s.toolExecutions = [];
           s.isStreaming = false;
           s.warnedNoOutput = false;
+          // 中止时若扩展对话框仍打开：以 cancelled 回执解除 pi 的阻塞
+          dismissDialog(s, true);
           handleRunSettled(s);
         } else {
           // 空错误文案不渲染裸 `[Error]`（如失败信息只在 message 字段或已由其他事件展示）
           if (errText) {
             addMessage(s, "system", `[Error] ${errText}`);
           }
+          // 本轮已终止：清理残留对话框（尽力回执 cancelled，防止 pi 永久阻塞）
+          dismissDialog(s, true);
         }
         break;
       }
@@ -286,6 +412,8 @@ export function usePiConnection() {
         }
         s.isStreaming = false;
         s.warnedNoOutput = false;
+        // 防御：正常情况下对话框应答后即清除，这里兜底（如中止后 pi 停稳）
+        dismissDialog(s, true);
         if (s.currentThinking || s.currentAssistantContent || s.toolExecutions.length > 0) {
           addMessage(s, "assistant", s.currentAssistantContent, {
             thinking: s.currentThinking || undefined,
@@ -443,6 +571,85 @@ export function usePiConnection() {
         break;
       }
 
+      // ── 启动期诊断（broker 从 pi stderr 解析，见 broker/process.rs）──
+      case "extension_load_failed": {
+        // 扩展加载失败（pi 仍可能正常启动，但缺失该扩展能力）；最常见诱因是扩展与 pi 版本不匹配
+        const extPath = (data.extensionPath as string) || "";
+        const err = (data.error as string) || "unknown error";
+        recordSessionWarning(
+          instanceId,
+          `[Extension Load Failed] ${err}${extPath ? ` (${extPath})` : ""} — ${i18n.global.t("chat.startupVersionHint")}`,
+        );
+        break;
+      }
+
+      case "pi_startup_failed": {
+        // pi 在启动宽限期内自行退出（如扩展加载失败导致无法启动）
+        const s = getOrCreateState(instanceId);
+        s.isStreaming = false;
+        const err = (data.error as string) || "unknown error";
+        recordSessionWarning(
+          instanceId,
+          `[Pi Failed to Start] ${err} — ${i18n.global.t("chat.startupVersionHint")}`,
+        );
+        pushNotify("error", `${i18n.global.t("chat.piStartupFailed")} — ${i18n.global.t("chat.startupVersionHint")}`);
+        break;
+      }
+
+      // ── 交互型扩展 UI 子协议（pi docs/rpc.md）────────────────
+      // 阻塞方法（select/confirm/input/editor）：以卡片形式嵌入该会话消息流，
+      // pi 阻塞等待应答（用户回到该会话作答后回 extension_ui_response）；
+      // 即发即弃方法（notify/setStatus/setWidget/setTitle/set_editor_text）：不阻塞。
+      case "extension_ui_request": {
+        const s = getOrCreateState(instanceId);
+        const method = (data.method as string) || "";
+        const requestId = (data.id as string) || "";
+
+        if (method === "notify") {
+          const ntype = (data.notifyType as string) || "info";
+          pushNotify(
+            ntype === "error" ? "error" : ntype === "warning" ? "warning" : "info",
+            (data.message as string) || "",
+          );
+          break;
+        }
+        if (method === "setStatus" || method === "setWidget" || method === "setTitle" || method === "set_editor_text") {
+          // 状态条 / 小组件 / 标题暂不渲染，记录日志即可（后续可扩展）
+          console.log("[extension_ui]", method, data);
+          break;
+        }
+        if (!requestId || !["select", "confirm", "input", "editor"].includes(method)) break;
+
+        const card: ExtensionUiCard = {
+          id: requestId,
+          method: method as ExtensionUiCard["method"],
+          title: (data.title as string) || method,
+          answered: false,
+          createdAt: Date.now(),
+        };
+        if (method === "select") card.options = Array.isArray(data.options) ? (data.options as string[]) : [];
+        if (method === "confirm") card.message = (data.message as string) || undefined;
+        if (method === "input") card.placeholder = (data.placeholder as string) || undefined;
+        if (method === "editor") card.prefill = (data.prefill as string) || undefined;
+        // timeout 单位是毫秒（pi rpc.md）；agent 到点自动以 undefined 解析，
+        // 客户端定时器只为 UI 显示（到点把卡片标成已取消），并在快照恢复时用 createdAt 重算剩余时间
+        const timeoutMs = typeof data.timeout === "number" ? data.timeout : undefined;
+        if (timeoutMs && timeoutMs > 0) card.timeout = timeoutMs;
+        // 卡片进入消息流（role="system"、content 空，由 extUi 字段渲染交互卡片）
+        addMessage(s, "system", "", { extUi: card });
+        persistPendingCards(s);
+
+        if (s.dialogTimer) clearTimeout(s.dialogTimer);
+        s.dialogTimer = null;
+        if (card.timeout) {
+          s.dialogTimer = setTimeout(() => {
+            s.dialogTimer = null;
+            answerCard(s, requestId, { kind: "cancelled" }, { cancelled: true });
+          }, card.timeout);
+        }
+        break;
+      }
+
       case "sessions_list": {
         const raw = data.projects as Array<Record<string, unknown>> || [];
         wsSessions.value = mapProjectGroups(raw);
@@ -544,6 +751,28 @@ export function usePiConnection() {
         timestamp: (m.timestamp as number) || Date.now(),
       });
     }
+    // ── 快照重建（切会话 / 重连 / 窗口恢复）──
+    // 启动期诊断（扩展加载失败 / pi 启动失败）重新注入，避免被快照整体替换吞掉
+    const warnings = sessionWarnings.get(instanceId ?? "") ?? [];
+    if (warnings.length > 0) {
+      for (const w of warnings) {
+        parsed.push({ id: parsed.length, role: "system", content: w, timestamp: Date.now() });
+      }
+      sessionWarnings.delete(instanceId ?? "");
+    }
+    // 未应答的扩展 UI 卡片不能随快照消失：pi 仍阻塞在 extension_ui_request 上，
+    // 必须把卡片 merge 回消息流（追加末尾——pi 停在卡片上，卡片就是"当前最新事件"），
+    // 否则该会话将永久阻塞、只能 abort。来源：旧内存态 + localStorage（页面刷新兜底）。
+    const pendingCards = collectPendingCards(s);
+    for (const card of pendingCards) {
+      parsed.push({
+        id: parsed.length,
+        role: "system",
+        content: "",
+        extUi: card,
+        timestamp: card.createdAt ?? Date.now(),
+      });
+    }
     s.messages = parsed;
     s.msgId = parsed.length;
     s.isStreaming = false;
@@ -556,6 +785,25 @@ export function usePiConnection() {
     if (s.abortTimer) clearTimeout(s.abortTimer);
     s.abortTimer = null;
     s.warnedNoOutput = false;
+    if (s.dialogTimer) clearTimeout(s.dialogTimer);
+    s.dialogTimer = null;
+    // 重建超时定时器（按剩余时间；每会话同时至多一张 pending，取第一张带 timeout 的即可）
+    for (const card of pendingCards) {
+      if (card.timeout && card.createdAt) {
+        const remaining = card.timeout - (Date.now() - card.createdAt);
+        if (remaining > 0) {
+          s.dialogTimer = setTimeout(() => {
+            s.dialogTimer = null;
+            answerCard(s, card.id, { kind: "cancelled" }, { cancelled: true });
+          }, remaining);
+        } else {
+          // 超时已耗尽：agent 侧已自动解析，本地把卡片标成已取消
+          markCardAnswered(s, card.id, { kind: "cancelled" });
+        }
+        break;
+      }
+    }
+    persistPendingCards(s);
   }
 
   // ─── WebSocket ──────────────────────────────────────────────────────
@@ -778,6 +1026,92 @@ export function usePiConnection() {
     sendCommand(payload);
   }
 
+  /** 把某张扩展 UI 卡片标记为已应答（本地状态），返回是否命中 */
+  function markCardAnswered(s: SessionState, id: string, result: ExtensionUiCard["result"]) {
+    let found = false;
+    s.messages = s.messages.map((m) => {
+      if (m.extUi?.id === id && !m.extUi.answered) {
+        found = true;
+        return { ...m, extUi: { ...m.extUi, answered: true, result } };
+      }
+      return m;
+    });
+    if (found) persistPendingCards(s);
+    return found;
+  }
+
+  /** 应答扩展 UI 卡片：标记 answered + 回传 extension_ui_response（broker_command 包裹 → 网关透传 → pi 继续执行） */
+  function answerCard(s: SessionState, id: string, result: ExtensionUiCard["result"], payload: Record<string, unknown>) {
+    if (!markCardAnswered(s, id, result)) return;
+    if (s.dialogTimer) {
+      clearTimeout(s.dialogTimer);
+      s.dialogTimer = null;
+    }
+    if (s.instanceId) {
+      sendCommand({ type: "extension_ui_response", id, ...payload }, s.instanceId);
+    }
+  }
+
+  /** 清理会话的扩展 UI 卡片：respond=true 时以 cancelled 回执解除 pi 阻塞（中止/出错等兜底）。
+   *  循环处理全部未应答卡片（并发扩展可能累积多张 pending）。 */
+  function dismissDialog(s: SessionState, respond: boolean) {
+    const pending = s.messages.filter((m) => m.extUi && !m.extUi.answered);
+    if (pending.length === 0) {
+      if (s.dialogTimer) {
+        clearTimeout(s.dialogTimer);
+        s.dialogTimer = null;
+      }
+      return;
+    }
+    for (const p of pending) {
+      const id = p.extUi!.id;
+      if (respond) {
+        answerCard(s, id, { kind: "cancelled" }, { cancelled: true });
+      } else {
+        markCardAnswered(s, id, { kind: "cancelled" });
+      }
+    }
+    if (s.dialogTimer) {
+      clearTimeout(s.dialogTimer);
+      s.dialogTimer = null;
+    }
+  }
+
+  /** 收集会话的未应答卡片（旧内存态 + localStorage 持久化），按 id 去重 */
+  function collectPendingCards(s: SessionState): ExtensionUiCard[] {
+    const seen = new Set<string>();
+    const out: ExtensionUiCard[] = [];
+    const push = (c: ExtensionUiCard | undefined) => {
+      if (!c || c.answered || seen.has(c.id)) return;
+      seen.add(c.id);
+      out.push(c);
+    };
+    for (const m of s.messages) push(m.extUi);
+    if (s.instanceId) {
+      for (const c of readStoredPendingCards()[s.instanceId] ?? []) push(c);
+    }
+    return out;
+  }
+
+  /** 用户作答消息流中的扩展 UI 卡片（卡片仅在其所属会话中可见，故从当前活动会话查找） */
+  function respondExtensionDialog(id: string, answer: { value?: string; confirmed?: boolean; cancelled?: boolean }) {
+    const s = getState(activeInstanceId.value);
+    if (!s) return;
+    let result: ExtensionUiCard["result"];
+    let payload: Record<string, unknown>;
+    if (answer.cancelled) {
+      result = { kind: "cancelled" };
+      payload = { cancelled: true };
+    } else if (answer.confirmed !== undefined) {
+      result = answer.confirmed ? { kind: "confirmed" } : { kind: "rejected" };
+      payload = { confirmed: answer.confirmed };
+    } else {
+      result = { kind: "value", text: answer.value ?? "" };
+      payload = { value: answer.value ?? "" };
+    }
+    answerCard(s, id, result, payload);
+  }
+
   /** 终止当前生成。pi 停稳后（agent_end/error 或兜底超时）投递 outbox 最新一条。 */
   function abortGeneration() {
     sendCommand({ type: "abort" });
@@ -787,6 +1121,8 @@ export function usePiConnection() {
       s.abortFlushPending = true;
       if (s.abortTimer) clearTimeout(s.abortTimer);
       s.abortTimer = setTimeout(() => flushAfterAbort(s), 2000);
+      // 中止 agent 的同时把未应答的扩展 UI 卡片以 cancelled 回执，解除 pi 阻塞
+      dismissDialog(s, true);
     }
   }
 
@@ -866,7 +1202,15 @@ export function usePiConnection() {
 
   function clearMessages() {
     const iid = activeInstanceId.value;
-    if (iid) sessionStates.delete(iid);
+    if (iid) {
+      sessionStates.delete(iid);
+      // 会话已删除：清理其持久化的未应答卡片，避免残留
+      const map = readStoredPendingCards();
+      if (map[iid]) {
+        delete map[iid];
+        writeStoredPendingCards(map);
+      }
+    }
   }
 
   onUnmounted(() => {
@@ -891,10 +1235,12 @@ export function usePiConnection() {
     currentModel,
     steeringQueue,
     outbox,
+    notifications,
     setCurrentModel,
     connectWebSocket,
     sendPrompt,
     sendCommand,
+    respondExtensionDialog,
     abortGeneration,
     cancelQueued,
     upgradeQueued,

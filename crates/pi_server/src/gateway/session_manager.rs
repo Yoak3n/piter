@@ -687,6 +687,7 @@ pub fn spawn_cleanup_task(
                 if let Some(mut inst) = instances.remove(iid) {
                     use std::sync::atomic::Ordering;
                     inst.running.store(false, Ordering::SeqCst);
+                    inst.killed.store(true, Ordering::SeqCst);
                     let _ = inst.child.kill();
                 }
             }
