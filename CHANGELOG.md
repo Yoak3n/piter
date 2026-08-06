@@ -2,12 +2,17 @@
 
 本文件记录 piter 的重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.1.2] - 2026-08-06
 
-> 版本主线：UI 重构（设计系统单源 + 明亮蓝令牌）+ 国际化（zh/en）。
+> 版本主线：图片/文本附件与多模态 + 模型切换加固 + admin 分享与连接页 + 应用更新检查 UI。
 
 ### 新增
 
+- **图片与文本文件嵌入**：Composer 附件（拖拽 / 粘贴 / 选择），图片自动压缩（canvas 缩放 ≤1024px、>8MB 拒绝）与时间线渲染（明暗主题），文本文件 >200KB 截断拼入 prompt；模型视觉能力检测（正则规则表，不支持时选图弱提示）
+- **`/api/pi/model-catalog`**：无需启动 pi 即可加载本地模型目录（新会话/模型选择预检提速）
+- **会话模型信息持久化**：set_model 成功即写入 DB（gateway `handle_model_response`），重启/恢复会话后保留所用模型
+- **admin「分享与连接」页**：管理面板新增专门 Tab（AdminNav 新入口）——LAN 分享卡片（URL + 二维码，复用 `/api/lan-qr`，一键复制）+ 连接信息（broker WS/HTTP、端口、健康状态）+ 扫码 / 手动 `IP:端口` 连接引导
+- **应用更新检查与安装 UI**：admin Status 页「检查更新」按钮 + 更新弹窗（当前/最新版本、更新说明、下载进度、安装重启）；Rust 侧 `check_for_update` / `install_update` 命令（进度走 Channel），Linux 构建为桩（更新由系统包管理器管理）
 - **i18n 国际化**：vue-i18n en/zh 双语言——共享消息集（packages/ui/src/i18n），双端接入；admin 设置页语言切换即时生效并持久化，chat 端经 nav.rs 注入 `?lang=` 跟随；相对时间改用 `Intl.RelativeTimeFormat`（随语言变化）；Rust 侧 `AppSettings.language` 字段
 - **共享 UI 组件**：@piter/ui 新增 EmptyState / InlineConfirm / StatusDot / SkeletonList / PanelCard / StatCard / ChartCard
 - **首启三步引导**：欢迎页引导（配置 provider → 创建会话 → 提问），localStorage 一次后跳过
@@ -15,6 +20,7 @@
 
 ### 重构
 
+- **标题栏窗口控制改事件通道**：chat 运行在网关远程源（http://127.0.0.1:PORT），invoke 自定义命令被 Tauri 命令 ACL 静默拒绝——改用事件通道（window-minimize / toggle-maximize / close / query-maximized）+ Resized 事件同步最大化状态（emit_maximized_state），WM 缓存保持与实际窗口一致
 - **design-system 单源治理**：双份 design-system.css 合并为 @piter/ui 单源（exports `./styles/*`），消除漂移
 - **UI 令牌升级**：主色 #6a7a8a → #2f6fed 明亮蓝（暗色 #6ea8ff）、圆角体系 12/16/20、主色色调投影、动效 .16-.25s；新增语义状态 token（--state-idle/busy/review/error）与图表色板（--chart-1..6）；主按钮改软填充+描边（蓝只点缀不做大面积背景）
 - **SessionSidebar 拆分**：1012 → 433 行，拆出 ProjectGroup / SessionItem，正常/归档重复渲染消除，删除确认统一走 sessionKey
@@ -23,6 +29,9 @@
 
 ### 修复
 
+- **模型切换失败无反馈（BUG-017）**：set_model/cycle_model 失败经现有 response 链路渲染 system 消息提示（i18n 文案），不再静默；配套 gateway `handle_model_response`——成功即刷新运行时模型状态并持久化，失败清掉 default 备份
+- 模型切换加固：`sync_model_if_needed` 发送 set_model 前备份 settings.json 全局 default，成功后恢复（default 只允许 admin 修改）
+- `save_pi_agent_settings` 自动创建 `~/.pi/agent/` 目录（新机尚无目录时保存不再失败）
 - 会话删除/归档确认在无 instanceId 会话上失效（确认框不弹出）——统一改用 sessionKey（instanceId 兑底 id）
 - ModelSelector 同 id 跨 provider 模型双双高亮——高亮对比补 provider 维度 + 列表 key 改 provider/id 组合
 - 窗口关闭/恢复：托盘恢复不重连 WS（桌面 WebView 不触发 visibilitychange）——Rust Focused(true) 发 piter-window-shown；标题栏关闭后 WM 缓存不同步导致托盘 toggle 误判——CloseRequested 统一同步缓存；标题栏窗口操作统一走 invoke → WindowManager
