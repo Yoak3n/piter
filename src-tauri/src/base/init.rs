@@ -56,7 +56,9 @@ pub fn generate_handlers(
         remove_pi_api_key,
         get_pi_models_config,
         save_pi_models_config,
-        get_cost_dashboard
+        get_cost_dashboard,
+        check_for_update,
+        install_update
     ]
 }
 
@@ -160,8 +162,24 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
             }
         });
 
+        // 窗口控制事件（与 navigate-to-* 同一思路：绕过命令 ACL）。
+        // chat 前端运行在网关的远程源（http://127.0.0.1:PORT），Tauri 的命令 ACL
+        // 只放行本地源，invoke 自定义命令会被静默拒绝；事件通道不受限制。
+        // 收到事件后照旧走 WindowManager，保证 WM 缓存状态与实际窗口一致。
+        app.listen("window-minimize", |_event| {
+            let _ = WM::global().minimized_window(WindowType::Main);
+        });
+        app.listen("window-toggle-maximize", |_event| {
+            let _ = WM::global().toggle_maximize_window(WindowType::Main);
+            emit_maximized_state();
+        });
+        app.listen("window-close", |_event| {
+            let _ = WM::global().close_window(WindowType::Main);
+        });
+        app.listen("window-query-maximized", |_event| {
+            emit_maximized_state();
+        });
 
-        
         // "Start minimized": launch into the tray without showing the window.
         if !admin_config.app.start_minimized {
             // Pi 未安装时 gateway 未启动（web_url 为空）：此时若仍加载
@@ -252,6 +270,17 @@ fn app_data_dir_path() -> PathBuf {
         .join(crate::identifier())
 }
 
+/// 通知前端当前最大化状态（标题栏图标同步，事件通道不受命令 ACL 限制）。
+fn emit_maximized_state() {
+    match WM::global().get_window(WindowType::Main) {
+        Some(win) => {
+            let maximized = win.is_maximized().unwrap_or(false);
+            let _ = win.emit("window-maximized-changed", maximized);
+        }
+        None => log::warn!("emit_maximized_state: main window not found"),
+    }
+}
+
 pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {
     match event {
         tauri::RunEvent::Ready | tauri::RunEvent::Resumed => {}
@@ -265,6 +294,10 @@ pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {
             api.prevent_exit();
         }
         tauri::RunEvent::WindowEvent { label, event, .. } => match event {
+            tauri::WindowEvent::Resized(_) => {
+                // 拖拽边缘 / 顶栏双击等导致最大化状态变化时，同步标题栏图标
+                emit_maximized_state();
+            }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let window = app_handle.get_webview_window(&label).unwrap();

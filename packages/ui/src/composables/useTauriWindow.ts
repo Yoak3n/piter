@@ -1,5 +1,4 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import type { Window } from "@tauri-apps/api/window";
 
 /** Detect whether we are running inside the Tauri webview (vs. a plain browser). */
 export function isTauriEnv(): boolean {
@@ -7,83 +6,60 @@ export function isTauriEnv(): boolean {
 }
 
 /**
- * Resolve the current window, or `null` outside Tauri. `@tauri-apps/api` is
- * loaded via dynamic import so a plain-web build never pulls it into the
- * eager bundle (and never executes it at runtime in a browser).
+ * Window-control API for the custom title bar.
  *
- * Only used for read-only observation (maximize state on resize) — all
- * window *operations* go through the Rust WindowManager via invoke so the
- * manager's cached WindowState stays in sync with the real window.
- */
-async function getCurrentWindow(): Promise<Window | null> {
-  if (!isTauriEnv()) return null;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  return getCurrentWindow();
-}
-
-/** Invoke a window-control command on the Rust WindowManager. */
-async function windowCommand<T = void>(cmd: string): Promise<T | undefined> {
-  if (!isTauriEnv()) return undefined;
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return await invoke<T>(cmd);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Window-control API for the custom title bar. Every operation degrades to a
- * safe no-op when not running under Tauri, so the header renders identically
- * in a plain browser.
- *
- * Operations go through `src-tauri/src/base/cmd/window.rs` → WindowManager,
- * keeping the manager's cached WindowState consistent with the actual window
- * (tray toggle / lightweight-mode detection depend on it).
+ * 通过 Tauri 事件与 Rust 侧通信（而不是 invoke 自定义命令）：chat 前端运行在
+ * 网关的远程源（http://127.0.0.1:PORT），Tauri 的命令 ACL 只放行本地源，
+ * invoke 自定义命令会被静默拒绝；事件通道不受命令 ACL 限制（与 navigate-to-*
+ * 同一思路）。Rust 侧收到事件后走 WindowManager，WM 缓存状态保持与实际窗口一致。
  */
 export function useTauriWindow() {
   const isTauri = isTauriEnv();
   const isMaximized = ref(false);
 
   let alive = true;
-  let unlisten: (() => void) | undefined;
+  let unlistenMaximized: (() => void) | undefined;
 
-  async function refreshMaximized() {
-    const maximized = await windowCommand<boolean>("is_maximized_window");
-    if (maximized !== undefined) isMaximized.value = maximized;
+  /** 向 Rust 侧发窗口控制事件；非 Tauri 环境下安全降级为 no-op。 */
+  async function windowEvent(event: string) {
+    if (!isTauriEnv()) return;
+    try {
+      const { emit } = await import("@tauri-apps/api/event");
+      await emit(event);
+    } catch {
+      // non-critical
+    }
   }
 
-  async function minimize() {
-    await windowCommand("minimize_window");
+  function minimize() {
+    return windowEvent("window-minimize");
   }
 
-  async function toggleMaximize() {
-    await windowCommand("toggle_maximize_window");
-    void refreshMaximized();
+  function toggleMaximize() {
+    return windowEvent("window-toggle-maximize");
   }
 
-  async function close() {
-    await windowCommand("close_window");
+  function close() {
+    return windowEvent("window-close");
   }
 
   onMounted(() => {
     if (!isTauri) return;
     void (async () => {
-      const win = await getCurrentWindow();
-      if (!win || !alive) return;
-      await refreshMaximized();
-      // Read-only observation: keep the maximize icon in sync while the
-      // window is resized (drag edges / double-click titlebar).
-      unlisten = await win.onResized(() => {
-        if (alive) void refreshMaximized();
+      const { listen } = await import("@tauri-apps/api/event");
+      // Rust 侧在最大化状态变化（toggle / resize 等）时回发事件同步图标
+      unlistenMaximized = await listen<boolean>("window-maximized-changed", (e) => {
+        if (alive) isMaximized.value = !!e.payload;
       });
+      // 主动查询一次当前状态（替代被 ACL 拦截的 is_maximized_window invoke）
+      await windowEvent("window-query-maximized");
     })();
   });
 
   onBeforeUnmount(() => {
     alive = false;
-    unlisten?.();
-    unlisten = undefined;
+    unlistenMaximized?.();
+    unlistenMaximized = undefined;
   });
 
   return { isTauri, isMaximized, minimize, toggleMaximize, close };
