@@ -11,6 +11,7 @@ import StatusTab from "../components/admin/StatusTab.vue";
 // Non-default tabs load lazily so the admin entry stays light (dev module
 // graph + production main bundle). UsageTab additionally pulls in echarts.
 const PiConfigTab = defineAsyncComponent(() => import("../components/admin/PiConfigTab.vue"));
+const ShareTab = defineAsyncComponent(() => import("../components/admin/ShareTab.vue"));
 const ProvidersTab = defineAsyncComponent(() => import("../components/admin/ProvidersTab.vue"));
 const PiVersionsTab = defineAsyncComponent(() => import("../components/admin/PiVersionsTab.vue"));
 const ExtensionsTab = defineAsyncComponent(() => import("../components/admin/ExtensionsTab.vue"));
@@ -65,6 +66,7 @@ function handleThemePreview(theme: string) {
 function handleTabSelect(tab: string) {
   activeTab.value = tab;
   if (tab === "status") fetchStatus();
+  if (tab === "share") fetchStatus(); // keep gateway base URL fresh for /api calls
   if (tab === "versions") fetchPiInstallInfo();
 }
 
@@ -133,6 +135,13 @@ function handlePackagesChanged(packages: string[]) {
       />
 
       <UsageTab v-if="activeTab === 'usage'" />
+
+      <ShareTab
+        v-if="activeTab === 'share'"
+        :status="status"
+        :loading="loading.status"
+        @refresh="fetchStatus"
+      />
 
       <PiConfigTab
         v-if="activeTab === 'pi'"

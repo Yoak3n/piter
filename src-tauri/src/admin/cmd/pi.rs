@@ -75,6 +75,12 @@ pub fn get_pi_agent_settings() -> Result<pi_server::PiAgentSettings, String> {
 #[tauri::command]
 pub fn save_pi_agent_settings(settings: pi_server::PiAgentSettings) -> Result<(), String> {
     let path = pi_server::get_pi_agent_dir().join("settings.json");
+    // Create `~/.pi/agent/` on demand — a fresh machine may not have it yet
+    // (pi creates it on first run, but the admin can save before that).
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
+    }
     let json = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     std::fs::write(&path, json)

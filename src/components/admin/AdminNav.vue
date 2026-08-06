@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { Settings, Cpu, Activity, Puzzle, Globe, GitBranch, Store, ChevronDown, KeyRound, ChartColumn } from "lucide-vue-next";
+import { Settings, Cpu, Activity, Puzzle, Globe, GitBranch, Store, ChevronDown, KeyRound, ChartColumn, Share2 } from "lucide-vue-next";
 
 const props = defineProps<{
   activeTab: string;
@@ -15,6 +15,7 @@ const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 const tabs = [
   { key: "status", labelKey: "admin.navStatus", icon: Activity },
+  { key: "share", labelKey: "admin.navShare", icon: Share2 },
   { key: "usage", labelKey: "admin.navUsage", icon: ChartColumn },
 ];
 

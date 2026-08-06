@@ -6,6 +6,7 @@ mod system;
 mod version;
 mod extensions;
 mod stats;
+mod update;
 
 pub use auth::*;
 pub use config::*;
@@ -15,3 +16,4 @@ pub use system::*;
 pub use version::*;
 pub use extensions::*;
 pub use stats::*;
+pub use update::*;

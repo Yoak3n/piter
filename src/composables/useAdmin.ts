@@ -188,6 +188,21 @@ export interface CostDashboard {
   activity: CostDayActivity[];
 }
 
+// ─── App self-update (check_for_update / install_update) ──────────────────
+
+export interface UpdateCheckInfo {
+  current_version: string;
+  latest_version: string;
+  available: boolean;
+  notes: string | null;
+}
+
+/** Progress events emitted by the `install_update` command. */
+export interface UpdateProgress {
+  downloaded: number;
+  total: number | null;
+}
+
 export function useAdmin() {
   const config = ref<AdminConfig | null>(null);
   const status = ref<AdminStatus | null>(null);
@@ -363,6 +378,30 @@ export function useAdmin() {
     }
   }
 
+  async function checkForUpdate(): Promise<UpdateCheckInfo | null> {
+    error.value = "";
+    try {
+      return await invoke<UpdateCheckInfo>("check_for_update");
+    } catch (e) {
+      error.value = `Failed to check for update: ${e}`;
+      return null;
+    }
+  }
+
+  /** Download + install the pending update; the app relaunches on success. */
+  async function installUpdate(onProgress: (p: UpdateProgress) => void): Promise<boolean> {
+    error.value = "";
+    try {
+      const channel = new Channel<UpdateProgress>();
+      channel.onmessage = onProgress;
+      await invoke("install_update", { onProgress: channel });
+      return true;
+    } catch (e) {
+      error.value = `Failed to install update: ${e}`;
+      return false;
+    }
+  }
+
   async function fetchExtensionOverview(): Promise<ExtensionOverview | null> {
     error.value = "";
     try {
@@ -512,5 +551,7 @@ export function useAdmin() {
     removePiApiKey,
     fetchPiModelsConfig,
     savePiModelsConfig,
+    checkForUpdate,
+    installUpdate,
   };
 }

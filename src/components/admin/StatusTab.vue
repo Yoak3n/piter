@@ -2,9 +2,11 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { RefreshCw } from "lucide-vue-next";
-import type { AdminStatus, PiSettings } from "../../composables/useAdmin";
+import { useAdmin, type AdminStatus, type PiSettings, type UpdateCheckInfo } from "../../composables/useAdmin";
+import UpdateModal from "./UpdateModal.vue";
 
 const { t } = useI18n();
+const { checkForUpdate, error: updateError } = useAdmin();
 
 const props = defineProps<{
   status: AdminStatus | null;
@@ -82,6 +84,39 @@ onMounted(() => {
   timer = setInterval(() => { now.value = Date.now(); }, 1000);
 });
 onUnmounted(() => { if (timer) clearInterval(timer); });
+
+// ─── App update (Status page "Check for Updates") ─────────────────────────
+
+const checkingUpdate = ref(false);
+const updateInfo = ref<UpdateCheckInfo | null>(null);
+const updateNotice = ref("");
+
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+function showUpdateNotice(msg: string) {
+  updateNotice.value = msg;
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => (updateNotice.value = ""), 5000);
+}
+
+async function openUpdateCheck() {
+  if (checkingUpdate.value) return;
+  checkingUpdate.value = true;
+  updateNotice.value = "";
+  try {
+    const info = await checkForUpdate();
+    if (!info) {
+      showUpdateNotice(t("admin.updateCheckFailed", { msg: updateError.value || "" }));
+      return;
+    }
+    if (info.available) {
+      updateInfo.value = info;
+    } else {
+      showUpdateNotice(t("admin.upToDate"));
+    }
+  } finally {
+    checkingUpdate.value = false;
+  }
+}
 </script>
 
 <template>
@@ -125,7 +160,16 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
         <div class="status-card-value">
           <span v-if="status" class="status-card-mono">{{ status.app_version }}</span>
           <span v-else class="status-card-muted">&mdash;</span>
+          <button
+            class="btn btn-ghost btn-sm update-btn"
+            :disabled="checkingUpdate || !status"
+            @click="openUpdateCheck"
+          >
+            <RefreshCw :size="11" :class="{ spin: checkingUpdate }" />
+            {{ checkingUpdate ? $t("admin.checkingUpdate") : $t("admin.checkForUpdate") }}
+          </button>
         </div>
+        <div v-if="updateNotice" class="update-notice">{{ updateNotice }}</div>
       </div>
 
       <div class="status-card">
@@ -196,19 +240,11 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
       </div>
     </div>
 
-    <div class="section">
-      <h3 class="tab-title">{{ $t("admin.brokerUrls") }}</h3>
-      <div class="info-block" v-if="status">
-        <div class="info-row">
-          <span class="info-key">{{ $t("admin.websocket") }}</span>
-          <code class="info-value">{{ status.broker_ws_url }}</code>
-        </div>
-        <div class="info-row">
-          <span class="info-key">{{ $t("admin.http") }}</span>
-          <code class="info-value">{{ status.broker_http_url }}</code>
-        </div>
-      </div>
-    </div>
+    <UpdateModal
+      v-if="updateInfo"
+      :info="updateInfo"
+      @close="updateInfo = null"
+    />
   </div>
 </template>
 
@@ -298,6 +334,17 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
   align-items: center;
 }
 
+.update-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.update-notice {
+  margin-top: var(--space-sm);
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
 .status-card-mono {
   font-family: var(--font-mono);
   font-size: var(--font-size-body);
@@ -385,31 +432,5 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
   font-size: var(--font-size-caption);
   color: var(--text-secondary);
   margin-left: var(--space-sm);
-}
-
-.info-block {
-  background: var(--bg-muted);
-  border-radius: var(--radius-md);
-  padding: var(--space-md);
-}
-
-.info-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-xs) 0;
-}
-
-.info-key {
-  font-size: var(--font-size-caption);
-  color: var(--text-tertiary);
-  min-width: 80px;
-}
-
-.info-value {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-caption);
-  color: var(--text-secondary);
-  background: transparent;
 }
 </style>
