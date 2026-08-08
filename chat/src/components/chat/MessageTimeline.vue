@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch } from "vue";
+import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from "vue";
 import { ArrowDown } from "lucide-vue-next";
 import { EmptyState } from "@piter/ui";
 import type { ChatTurn, Message, ToolExecution } from "../../types";
@@ -7,6 +7,7 @@ import MessageTurn from "./MessageTurn.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCard from "./ToolCard.vue";
 import MarkdownBubble from "./MarkdownBubble.vue";
+import TimelineNav from "./TimelineNav.vue";
 
 const props = defineProps<{
   turns: ChatTurn[];
@@ -87,6 +88,93 @@ watch(
   },
 );
 
+// ─── Timeline nav (侧边时间轴导航) ──────────────────────────────────────
+// 轨道上的每条横线 = 一轮 user 消息；当前 turn = 视口滚动位置对应的最近
+// 轮次（视口驱动，与流式输出解耦）。锚点复用搜索跳转的 turnRefs。
+const userTurns = computed(() => props.turns.filter((t) => t.user));
+
+/** turnId → 该轮根元素在 .timeline 内的 offsetTop（px），布局后由 rAF 刷新 */
+const positions = ref<Record<number, number>>({});
+/** 当前视口对应的轮次 id（传给 TimelineNav 高亮为声波） */
+const activeTurnId = ref<number | null>(null);
+
+let rafId: number | null = null;
+function scheduleLayoutUpdate() {
+  if (rafId != null) return;
+  rafId = requestAnimationFrame(() => {
+    rafId = null;
+    refreshPositions();
+    updateActiveTurn();
+  });
+}
+
+// positions = minimap 坐标：内容高度按比例缩放到固定轨道高度
+// （clientHeight/scrollHeight），全部横线常驻轨道 → 小星星全貌可见、
+// 任意横线点击跳转（与滚动位置无关）。
+function refreshPositions() {
+  const el = timelineRef.value;
+  if (!el) return;
+  const total = el.scrollHeight;
+  if (total <= 0) return;
+  const scale = el.clientHeight / total;
+  const next: Record<number, number> = {};
+  for (const t of userTurns.value) {
+    const turnEl = turnRefs.value[t.id];
+    if (turnEl && typeof turnEl.offsetTop === "number") {
+      next[t.id] = turnEl.offsetTop * scale;
+    }
+  }
+  positions.value = next;
+}
+
+// 当前 turn = 视口中心线经过的最后一个 user turn 锚点（用内容坐标 offsetTop
+// 判定，与 minimap 显示坐标无关；几百轮内线性遍历即可）
+function updateActiveTurn() {
+  const el = timelineRef.value;
+  if (!el) {
+    activeTurnId.value = null;
+    return;
+  }
+  const list = userTurns.value;
+  if (!list.length) {
+    activeTurnId.value = null;
+    return;
+  }
+  const refLine = el.scrollTop + el.clientHeight / 2;
+  let active: number | null = null;
+  for (const t of list) {
+    const turnEl = turnRefs.value[t.id];
+    if (!turnEl) continue;
+    if (turnEl.offsetTop <= refLine) active = t.id;
+    else break; // turns 按 DOM 顺序，offsetTop 递增
+  }
+  activeTurnId.value = active ?? list[0].id;
+}
+
+// 流式增长 / 图片加载 / 窗口尺寸变化都会改变 turn 高度 → ResizeObserver
+// 捕获滚动容器内容盒变化，rAF 合并刷新位置 + 当前轮。
+let layoutObserver: ResizeObserver | null = null;
+onMounted(() => {
+  if (timelineRef.value && typeof ResizeObserver !== "undefined") {
+    layoutObserver = new ResizeObserver(() => scheduleLayoutUpdate());
+    layoutObserver.observe(timelineRef.value);
+  }
+  scheduleLayoutUpdate();
+});
+onBeforeUnmount(() => layoutObserver?.disconnect());
+
+// 轮次增删后（flush post 保证新元素已渲染）重新测量
+watch(userTurns, () => scheduleLayoutUpdate(), { flush: "post" });
+
+function jumpToTurn(turnId: number) {
+  const el = turnRefs.value[turnId];
+  if (!el || typeof (el as HTMLElement).scrollIntoView !== "function") return;
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  // 与搜索跳转同款：跳转后置 paused，流式输出不把用户拽回底部；
+  // scroll 事件会随之触发 handleScroll，rAF 内更新当前轮。
+  isPaused.value = true;
+}
+
 // ─── Auto-scroll with user-override ──────────────────────────────────
 // While streaming, the timeline follows the latest content. If the user
 // scrolls away from the bottom (to re-read), auto-scroll pauses (sticky);
@@ -106,6 +194,8 @@ function scrollToBottom() {
 function handleScroll() {
   const el = timelineRef.value;
   if (!el) return;
+  // 视口驱动的当前轮（rAF 节流）——与自动滚动判定共用滚动事件。
+  scheduleLayoutUpdate();
   const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
   if (distFromBottom <= BOTTOM_THRESHOLD) {
     // User is back at the bottom — resume following.
@@ -174,14 +264,15 @@ watch(() => props.currentThinking, scrollToBottom);
 </script>
 
 <template>
-  <div
-    ref="timelineRef"
-    class="timeline"
-    @scroll="handleScroll"
-    @wheel.capture="handleWheelCapture"
-    @touchmove.capture="handleTouchMoveCapture"
-    @touchend.capture="handleTouchEndCapture"
-  >
+  <div class="timeline-wrap">
+    <div
+      ref="timelineRef"
+      class="timeline"
+      @scroll="handleScroll"
+      @wheel.capture="handleWheelCapture"
+      @touchmove.capture="handleTouchMoveCapture"
+      @touchend.capture="handleTouchEndCapture"
+    >
     <EmptyState
       v-if="turns.length === 0"
       fill
@@ -277,11 +368,41 @@ watch(() => props.currentThinking, scrollToBottom);
     >
       <ArrowDown :size="18" />
     </button>
+    </div>
+
+    <!-- 侧边时间轴导航：固定 minimap 轨道（在滚动容器外，不随内容滚动），
+         横线 = 全部 user 轮次的分布；当前轮显示声波；点击任意横线跳转 -->
+    <TimelineNav
+      :turns="userTurns"
+      :active-turn-id="activeTurnId"
+      :positions="positions"
+      @jump="jumpToTurn"
+    />
   </div>
 </template>
 
 <style scoped>
-.timeline { flex:1; overflow-y:auto; overflow-x:hidden; padding:16px 12px; display:flex; flex-direction:column; gap:12px; }
+/* 固定包裹层：容纳滚动容器 + 固定在右侧的时间轴轨道（轨道不随内容滚动） */
+.timeline-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* turn 元素 offsetTop 的 offsetParent 基准（内容坐标） */
+  position: relative;
+}
 
 .turn { display:flex; flex-direction:column; gap:6px; min-width:0; }
 .msg { display:flex; max-width:90%; min-width:0; }
@@ -306,6 +427,7 @@ watch(() => props.currentThinking, scrollToBottom);
   bottom: 12px;
   align-self: flex-end;
   flex-shrink: 0;
+  z-index: 2; /* 位于时间轴轨道之上 */
   display: flex;
   align-items: center;
   justify-content: center;
