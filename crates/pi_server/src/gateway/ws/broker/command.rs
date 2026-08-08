@@ -270,6 +270,18 @@ fn handle_switch_session(
                             session.message_seq = msg_seq;
                         }
                     }
+                    // 恢复 DB 已存的会话名（BUG-018）：register_instance 新建的
+                    // ManagedSession 是"无名"状态（title_set=false），若不复原，
+                    // 自动命名逻辑会把"内存无名"误判为"新会话"，2 轮后就用新消息
+                    // 重新生成标题覆盖 DB 旧名。复用 set_session_name（置名 + title_set=true）。
+                    if let Some(name) = db_session.as_ref().and_then(|s| s.name.clone()) {
+                        if !name.trim().is_empty() {
+                            state
+                                .session_manager
+                                .lock()
+                                .set_session_name(&new_iid, name);
+                        }
+                    }
                     // Immediately push updated sessions list
                     push_sessions_list_to_clients(state);
                     // Tell frontend the instance is ready with loaded messages

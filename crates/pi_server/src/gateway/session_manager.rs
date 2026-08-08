@@ -702,3 +702,64 @@ pub fn spawn_cleanup_task(
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_session(iid: &str) -> ManagedSession {
+        ManagedSession {
+            instance_id: iid.to_string(),
+            cwd: "/tmp".to_string(),
+            activity: SessionActivity::Idle,
+            disconnected_since: None,
+            messages: Vec::new(),
+            partial_message: None,
+            subscribers: HashSet::new(),
+            last_active: Instant::now(),
+            last_active_epoch: 0,
+            message_seq: 0,
+            pi_state: None,
+            session_name: None,
+            pending_default_restore: None,
+            turn_count: 0,
+            title_set: false,
+            title_candidates: Vec::new(),
+        }
+    }
+
+    /// BUG-018 回归：已命名会话（set_session_name 置 title_set=true）即使再
+    /// 触发 2 轮 TurnEnd，也不会被自动命名覆盖（恢复 DB 会话名后的状态）。
+    #[test]
+    fn titled_session_not_overwritten_by_auto_title() {
+        let mut mgr = SessionManager::new(None);
+        mgr.sessions.insert("s1".to_string(), test_session("s1"));
+        mgr.set_session_name("s1", "旧名字".to_string());
+
+        for _ in 0..2 {
+            let msg = json!({"role": "user", "content": "这是一条超过十个字符的新消息内容"});
+            mgr.on_event(&json!({"type": "message_end", "message": msg}), "s1");
+            mgr.on_event(&json!({"type": "turn_end"}), "s1");
+        }
+
+        assert_eq!(mgr.take_pending_names().len(), 0, "不应产生自动命名覆盖");
+        assert_eq!(mgr.sessions["s1"].session_name.as_deref(), Some("旧名字"));
+    }
+
+    /// 对照：DB 无名的新会话（title_set=false）照常 2 轮后自动命名。
+    #[test]
+    fn unnamed_session_auto_titles_after_two_turns() {
+        let mut mgr = SessionManager::new(None);
+        mgr.sessions.insert("s2".to_string(), test_session("s2"));
+
+        for _ in 0..2 {
+            let msg = json!({"role": "user", "content": "我想做一个跨会话全文搜索的功能"});
+            mgr.on_event(&json!({"type": "message_end", "message": msg}), "s2");
+            mgr.on_event(&json!({"type": "turn_end"}), "s2");
+        }
+
+        assert_eq!(mgr.take_pending_names().len(), 1, "无名会话应自动命名");
+        assert!(mgr.sessions["s2"].session_name.is_some());
+    }
+}
