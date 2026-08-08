@@ -91,10 +91,17 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
                 thinking_level: rt.and_then(|r| r.thinking_level.clone()),
                 message_count: rt.map(|r| r.message_count).unwrap_or(0),
                 message_seq: rt.map(|r| r.message_seq).unwrap_or(0),
+                pinned: db_row.map(|r| r.pinned).unwrap_or(0),
             });
         }
 
-        sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        // Pinned sessions stay at the top of their project; the rest keep the
+        // last-active order (matches the project-level pinned sort).
+        sessions.sort_by(|a, b| {
+            b.pinned
+                .cmp(&a.pinned)
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+        });
 
         let group = ProjectGroup {
             path: proj.cwd.clone(),
@@ -117,7 +124,7 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
         .flat_map(|p| p.sessions.iter().filter_map(|s| s.instance_id.clone()))
         .collect();
 
-    let orphans: Vec<SessionInfo> = db_by_iid
+    let mut orphans: Vec<SessionInfo> = db_by_iid
         .values()
         .filter(|s| s.project_id.is_none() && !all_linked.contains(&s.instance_id))
         .map(|s| {
@@ -142,9 +149,17 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
                 thinking_level: None,
                 message_count: rt.map(|r| r.message_count).unwrap_or(0),
                 message_seq: rt.map(|r| r.message_seq).unwrap_or(0),
+                pinned: s.pinned,
             }
         })
         .collect();
+
+    // Same ordering as project sessions: pinned orphans stay at the top.
+    orphans.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+    });
 
     if !orphans.is_empty() {
         result.push(ProjectGroup {
@@ -162,5 +177,74 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
     result.extend(archived_result);
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::broker::types::{BrokerInner, EVENT_CHANNEL_CAP};
+    use crate::gateway::db::Db;
+    use crate::gateway::session_manager::SessionManager;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn test_state(db: Arc<Db>) -> Arc<GatewayState> {
+        let (event_tx, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAP);
+        Arc::new(GatewayState {
+            event_tx,
+            inner: Arc::new(BrokerInner::default()),
+            lan_ips: Arc::new(parking_lot::Mutex::new((
+                std::time::Instant::now(),
+                Vec::new(),
+            ))),
+            http_port: 0,
+            pi_version: String::new(),
+            pi_exe: std::path::PathBuf::new(),
+            static_dir: std::path::PathBuf::new(),
+            start_time: std::time::Instant::now(),
+            db,
+            extension_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            ui_clients: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            session_manager: Arc::new(parking_lot::Mutex::new(SessionManager::new(None))),
+            agent_end_hook: Arc::new(parking_lot::Mutex::new(None)),
+        })
+    }
+
+    /// 置顶会话在所属项目内排最前；取消后恢复 updated_at 排序（回归：DB 持久化
+    /// + 排序两处都能工作）。created_at 为秒级精度，注册间隔 1.1s 保证可判定序。
+    #[test]
+    fn pinned_session_sorts_first_within_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        db.create_project("proj1", "Project One", "/tmp/proj").unwrap();
+        db.register_session("s1", "/tmp/proj", Some("proj1")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        db.register_session("s2", "/tmp/proj", Some("proj1")).unwrap();
+
+        let state = test_state(db.clone());
+        let ids = |state: &Arc<GatewayState>| -> Vec<String> {
+            build_project_session_tree(state)
+                .into_iter()
+                .find(|g| g.id.as_deref() == Some("proj1"))
+                .map(|g| {
+                    g.sessions
+                        .into_iter()
+                        .map(|s| s.instance_id.unwrap())
+                        .collect()
+                })
+                .unwrap()
+        };
+
+        // Base order: newest activity first.
+        assert_eq!(ids(&state), vec!["s2", "s1"]);
+
+        // Pin the older session → it jumps to the top of its project.
+        db.set_session_pinned("s1", 1).unwrap();
+        assert_eq!(ids(&state), vec!["s1", "s2"]);
+
+        // Unpin → back to updated_at order.
+        db.set_session_pinned("s1", 0).unwrap();
+        assert_eq!(ids(&state), vec!["s2", "s1"]);
+    }
 }
 

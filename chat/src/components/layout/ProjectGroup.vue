@@ -26,6 +26,7 @@ const emit = defineEmits<{
   (e: "restore"): void;
   (e: "new-session"): void;
   (e: "select-session", instanceId: string): void;
+  (e: "pin-session", session: ProjectGroupType["sessions"][number]): void;
   (e: "request-delete", instanceId: string): void;
   (e: "confirm-delete", instanceId: string): void;
   (e: "cancel-delete"): void;
@@ -120,6 +121,7 @@ function sessionKey(s: { instanceId?: string; id: string }): string {
         :confirming="deleteConfirmId === sessionKey(session)"
         :delete-loading="deleteLoading"
         @select="emit('select-session', sessionKey(session))"
+        @pin="emit('pin-session', session)"
         @request-delete="emit('request-delete', sessionKey(session))"
         @confirm-delete="emit('confirm-delete', sessionKey(session))"
         @cancel-delete="emit('cancel-delete')"

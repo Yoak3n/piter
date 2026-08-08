@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::Query;
+use axum::extract::{Path as AxumPath, Query};
 use axum::response::Json;
 use serde_json::Value;
 
@@ -175,6 +175,23 @@ pub async fn rename_session_handler(
                     .lock()
                     .set_session_name(&instance_id, new_name.to_string());
             }
+            super::super::push_sessions_list_to_clients(&state);
+            Json(serde_json::json!({"success": true}))
+        }
+        Err(e) => Json(serde_json::json!({"success": false, "error": e})),
+    }
+}
+
+pub async fn pin_session_handler(
+    axum::extract::State(state): axum::extract::State<Arc<GatewayState>>,
+    AxumPath(instance_id): AxumPath<String>,
+    axum::Json(body): axum::Json<HashMap<String, Value>>,
+) -> Json<Value> {
+    let pinned = body.get("pinned").and_then(Value::as_i64).unwrap_or(1) as i32;
+    match state.db.set_session_pinned(&instance_id, pinned) {
+        Ok(()) => {
+            // The tree builder reads `pinned` straight from the DB, so a
+            // persisted update plus a pushed refresh is all that's needed.
             super::super::push_sessions_list_to_clients(&state);
             Json(serde_json::json!({"success": true}))
         }

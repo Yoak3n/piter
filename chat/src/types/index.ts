@@ -103,6 +103,8 @@ export interface SessionInfo {
   thinkingLevel?: string;
   messageCount?: number;
   messageSeq?: number;
+  /** 1 when pinned (sorts first within the owning project) */
+  pinned?: number;
 }
 
 /** A project grouping sessions */

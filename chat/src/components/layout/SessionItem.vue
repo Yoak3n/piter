@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Pencil, Trash2 } from "lucide-vue-next";
+import { Pencil, Pin, PinOff, Trash2 } from "lucide-vue-next";
 import { StatusDot, InlineConfirm } from "@piter/ui";
 import type { SessionInfo } from "../../types";
 
@@ -18,6 +18,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "select"): void;
+  (e: "pin"): void;
   (e: "request-delete"): void;
   (e: "confirm-delete"): void;
   (e: "cancel-delete"): void;
@@ -134,6 +135,12 @@ function formatTime(updatedAt: number): string {
             class="session-running-indicator"
             :title="$t('chat.piProcessing')"
           />
+          <Pin
+            v-if="session.pinned"
+            :size="10"
+            class="session-pinned-marker"
+            fill="currentColor"
+          />
           {{ session.label || $t("common.untitled") }}
         </div>
         <div class="session-meta">
@@ -149,6 +156,14 @@ function formatTime(updatedAt: number): string {
         @cancel="emit('cancel-delete')"
       />
       <template v-else>
+        <button
+          class="session-pin-btn"
+          :title="session.pinned ? $t('chat.unpinSession') : $t('chat.pinSession')"
+          @click.stop="emit('pin')"
+        >
+          <PinOff v-if="session.pinned" :size="12" />
+          <Pin v-else :size="12" />
+        </button>
         <button
           class="session-edit-btn"
           :title="$t('chat.renameSession')"
@@ -219,6 +234,12 @@ function formatTime(updatedAt: number): string {
   animation: session-pulse 1.2s ease-in-out infinite;
 }
 
+/* 会话置顶标记：与项目置顶（accent 蓝）区分，用 warning 琥珀色 */
+.session-pinned-marker {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
 @keyframes session-pulse {
   0%,
   100% {
@@ -241,6 +262,7 @@ function formatTime(updatedAt: number): string {
   color: var(--text-tertiary);
 }
 
+.session-pin-btn,
 .session-edit-btn,
 .session-delete-btn {
   display: flex;
@@ -256,9 +278,15 @@ function formatTime(updatedAt: number): string {
   transition: opacity var(--duration-fast) var(--ease);
 }
 
+.session-item:hover .session-pin-btn,
 .session-item:hover .session-edit-btn,
 .session-item:hover .session-delete-btn {
   opacity: 1;
+}
+
+.session-pin-btn:hover {
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .session-edit-btn:hover {
@@ -293,6 +321,7 @@ function formatTime(updatedAt: number): string {
 
 /* Mobile: keep row actions visible without hover */
 @media (max-width: 640px) {
+  .session-pin-btn,
   .session-edit-btn,
   .session-delete-btn {
     opacity: 1;

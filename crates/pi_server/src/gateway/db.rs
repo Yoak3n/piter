@@ -96,6 +96,7 @@ impl Db {
                 project_id    TEXT REFERENCES projects(id) ON DELETE SET NULL,
                 cwd           TEXT NOT NULL,
                 name          TEXT,
+                pinned        INTEGER NOT NULL DEFAULT 0,
                 created_at    TEXT NOT NULL
             );
 
@@ -129,6 +130,13 @@ impl Db {
         if !cols.iter().any(|c| c == "model_provider") {
             conn.execute("ALTER TABLE sessions ADD COLUMN model_provider TEXT", [])
                 .map_err(|e| format!("migrate add model_provider: {}", e))?;
+        }
+        if !cols.iter().any(|c| c == "pinned") {
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| format!("migrate add pinned: {}", e))?;
         }
 
         // ── Cross-session search index (0.2.0) ──────────────────────────
@@ -516,6 +524,23 @@ impl Db {
         Ok(())
     }
 
+    /// Pin/unpin a session. Unlike `set_pinned` (projects) this deliberately
+    /// leaves `created_at` untouched, so unpinning restores the original
+    /// updated_at order instead of bumping the session to the top.
+    pub fn set_session_pinned(&self, instance_id: &str, pinned: i32) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .execute(
+                "UPDATE sessions SET pinned = ?1 WHERE instance_id = ?2",
+                params![pinned, instance_id],
+            )
+            .map_err(|e| format!("set_session_pinned: {}", e))?;
+        if rows == 0 {
+            return Err(format!("session not found: {}", instance_id));
+        }
+        Ok(())
+    }
+
     /// Persist the model (id + provider) this instance is currently using,
     /// so the session can restore its own model after a restart.
     pub fn set_session_model(
@@ -539,7 +564,7 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT instance_id, session_path, project_id, cwd, name, created_at, \
-                        model_id, model_provider FROM sessions",
+                        model_id, model_provider, pinned FROM sessions",
             )
             .unwrap();
         stmt.query_map([], |row| {
@@ -552,6 +577,7 @@ impl Db {
                 created_at: row.get(5)?,
                 model_id: row.get(6)?,
                 model_provider: row.get(7)?,
+                pinned: row.get(8)?,
             })
         })
         .unwrap()
@@ -886,6 +912,8 @@ pub struct SessionRow {
     pub model_id: Option<String>,
     /// Persisted provider for `model_id`.
     pub model_provider: Option<String>,
+    /// 1 when pinned (sorts first within the owning project).
+    pub pinned: i32,
 }
 
 /// A message ready to be inserted into the search index (search module output).
@@ -952,4 +980,30 @@ fn truncate_chars(s: &str, n: usize) -> String {
 
 fn db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("piter.db")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_pinned_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        db.register_session("i1", "/tmp/proj", None).unwrap();
+
+        let rows = db.all_sessions();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pinned, 0, "new sessions default to unpinned");
+
+        db.set_session_pinned("i1", 1).unwrap();
+        assert_eq!(db.all_sessions()[0].pinned, 1);
+
+        // Unpin restores the default.
+        db.set_session_pinned("i1", 0).unwrap();
+        assert_eq!(db.all_sessions()[0].pinned, 0);
+
+        // Unknown instance → error (mirrors set_pinned).
+        assert!(db.set_session_pinned("missing", 1).is_err());
+    }
 }

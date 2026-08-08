@@ -54,6 +54,9 @@ pub struct SessionInfo {
     pub message_count: u32,
     #[serde(default)]
     pub message_seq: u64,
+    /// 1 when the session is pinned (sorts first within its project).
+    #[serde(default)]
+    pub pinned: i32,
 }
 
 #[derive(Serialize)]

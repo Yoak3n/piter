@@ -165,6 +165,29 @@ function projectKey(p: ProjectGroupType): string {
   return p.id ?? p.path;
 }
 
+// Session identity matches the select/delete flow (instanceId with a fallback
+// to the DB id), so pinning targets the same key the rest of the UI uses.
+function sessionKey(s: { instanceId?: string; id: string }): string {
+  return s.instanceId ?? s.id;
+}
+
+async function toggleSessionPin(session: ProjectGroupType["sessions"][number]) {
+  if (actionLoading.value) return;
+  actionLoading.value = true;
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sessionKey(session))}/pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned: session.pinned ? 0 : 1 }),
+    });
+    await fetchSessions();
+  } catch (e) {
+    console.error("Session pin failed:", e);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
 function isCollapsed(p: ProjectGroupType): boolean {
   const choice = collapseChoice.value.get(projectKey(p));
   return choice === undefined ? !!p.archived : choice;
@@ -302,6 +325,7 @@ onMounted(fetchSessions);
           @restore="project.id && restoreProject(project.id)"
           @new-session="emit('new-session', project.path, project.name)"
           @select-session="emit('select-session', $event)"
+          @pin-session="toggleSessionPin($event)"
           @request-delete="showDeleteConfirm = $event ?? null"
           @confirm-delete="handleDelete($event)"
           @cancel-delete="showDeleteConfirm = null"
@@ -326,6 +350,7 @@ onMounted(fetchSessions);
             @restore="project.id && restoreProject(project.id)"
             @new-session="emit('new-session', project.path, project.name)"
             @select-session="emit('select-session', $event)"
+            @pin-session="toggleSessionPin($event)"
             @request-delete="showDeleteConfirm = $event ?? null"
             @confirm-delete="handleDelete($event)"
             @cancel-delete="showDeleteConfirm = null"

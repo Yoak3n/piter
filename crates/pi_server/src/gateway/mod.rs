@@ -169,6 +169,10 @@ impl GatewayState {
                 "/api/sessions/rename",
                 post(handlers::session::rename_session_handler),
             )
+            .route(
+                "/api/sessions/:id/pin",
+                post(handlers::session::pin_session_handler),
+            )
             // Pi control
             .route("/api/pi/status", get(handlers::pi::pi_status_handler))
             .route("/api/pi/settings", get(handlers::pi::pi_settings_handler))
