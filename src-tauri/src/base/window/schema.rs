@@ -3,7 +3,7 @@ pub enum WindowState {
     /// 窗口可见且有焦点
     VisibleFocused,
     /// 窗口可见但无焦点
-    // VisibleUnfocused,
+    VisibleUnfocused,
     /// 窗口最小化
     Minimized,
     /// 窗口隐藏

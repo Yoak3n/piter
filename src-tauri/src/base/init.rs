@@ -121,6 +121,9 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         let gw_slot: GatewaySlot = Arc::new(Mutex::new(None));
         let web_url = match try_start_gateway(app.handle()) {
             Ok(Some((gw, url))) => {
+                // 会话完成系统通知：注册 agent_end 观察点（窗口不可见/失焦时发 OS 通知）。
+                // 注意 gateway 可能由 start_pi_gateway 中途启动，该路径同样需要注册（见 admin/cmd.rs）。
+                crate::base::notify::init(app.handle(), &gw);
                 *gw_slot.lock() = Some(gw);
                 url
             }
@@ -324,7 +327,17 @@ pub fn app_event_handle(app_handle: &AppHandle, event: RunEvent) {
                     let _ = window.emit("piter-window-shown", ());
                 }
             }
-            tauri::WindowEvent::Focused(false) => {}
+            tauri::WindowEvent::Focused(false) => {
+                // 失焦（切到其他应用/窗口被遮挡）：补记 WM 状态，供会话完成系统通知判断。
+                // 注意窗口 hide()（关闭到托盘）也会触发失焦——CloseRequested 已把状态记为
+                // Hidden，这里仅在缓存仍为 VisibleFocused 时降级为 VisibleUnfocused，
+                // 避免覆盖 Hidden/Minimized 等既有状态。
+                if let Some(wt) = WindowType::from_label(&label) {
+                    if WM::global().get_cached_window_state(wt) == WindowState::VisibleFocused {
+                        WM::global().update_window_state(wt, WindowState::VisibleUnfocused);
+                    }
+                }
+            }
             tauri::WindowEvent::Destroyed => {}
             _ => {}
         },

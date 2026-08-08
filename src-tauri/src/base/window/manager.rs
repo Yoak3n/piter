@@ -332,7 +332,7 @@ impl Manager {
                     }
                 }
             }
-            WindowState::Minimized | WindowState::Hidden => {
+            WindowState::Minimized | WindowState::Hidden | WindowState::VisibleUnfocused => {
                 println!("窗口存在但被隐藏或最小化，将激活窗口");
                 if let Some(window) = self.get_window(window_type) {
                     update_tray(true);
@@ -403,7 +403,7 @@ impl Manager {
         for window_type in &WindowType::all() {
             let state = self.get_cached_window_state(*window_type);
             match state {
-                WindowState::VisibleFocused | WindowState::Minimized => {
+                WindowState::VisibleFocused | WindowState::Minimized | WindowState::VisibleUnfocused => {
                     return false; // 有窗口仍然可见或最小化
                 }
                 WindowState::Hidden | WindowState::NotExist => {

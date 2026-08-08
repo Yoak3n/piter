@@ -34,6 +34,10 @@ export interface ExtensionNotify {
   id: number;
   message: string;
   type: "info" | "warning" | "error";
+  /** 展示位置：top 用于会话完成等需要提示的场景；扩展 notify 保持默认 bottom */
+  placement?: "top" | "bottom";
+  /** 存在时 toast 可点击跳转到该会话 */
+  targetInstanceId?: string;
 }
 
 interface SessionState {
@@ -169,7 +173,11 @@ export function usePiConnection() {
   const recentToasts = new Map<string, number>(); // `${type}:${message}` → lastShownAt
   let lastToastAt = 0;
 
-  function pushNotify(type: ExtensionNotify["type"], message: string) {
+  function pushNotify(
+    type: ExtensionNotify["type"],
+    message: string,
+    opts?: { placement?: "top" | "bottom"; targetInstanceId?: string },
+  ) {
     if (!message) return;
     const now = Date.now();
     const key = `${type}:${message}`;
@@ -184,10 +192,42 @@ export function usePiConnection() {
       }
     }
     const id = ++notifySeq;
-    notifications.value = [...notifications.value, { id, message, type }].slice(-TOAST_MAX_VISIBLE);
+    notifications.value = [
+      ...notifications.value,
+      { id, message, type, placement: opts?.placement, targetInstanceId: opts?.targetInstanceId },
+    ].slice(-TOAST_MAX_VISIBLE);
     setTimeout(() => {
       notifications.value = notifications.value.filter((n) => n.id !== id);
     }, 4000);
+  }
+
+  // ── 会话完成通知（0.2.0 P3）────────────────────────────
+  // 非活动会话 agent_end 时顶部 toast（可点击跳转），避免"切走就忘了回来看结果"。
+  // 窗口不可见/失焦时的系统通知走 Rust 侧（gateway agent_end_hook），不依赖此开关。
+  const NOTIFY_SESSION_COMPLETE_KEY = "piter:notifySessionComplete";
+
+  /** 从 wsSessions 列表查会话 label；未命中回退 instance_id 前 8 位 */
+  function getSessionLabel(instanceId: string): string {
+    for (const g of wsSessions.value) {
+      for (const s of g.sessions) {
+        if (s.instanceId === instanceId && s.label) return s.label;
+      }
+    }
+    return instanceId.slice(0, 8);
+  }
+
+  /** 会话完成时推送顶部 toast。受 localStorage 开关控制（默认开）。 */
+  function notifySessionCompleted(instanceId: string) {
+    try {
+      if (localStorage.getItem(NOTIFY_SESSION_COMPLETE_KEY) === "false") return;
+    } catch {
+      // localStorage 不可用（隐私模式等）时默认开启
+    }
+    const label = getSessionLabel(instanceId);
+    pushNotify("info", i18n.global.t("chat.sessionCompleted", { name: label }), {
+      placement: "top",
+      targetInstanceId: instanceId,
+    });
   }
 
   // ── 启动期会话诊断（扩展加载失败 / pi 启动失败）──
@@ -434,6 +474,10 @@ export function usePiConnection() {
         }
         // Agent is now idle — deliver queued outbox messages (or flush after abort).
         handleRunSettled(s);
+        // 会话完成通知：非活动会话完成时顶部 toast（活动会话完成不打扰）
+        if (instanceId && instanceId !== activeInstanceId.value) {
+          notifySessionCompleted(instanceId);
+        }
         break;
       }
 

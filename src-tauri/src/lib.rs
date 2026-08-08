@@ -19,6 +19,7 @@ pub fn identifier() -> String {
 pub fn run() {
     init::configure(tauri::Builder::default())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(init::generate_handlers())
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

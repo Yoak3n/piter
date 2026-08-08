@@ -2,6 +2,7 @@ pub mod cmd;
 pub mod handle;
 pub mod init;
 pub mod lightweight;
+pub mod notify;
 pub mod state;
 pub mod timer;
 pub mod tray;

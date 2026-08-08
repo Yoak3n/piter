@@ -57,6 +57,8 @@ pub fn start_pi_gateway(app: tauri::AppHandle) -> Result<String, String> {
     }
     match crate::base::init::try_start_gateway(&app) {
         Ok(Some((gw, web_url))) => {
+            // 与启动期一致：注册会话完成系统通知的 agent_end 观察点
+            crate::base::notify::init(&app, &gw);
             *slot.lock() = Some(gw);
             log::info!("[gateway] started on demand at {}", web_url);
             Ok(web_url)
