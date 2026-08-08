@@ -132,3 +132,38 @@ export interface ModelInfo {
   /** pi 模型库声明的输入模态（含 "image" 表示支持图片输入） */
   input?: string[];
 }
+
+/**
+ * pi 斜杠命令元信息（get_commands RPC，pi 0.83+）。
+ * 权威来源：pi-mono src/modes/rpc/rpc-types.ts —— 字段为 name/description/source/sourceInfo
+ * （本地 docs/rpc.md 的旧版 location/path 字段已过时，勿用）。
+ * 不含 TUI 内置命令（/settings、/hotkeys 等）：它们只在交互模式生效，RPC 不发也不执行。
+ */
+export interface SlashCommand {
+  /** 命令名（如 "piolium-smoke"、"skill:brave-search"）；调用时拼成 "/name" */
+  name: string;
+  description?: string;
+  /** 命令来源：extension（扩展）/ prompt（模板）/ skill（技能） */
+  source: "extension" | "prompt" | "skill";
+  /** 来源附加信息（如 path），UI tooltip 用 */
+  sourceInfo?: Record<string, unknown>;
+}
+
+/**
+ * 命令面板（Ctrl+K）中的一条可执行项。命令源为可扩展列表：
+ * 后续新增命令只需向 App.vue 的 items 数组里 push 一条（含 run 执行函数）。
+ */
+export interface PaletteItem {
+  /** 唯一 id（会话项用 "session:<instanceId>"） */
+  id: string;
+  /** 显示标题（会话项为会话 label） */
+  title: string;
+  /** 附加搜索词（id / 路径 / 项目名等，与标题一起参与模糊匹配） */
+  keywords?: string;
+  /** 右侧辅助说明（如会话所属项目名） */
+  hint?: string;
+  /** 类型：action = 动作命令；session = 会话切换目标；slash = pi 斜杠命令 */
+  kind: "action" | "session" | "slash";
+  /** 选中后执行（"选择即完成"，无确认步骤） */
+  run: () => void;
+}

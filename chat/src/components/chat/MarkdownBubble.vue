@@ -13,6 +13,8 @@ const props = defineProps<{
   content: string;
   mode: "user" | "assistant" | "streaming";
   timestamp?: number;
+  /** 弱化显示（如面板执行的 slash 命令：灰显"已执行命令"） */
+  muted?: boolean;
 }>();
 
 function renderMarkdown(content: string): string {
@@ -132,7 +134,10 @@ onMounted(() => {
 
 <template>
   <div class="msg" :class="mode === 'user' ? 'user-msg' : 'assistant-msg'">
-    <div class="msg-bubble" :class="mode === 'user' ? 'user-bubble' : 'assistant-bubble'">
+    <div
+      class="msg-bubble"
+      :class="mode === 'user' ? (muted ? 'user-bubble user-bubble-muted' : 'user-bubble') : 'assistant-bubble'"
+    >
       <div
         class="markdown-body"
         ref="bodyRef"
@@ -165,6 +170,9 @@ onMounted(() => {
 
 .msg-bubble { border-radius:var(--radius-md); padding:8px 12px; line-height:1.5; font-size:13px; position:relative; min-width:0; max-width:100%; }
 .user-bubble { background:var(--accent-soft); border:1px solid color-mix(in srgb, var(--accent) 15%, transparent); }
+/* 面板执行的 slash 命令：灰显（纯动作类命令不产 agent turn，弱化其存在感） */
+.user-bubble-muted { background:var(--bg-muted); border:1px solid var(--border); color:var(--text-tertiary); }
+.user-bubble-muted .markdown-body { opacity:0.75; }
 .assistant-bubble { background:var(--bg-panel); border:1px solid var(--border); }
 
 .msg-time { font-size:10px; color:var(--text-tertiary); margin-top:2px; padding:0 4px; user-select:none; }

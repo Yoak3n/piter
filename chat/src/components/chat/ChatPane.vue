@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import { useI18n } from "vue-i18n";
-import type { Message, ToolExecution, ChatTurn, Attachment, ImageContent, ModelRef } from "../../types";
+import type { Message, ToolExecution, ChatTurn, Attachment, ImageContent, ModelRef, SlashCommand } from "../../types";
 import type { PendingItem } from "../../composables/usePiConnection";
 import { buildPromptPayload } from "../../utils/attachments";
 import MessageTimeline from "./MessageTimeline.vue";
@@ -23,6 +23,7 @@ const props = defineProps<{
   attachments?: Attachment[];
   currentModel?: ModelRef | null;
   visionHint?: { text: string; key: number } | null;
+  slashCommands?: SlashCommand[] | null;
 }>();
 
 const emit = defineEmits<{
@@ -35,6 +36,7 @@ const emit = defineEmits<{
   (e: "update:attachments", attachments: Attachment[]): void;
   (e: "restart-pi"): void;
   (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
+  (e: "fetch-slash-commands"): void;
 }>();
 
 // Draft is owned by the parent (keyed by session), so switching sessions
@@ -118,6 +120,7 @@ function sendAndClose() {
       :attachments="attachments"
       :current-model="currentModel"
       :vision-hint="visionHint"
+      :slash-commands="slashCommands"
       @send="send"
       @steer="steer"
       @abort="emit('abort')"
@@ -126,6 +129,7 @@ function sendAndClose() {
       @update:attachments="emit('update:attachments', $event)"
       @expand="expanded = true"
       @restart-pi="emit('restart-pi')"
+      @fetch-slash-commands="emit('fetch-slash-commands')"
     />
     <FullscreenEditor
       v-model="inputText"

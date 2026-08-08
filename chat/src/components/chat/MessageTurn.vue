@@ -34,13 +34,19 @@ function toggleThinking(id: number) {
       />
       <div v-else class="msg system-msg">{{ sysMsg.content }}</div>
     </template>
-    <div v-if="turn.user" class="user-block">
+    <div v-if="turn.user" class="user-block" :class="{ 'is-slash': turn.user.meta?.slashCommand }">
+      <span v-if="turn.user.meta?.slashCommand" class="slash-exec-label">{{ $t("chat.slashExecuted") }}</span>
       <div v-if="turn.user.images?.length" class="msg-images user-images">
         <div v-for="(img, i) in turn.user.images" :key="i" class="msg-image-item">
           <img :src="imageContentToSrc(img)" :alt="img.mimeType" :title="img.mimeType" class="msg-image" />
         </div>
       </div>
-      <MarkdownBubble v-if="turn.user.content" mode="user" :content="turn.user.content" />
+      <MarkdownBubble
+        v-if="turn.user.content"
+        mode="user"
+        :content="turn.user.content"
+        :muted="turn.user.meta?.slashCommand === true"
+      />
     </div>
     <template v-for="(assistant, idx) in turn.assistants" :key="assistant.id">
       <ThinkingBlock
@@ -72,6 +78,9 @@ function toggleThinking(id: number) {
 .system-msg { align-self:center; font-size:10px; color:var(--text-tertiary); background:var(--bg-muted); padding:2px 10px; border-radius:var(--radius-sm); min-width:0; }
 .tool-executions { display:flex; flex-direction:column; gap:4px; align-self:flex-start; max-width:90%; min-width:0; }
 .user-block { display:flex; flex-direction:column; align-items:flex-end; align-self:flex-end; max-width:90%; min-width:0; gap:4px; }
+/* 面板执行的 slash 命令（meta.slashCommand）：整组弱化 + 灰显标签 */
+.user-block.is-slash { gap:2px; opacity:0.85; }
+.slash-exec-label { font-size:10px; color:var(--text-tertiary); padding:0 4px; user-select:none; }
 
 /* ── Message images (user thumbnails + assistant image blocks) ── */
 .msg-images { display:flex; flex-wrap:wrap; gap:6px; max-width:100%; min-width:0; }

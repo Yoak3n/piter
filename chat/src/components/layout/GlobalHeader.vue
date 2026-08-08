@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import ModelSelector from "../model/ModelSelector.vue";
 import LanShare from "./LanShare.vue";
-import { Settings } from "lucide-vue-next";
+import { Settings, Search } from "lucide-vue-next";
 import type { ModelRef } from "../../types";
 
 defineProps<{
@@ -17,6 +17,8 @@ defineProps<{
 const emit = defineEmits<{
   (e: "toggle-sidebar"): void;
   (e: "select-model", model: ModelRef): void;
+  /** 打开命令面板（Ctrl+K）——移动端无键盘，作为搜索入口 */
+  (e: "open-palette"): void;
 }>();
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -45,6 +47,14 @@ async function openAdmin() {
         :session-status="sessionStatus"
         @select-model="emit('select-model', $event)"
       />
+      <button
+        class="hamburger-btn palette-btn"
+        :title="$t('chat.cmdPaletteTitle')"
+        :aria-label="$t('chat.cmdPaletteTitle')"
+        @click="emit('open-palette')"
+      >
+        <Search :size="14" />
+      </button>
       <LanShare :mobile-mode="mobileMode" />
       <button
         v-if="isTauri"

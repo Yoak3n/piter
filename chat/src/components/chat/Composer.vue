@@ -3,10 +3,12 @@ import { ref, watch, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
 import { Send, Maximize, Square, Zap, Clock, X, Paperclip, FileText, Info } from "lucide-vue-next";
 import type { PendingItem } from "../../composables/usePiConnection";
-import type { Attachment, ModelRef } from "../../types";
+import type { Attachment, ModelRef, SlashCommand } from "../../types";
 import { useFileDrop } from "../../composables/useFileDrop";
+import { useRecentCommands } from "../../composables/useRecentCommands";
 import { filesToAttachments, clipboardImageFiles } from "../../utils/attachments";
 import { formatBytes, imageContentToSrc } from "../../utils/image";
+import SlashMenu, { type SlashMenuPosition } from "./SlashMenu.vue";
 
 const { t } = useI18n();
 
@@ -24,6 +26,8 @@ const props = defineProps<{
   currentModel?: ModelRef | null;
   /** 外部触发的提示（如切换模型后仍有附图）：key 递增时重新显示 */
   visionHint?: { text: string; key: number } | null;
+  /** 当前会话的 pi 斜杠命令列表（null = 未加载/失败，输入 / 时懒加载拉取） */
+  slashCommands?: SlashCommand[] | null;
 }>();
 
 const emit = defineEmits<{
@@ -36,6 +40,8 @@ const emit = defineEmits<{
   (e: "expand"): void;
   (e: "restart-pi"): void;
   (e: "update:attachments", attachments: Attachment[]): void;
+  /** 首字符 / 触发补全但命令缓存为空时请求拉取（懒加载） */
+  (e: "fetch-slash-commands"): void;
 }>();
 
 const inputRef = ref<HTMLTextAreaElement | null>(null);
@@ -53,11 +59,200 @@ function autoGrow() {
 function onInput(e: Event) {
   emit("update:modelValue", (e.target as HTMLTextAreaElement).value);
   nextTick(autoGrow);
+  refreshSlashMenu();
 }
 
 watch(() => props.modelValue, () => nextTick(autoGrow));
 
+// ── 斜杠命令补全（/ → pi 命令列表，触发语义对齐 pi TUI）─────────────────
+
+const slashMenuOpen = ref(false);
+const slashQuery = ref("");
+const slashHighlight = ref(0);
+const slashFiltered = ref<SlashCommand[]>([]);
+/** 浮层定位（精确到 caret 字符列） */
+const slashMenuPos = ref<SlashMenuPosition | null>(null);
+/** 中文输入法选词中：不刷新补全、不拦截 Enter */
+const composing = ref(false);
+
+/** 最近使用命令（本地记录，模块级单例：与命令面板共享） */
+const { recent, record: recordRecentCommand, reorderByRecent } = useRecentCommands();
+
+/** caret 所在行从行首到 caret 的文本（触发检测用） */
+function caretLinePrefix(): string {
+  const el = inputRef.value;
+  if (!el) return "";
+  const before = el.value.slice(0, el.selectionStart);
+  return before.slice(before.lastIndexOf("\n") + 1);
+}
+
+/**
+ * 精确测量 caret 相对输入区（.composer-main）的字符列坐标（mirror div 法）：
+ * 复制 textarea 的排版样式到一个隐藏 div，在 caret 处插入 marker span 测量其位置，
+ * 减去滚动偏移并校正 border/padding，得到 caret 的实际像素坐标。
+ */
+function measureCaret(): { x: number; y: number } | null {
+  const el = inputRef.value;
+  if (!el) return null;
+  const cs = window.getComputedStyle(el);
+  const mirror = document.createElement("div");
+  mirror.setAttribute("aria-hidden", "true");
+  mirror.style.cssText = [
+    "position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;",
+    "white-space:pre-wrap;overflow-wrap:break-word;word-break:break-word;",
+    `font-family:${cs.fontFamily};font-size:${cs.fontSize};font-weight:${cs.fontWeight};`,
+    `font-style:${cs.fontStyle};line-height:${cs.lineHeight};letter-spacing:${cs.letterSpacing};`,
+    `word-spacing:${cs.wordSpacing};text-indent:${cs.textIndent};text-transform:${cs.textTransform};`,
+    `tab-size:${cs.tabSize};`,
+    `padding:${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft};`,
+    `border-top:${cs.borderTopWidth} ${cs.borderTopStyle} ${cs.borderTopColor};`,
+    `border-right:${cs.borderRightWidth} ${cs.borderRightStyle} ${cs.borderRightColor};`,
+    `border-bottom:${cs.borderBottomWidth} ${cs.borderBottomStyle} ${cs.borderBottomColor};`,
+    `border-left:${cs.borderLeftWidth} ${cs.borderLeftStyle} ${cs.borderLeftColor};`,
+    `width:${el.clientWidth}px;box-sizing:${cs.boxSizing};`,
+  ].join("");
+  document.body.appendChild(mirror);
+  const caret = el.selectionStart;
+  const before = document.createTextNode(el.value.slice(0, caret));
+  const after = document.createTextNode(el.value.slice(caret));
+  const marker = document.createElement("span");
+  mirror.appendChild(before);
+  mirror.appendChild(marker);
+  mirror.appendChild(after);
+  const x = marker.offsetLeft - el.scrollLeft;
+  const y = marker.offsetTop - el.scrollTop;
+  document.body.removeChild(mirror);
+  const borderLeft = parseFloat(cs.borderLeftWidth) || 0;
+  const borderTop = parseFloat(cs.borderTopWidth) || 0;
+  // offsetLeft/offsetTop 是 textarea 相对 .composer-main（position:relative）的 border box 位置
+  return { x: el.offsetLeft + x + borderLeft, y: el.offsetTop + y + borderTop };
+}
+
+/** 菜单定位：默认显示在 caret 行的上方（不遮挡输入行），left 对齐 caret 字符列；
+ *  但 caret 贴近容器顶部时向上弹会溢出（首行场景）→ 翻转为向下弹出 */
+const MENU_EST_HEIGHT = 260;
+function updateSlashMenuPos() {
+  const parent = inputRef.value?.parentElement;
+  const pos = measureCaret();
+  if (!parent || !pos) return;
+  if (pos.y < MENU_EST_HEIGHT) {
+    slashMenuPos.value = { left: pos.x, top: pos.y + 8 };
+  } else {
+    slashMenuPos.value = { left: pos.x, bottom: parent.clientHeight - pos.y + 8 };
+  }
+}
+
+/** 触发语义：caret 所在行以 / 开头即触发（对齐 pi TUI 0.51.6+），
+ *  前缀词为 ^/([\w:.-]*)；无匹配（如 / 后是普通文本/路径）→ 菜单隐藏，不打扰 */
+function refreshSlashMenu() {
+  if (composing.value) return; // IME 选词期间不刷新补全
+  const el = inputRef.value;
+  if (!el) return;
+  const m = caretLinePrefix().match(/^\/([\w:.-]*)$/);
+  if (!m) {
+    slashMenuOpen.value = false;
+    return;
+  }
+  const cmds = props.slashCommands ?? null;
+  if (cmds === null) {
+    // 缓存为空（首次 / 或上次拉取失败）：请求拉取，数据到达后由 watcher 重新刷新
+    emit("fetch-slash-commands");
+    return;
+  }
+  const query = m[1].toLowerCase();
+  // 最近使用命令置顶（recent 中且命中当前过滤词的提前，保持最近使用顺序）
+  const filtered = reorderByRecent(
+    cmds.filter((c) => {
+      const n = c.name.toLowerCase();
+      return n.startsWith(query) || n.includes(query);
+    }),
+  );
+  // 过滤词变化才重置高亮（↑↓ 只移动 caret、不改文本，保留高亮）
+  if (query !== slashQuery.value) slashHighlight.value = 0;
+  slashQuery.value = query;
+  slashFiltered.value = filtered;
+  slashMenuOpen.value = filtered.length > 0;
+  if (slashMenuOpen.value) updateSlashMenuPos();
+}
+
+// 命令列表到达（懒加载成功后）：caret 行仍匹配 / 前缀则立即弹出菜单；
+// 切会话/缓存失效（置 null）时立即关闭，防止残留上一个会话的过期项
+watch(() => props.slashCommands, (cmds) => {
+  if (cmds === null || cmds === undefined) {
+    slashMenuOpen.value = false;
+    slashFiltered.value = [];
+    return;
+  }
+  refreshSlashMenu();
+});
+
+// 最近使用记录变化：菜单开着时重新排序置顶项（查询词不变，不重置高亮）
+watch(recent, () => {
+  if (slashMenuOpen.value) refreshSlashMenu();
+});
+
+/** 选中命令：把行首 /前缀词 替换为 "/name "，caret 置于末尾；行内后续内容原样保留 */
+function acceptSlash(cmd: SlashCommand) {
+  const el = inputRef.value;
+  if (!el) return;
+  const start = el.selectionStart;
+  const before = el.value.slice(0, start);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const inserted = `/${cmd.name} `;
+  const newValue = el.value.slice(0, lineStart) + inserted + el.value.slice(start);
+  emit("update:modelValue", newValue);
+  slashMenuOpen.value = false;
+  slashFiltered.value = [];
+  recordRecentCommand(cmd.name); // 本地记录，用于下次补全/面板置顶
+  nextTick(() => {
+    const caret = lineStart + inserted.length;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+    autoGrow();
+  });
+}
+
+/** ↑↓←→ 等导航键只移动 caret、不触发 input：单独刷新补全状态 */
+function onKeyup(e: KeyboardEvent) {
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(e.key)) {
+    refreshSlashMenu();
+  }
+}
+
+function onCompositionStart() {
+  composing.value = true;
+}
+
+function onCompositionEnd() {
+  composing.value = false;
+  refreshSlashMenu();
+}
+
 function handleKeydown(e: KeyboardEvent) {
+  if (composing.value) return; // IME 选词期间不拦截 Enter、不做补全导航
+  // 菜单打开时键盘导航优先于现有 Enter 发送逻辑
+  if (slashMenuOpen.value && slashFiltered.value.length > 0) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      slashHighlight.value = (slashHighlight.value + 1) % slashFiltered.value.length;
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      slashHighlight.value = (slashHighlight.value - 1 + slashFiltered.value.length) % slashFiltered.value.length;
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      acceptSlash(slashFiltered.value[slashHighlight.value]);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      slashMenuOpen.value = false;
+      return;
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     emit("send");
@@ -223,7 +418,20 @@ watch(
           rows="2"
           @input="onInput"
           @keydown="handleKeydown"
+          @keyup="onKeyup"
           @paste="handlePaste"
+          @click="refreshSlashMenu"
+          @scroll="refreshSlashMenu"
+          @blur="slashMenuOpen = false"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
+        />
+        <SlashMenu
+          v-if="slashMenuOpen && slashFiltered.length"
+          :commands="slashFiltered"
+          :highlight="slashHighlight"
+          :position="slashMenuPos ?? undefined"
+          @select="acceptSlash"
         />
         <div class="composer-btns">
           <button

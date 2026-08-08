@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { TitleBar } from "@piter/ui";
 import ChatPane from "./components/chat/ChatPane.vue";
+import CommandPalette from "./components/chat/CommandPalette.vue";
 import SessionSidebar from "./components/layout/SessionSidebar.vue";
 import GlobalHeader from "./components/layout/GlobalHeader.vue";
 import NewSessionPane from "./components/session/NewSessionPane.vue";
 import { usePiConnection } from "./composables/usePiConnection";
 import { useSessions } from "./composables/useSessions";
+import { useRecentCommands } from "./composables/useRecentCommands";
 import { i18n } from "./i18n";
 import { supportsVision, registerModelCapabilities } from "./utils/modelCapability";
 import { buildPromptPayload } from "./utils/attachments";
-import type { ModelRef, Attachment, ImageContent } from "./types";
+import type { ModelRef, Attachment, ImageContent, PaletteItem } from "./types";
 
 // ─── Theme ────────────────────────────────────────────────────────────────
 // This app is served by the gateway as a plain web page and must not depend
@@ -48,6 +50,7 @@ const {
   steeringQueue,
   outbox,
   notifications,
+  slashCommands,
   setCurrentModel,
   connectWebSocket,
   sendPrompt,
@@ -60,6 +63,7 @@ const {
   restartPi,
   clearMessages,
   sendCommand,
+  fetchSlashCommands,
   setActiveInstanceId,
 } = usePiConnection();
 
@@ -208,6 +212,106 @@ function handleRespondExtension(payload: {
   respondExtensionDialog(payload.id, payload.answer);
 }
 
+// ── 命令面板（Ctrl+K）─────────────────────────────────────────────────
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/** 最近使用 pi 命令（模块级单例，与斜杠补全共享同一份记录） */
+const { record: recordRecentCommand, reorderByRecent } = useRecentCommands();
+
+const paletteOpen = ref(false);
+function openPalette() {
+  paletteOpen.value = true;
+  // "运行 pi 命令"分区复用 get_commands 数据源：缓存为空时懒加载
+  fetchSlashCommands();
+}
+function closePalette() {
+  paletteOpen.value = false;
+}
+
+/** 桌面端跳转管理面板/设置（Tauri 事件，与 GlobalHeader 设置按钮同一路径） */
+async function openAdmin() {
+  if (!isTauri) return;
+  try {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit("navigate-to-admin");
+  } catch (e) {
+    console.error("[nav] emit navigate-to-admin failed:", e);
+  }
+}
+
+/**
+ * 命令源（可扩展）：动作命令在前、会话切换目标在后。
+ * "选择即完成"：选中即执行，无确认步骤；对象操作类（置顶/归档/删除/重命名）留在侧边栏，不进面板。
+ * 后续新增命令（如跨会话搜索）只需向此列表 push 一条。
+ */
+const paletteItems = computed<PaletteItem[]>(() => {
+  const items: PaletteItem[] = [];
+  if (isTauri) {
+    items.push({
+      id: "open-settings",
+      title: i18n.global.t("chat.cmdOpenSettings"),
+      keywords: "settings admin providers 设置 管理 面板",
+      kind: "action",
+      run: () => void openAdmin(),
+    });
+  }
+  items.push({
+    id: "new-session",
+    title: i18n.global.t("chat.cmdNewSession"),
+    keywords: "new chat project 新建 会话 项目",
+    kind: "action",
+    run: () => handleNewSession(),
+  });
+  // "运行 pi 命令"分区：复用 get_commands 数据源（与斜杠补全共享），最近使用置顶
+  for (const c of reorderByRecent(slashCommands.value ?? [])) {
+    const srcLabel =
+      c.source === "prompt"
+        ? i18n.global.t("chat.slashSourcePrompt")
+        : c.source === "skill"
+          ? i18n.global.t("chat.slashSourceSkill")
+          : i18n.global.t("chat.slashSourceExtension");
+    items.push({
+      id: `slash:${c.name}`,
+      title: `/${c.name}`,
+      keywords: `pi command ${c.source} ${c.description ?? ""}`,
+      hint: c.description || srcLabel,
+      kind: "slash",
+      run: () => {
+        recordRecentCommand(c.name);
+        // meta.slashCommand：时间线灰显"已执行命令"（扩展命令不产 agent turn，避免孤立空消息）
+        sendPrompt(`/${c.name}`, undefined, undefined, undefined, { slashCommand: true });
+      },
+    });
+  }
+  for (const project of wsSessions.value) {
+    for (const s of project.sessions) {
+      const iid = s.instanceId ?? s.id;
+      items.push({
+        id: `session:${iid}`,
+        title: s.label || s.id,
+        keywords: `${s.id} ${s.cwd ?? ""} ${project.name}`,
+        hint: project.name,
+        kind: "session",
+        run: () => handleSelectSession(iid),
+      });
+    }
+  }
+  return items;
+});
+
+function handlePaletteRun(item: PaletteItem) {
+  paletteOpen.value = false;
+  item.run();
+}
+
+/** Ctrl/Cmd+K 全局开关（web 端与浏览器无默认冲突，可安全使用；输入框聚焦时也接管） */
+function onGlobalKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    paletteOpen.value = !paletteOpen.value;
+  }
+}
+
 async function handleSelectSession(instanceId: string) {
   showNewSession.value = false;
   const allProjects = wsSessions.value.length > 0 ? wsSessions.value : sessions.value;
@@ -302,6 +406,12 @@ onMounted(() => {
   ensureDefaultModel().then((m) => {
     if (m && !currentModel.value) setCurrentModel(m);
   });
+  // 命令面板：Ctrl/Cmd+K 全局监听
+  window.addEventListener("keydown", onGlobalKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onGlobalKeydown);
 });
 
 // When a new instance becomes active, switch to chat pane and send pending prompt
@@ -387,6 +497,7 @@ watch(sessionStatus, (status) => {
           :mobile-mode="mobileMode"
           @toggle-sidebar="toggleSidebar"
           @select-model="handleModelSelect"
+          @open-palette="openPalette"
         />
 
         <NewSessionPane
@@ -413,6 +524,7 @@ watch(sessionStatus, (status) => {
           :attachments="activeAttachments"
           :current-model="currentModel"
           :vision-hint="visionHint"
+          :slash-commands="slashCommands"
           @send="handleSend"
           @steer="handleSteer"
           @abort="handleAbort"
@@ -422,6 +534,7 @@ watch(sessionStatus, (status) => {
           @update:attachments="handleAttachmentsUpdate"
           @restart-pi="restartPi"
           @respond-extension="handleRespondExtension"
+          @fetch-slash-commands="fetchSlashCommands"
         />
       </main>
     </div>
@@ -437,6 +550,14 @@ watch(sessionStatus, (status) => {
         {{ n.message }}
       </div>
     </div>
+
+    <!-- 命令面板（Ctrl+K / 搜索按钮） -->
+    <CommandPalette
+      :open="paletteOpen"
+      :items="paletteItems"
+      @close="closePalette"
+      @run="handlePaletteRun"
+    />
   </div>
 </template>
 

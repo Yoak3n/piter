@@ -7,6 +7,7 @@ import type {
   ModelRef,
   ImageContent,
   ExtensionUiCard,
+  SlashCommand,
 } from "../types";
 import {
   extractTextContent,
@@ -24,6 +25,8 @@ export interface PendingItem {
   text: string;
   model?: ModelRef;
   images?: ImageContent[];
+  /** 投递时附加到 user 消息的 meta（如面板执行的 slash 命令灰显标记） */
+  meta?: Record<string, unknown>;
 }
 
 /** 即发即弃的通知（extension_ui_request 的 notify 方法），不阻塞 pi */
@@ -56,6 +59,8 @@ interface SessionState {
   warnedNoOutput: boolean;
   /** 扩展 UI 卡片超时自动取消的定时器（卡片本身以消息形式存在于 messages 中） */
   dialogTimer: ReturnType<typeof setTimeout> | null;
+  /** 该会话的 pi 斜杠命令列表缓存；null = 未加载 / 加载失败（触发时重试） */
+  slashCommands: SlashCommand[] | null;
 }
 
 /** 流式发送的显式行为：目前仅插队（steer）会走 pi 原生队列 */
@@ -86,6 +91,7 @@ function createSessionState(instanceId: string): SessionState {
     lastProgressAt: 0,
     warnedNoOutput: false,
     dialogTimer: null,
+    slashCommands: null,
   });
 }
 
@@ -148,6 +154,8 @@ export function usePiConnection() {
   const currentModel = computed(() => activeSessionState.value.currentModel);
   const steeringQueue = computed(() => activeSessionState.value.queue.steering);
   const outbox = computed(() => activeSessionState.value.outbox);
+  /** 当前活动会话的 pi 斜杠命令列表（null = 未加载/失败，输入 / 时懒加载） */
+  const slashCommands = computed(() => activeSessionState.value.slashCommands);
 
   // ── 扩展通知（extension_ui_request notify，即发即弃）──
   const notifications = ref<ExtensionNotify[]>([]);
@@ -662,6 +670,31 @@ export function usePiConnection() {
 
       case "response": {
         const cmd = data.command as string;
+        // pi 斜杠命令列表（get_commands RPC）：解析 data.commands 写入对应会话缓存。
+        // 失败（success:false）静默：缓存留 null，下次输入 / 时由 fetchSlashCommands 重试。
+        if (cmd === "get_commands") {
+          const s = getState(instanceId);
+          if (s && data.success) {
+            const d = data.data as Record<string, unknown> | undefined;
+            const commands = d?.commands;
+            if (Array.isArray(commands)) {
+              s.slashCommands = commands
+                .map((c): SlashCommand => {
+                  const raw = c as Record<string, unknown>;
+                  const src = raw.source;
+                  const source: SlashCommand["source"] = src === "prompt" || src === "skill" ? src : "extension";
+                  return {
+                    name: String(raw.name ?? ""),
+                    description: raw.description as string | undefined,
+                    source,
+                    sourceInfo: (raw.sourceInfo as Record<string, unknown>) || undefined,
+                  };
+                })
+                .filter((c) => c.name.length > 0);
+            }
+          }
+          break;
+        }
         // 模型切换失败也走现有 system 消息链路提示（失败时 prompt 仍会用旧模型继续）
         if ((cmd === "set_model" || cmd === "cycle_model") && data.success === false) {
           const s = getOrCreateState(instanceId);
@@ -673,6 +706,9 @@ export function usePiConnection() {
           const iid = data.instanceId as string | undefined;
           if (iid) {
             activeInstanceId.value = iid;
+            // 命令列表随会话变化：新会话缓存必须失效，触发时重新拉取
+            const s = getState(iid);
+            if (s) s.slashCommands = null;
           }
         }
         if (cmd === "get_state" && data.success) {
@@ -782,6 +818,8 @@ export function usePiConnection() {
     s.queue = { steering: [] };
     s.outbox = [];
     s.abortFlushPending = false;
+    // 命令列表随会话/项目配置变化：快照重建后失效，输入 / 时重新拉取
+    s.slashCommands = null;
     if (s.abortTimer) clearTimeout(s.abortTimer);
     s.abortTimer = null;
     s.warnedNoOutput = false;
@@ -908,6 +946,7 @@ export function usePiConnection() {
     desiredModel?: ModelRef | null,
     behavior?: DeliveryBehavior,
     images?: ImageContent[],
+    meta?: Record<string, unknown>,
   ) {
     if (!text.trim() && (!images || images.length === 0)) return;
     const s = getOrCreateState(activeInstanceId.value);
@@ -915,10 +954,15 @@ export function usePiConnection() {
     const streaming = s.isStreaming;
     // 未显式指定时回退到当前会话自身的 model 状态——发送永远跟随会话，而非全局残留值。
     const model = desiredModel ?? s.currentModel;
+    // 附加 meta（如面板执行的 slash 命令灰显标记）；不因空对象/空数组生成多余字段
+    const extras = (m?: Record<string, unknown>): Partial<Message> => ({
+      ...(meta || m ? { meta: m ?? meta } : {}),
+      ...(images?.length ? { images } : {}),
+    });
 
     if (behavior === "steer") {
       // 插队：流式中立即以 steer 投递（pi 原生队列，turn 边界生效）；空闲时直接发普通 prompt
-      addMessage(s, "user", text, images?.length ? { images } : undefined);
+      addMessage(s, "user", text, extras());
       if (!iid) {
         addMessage(s, "system", "No active session yet — please wait for the session to be ready.");
         return;
@@ -935,11 +979,11 @@ export function usePiConnection() {
       // 排队期间不进入消息时间线（仅队列条展示），投递时才 addMessage 进时间线。
       // 不调用 pi 的 follow_up 命令，这样投递前可以取消/升级为插队。
       const oid = s.msgId++;
-      s.outbox = [...s.outbox, { id: oid, text, model: model ?? undefined, images }];
+      s.outbox = [...s.outbox, { id: oid, text, model: model ?? undefined, images, meta }];
       return;
     }
 
-    addMessage(s, "user", text, images?.length ? { images } : undefined);
+    addMessage(s, "user", text, extras());
     // 空闲：立即发送
     if (!iid) {
       addMessage(s, "system", "No active session yet — please wait for the session to be ready.");
@@ -967,7 +1011,10 @@ export function usePiConnection() {
     const [first, ...rest] = s.outbox;
     s.outbox = rest;
     // 投递时刻才进入消息时间线（排队期间仅显示在队列条）
-    addMessage(s, "user", first.text, first.images?.length ? { images: first.images } : undefined);
+    addMessage(s, "user", first.text, {
+      ...(first.meta ? { meta: first.meta } : {}),
+      ...(first.images?.length ? { images: first.images } : {}),
+    });
     const payload = withImages({ type: "prompt", message: first.text }, first.images);
     if (first.model) payload.desiredModel = first.model;
     // 投递到 outbox 所属会话（s.instanceId），而非当前活动会话——
@@ -988,7 +1035,10 @@ export function usePiConnection() {
     const dropped = s.outbox.slice(0, -1);
     s.outbox = [];
     // 投递时刻才进入消息时间线（排队期间仅显示在队列条）
-    addMessage(s, "user", latest.text, latest.images?.length ? { images: latest.images } : undefined);
+    addMessage(s, "user", latest.text, {
+      ...(latest.meta ? { meta: latest.meta } : {}),
+      ...(latest.images?.length ? { images: latest.images } : {}),
+    });
     if (dropped.length > 0) {
       addMessage(
         s,
@@ -1019,7 +1069,10 @@ export function usePiConnection() {
     if (!item) return;
     s.outbox = s.outbox.filter((o) => o.id !== id);
     // 升级为插队即立即投递，此刻才进入消息时间线
-    addMessage(s, "user", item.text, item.images?.length ? { images: item.images } : undefined);
+    addMessage(s, "user", item.text, {
+      ...(item.meta ? { meta: item.meta } : {}),
+      ...(item.images?.length ? { images: item.images } : {}),
+    });
     const payload = withImages({ type: "prompt", message: item.text }, item.images);
     if (item.model) payload.desiredModel = item.model;
     if (s.isStreaming) payload.streamingBehavior = "steer";
@@ -1143,6 +1196,13 @@ export function usePiConnection() {
     return false;
   }
 
+  /** 懒加载当前活动会话的 pi 斜杠命令列表（仅缓存为空时；失败静默，下次触发重试） */
+  function fetchSlashCommands() {
+    const s = activeSessionState.value;
+    if (s.slashCommands !== null || !s.instanceId) return;
+    sendCommand({ type: "get_commands", id: "slash-cmds" }, s.instanceId);
+  }
+
   function newSession(cwd: string, name: string, model?: ModelRef | null) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       const payload: Record<string, unknown> = { type: "new_session", cwd, name };
@@ -1170,6 +1230,9 @@ export function usePiConnection() {
       s.messages = initialMessages;
       s.msgId = initialMessages.length;
     }
+    // 命令列表随会话变化（扩展/项目配置不同）：切会话后失效，触发时重新拉取
+    const target = getOrCreateState(instanceId);
+    target.slashCommands = null;
     activeInstanceId.value = instanceId;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
@@ -1236,10 +1299,12 @@ export function usePiConnection() {
     steeringQueue,
     outbox,
     notifications,
+    slashCommands,
     setCurrentModel,
     connectWebSocket,
     sendPrompt,
     sendCommand,
+    fetchSlashCommands,
     respondExtensionDialog,
     abortGeneration,
     cancelQueued,
