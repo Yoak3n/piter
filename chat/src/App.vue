@@ -12,7 +12,8 @@ import { useRecentCommands } from "./composables/useRecentCommands";
 import { i18n } from "./i18n";
 import { supportsVision, registerModelCapabilities } from "./utils/modelCapability";
 import { buildPromptPayload } from "./utils/attachments";
-import type { ModelRef, Attachment, ImageContent, PaletteItem } from "./types";
+import type { ModelRef, Attachment, ImageContent, PaletteItem, SearchHit } from "./types";
+import type { ExtensionNotify } from "./composables/usePiConnection";
 
 // ─── Theme ────────────────────────────────────────────────────────────────
 // This app is served by the gateway as a plain web page and must not depend
@@ -80,6 +81,16 @@ const pendingFirstAttachments = ref<Attachment[] | null>(null);
 // 新会话创建时携带的 model：首次激活时 seed 到该会话的 currentModel，
 // 使新会话立即显示所选 model（pi 上报前不至于回退到默认）。
 const pendingNewModel = ref<ModelRef | null>(null);
+
+// ── 扩展通知 toast 双容器（0.2.0 P3）────────────────────────
+// 扩展 notify 保持默认 bottom（底部居中，不挡输入区指针）；会话完成等走 top（顶部，可点击跳转）。
+const bottomNotifs = computed(() => notifications.value.filter((n) => n.placement !== "top"));
+const topNotifs = computed(() => notifications.value.filter((n) => n.placement === "top"));
+
+/** 点击可跳转 toast（会话完成）→ 切换到目标会话 */
+function handleToastClick(n: ExtensionNotify) {
+  if (n.targetInstanceId) switchSession(n.targetInstanceId);
+}
 
 // 全局默认模型缓存（/api/pi/settings）：该 instance 未指定 model 时回退用它
 const defaultModel = ref<ModelRef | null>(null);
@@ -226,6 +237,81 @@ function openPalette() {
 }
 function closePalette() {
   paletteOpen.value = false;
+  paletteSearchResults.value = [];
+  paletteSearching.value = false;
+}
+
+// ── 跨会话搜索（面板搜索分区）─────────────────────────────────────────
+// 面板输入即搜索词：≥3 字符后防抖 250ms 调 /api/search（trigram 索引下限），
+// 结果转 PaletteItem（kind: "search"）注入面板；跳转 = 切会话 + 滚动定位。
+const paletteSearchResults = ref<PaletteItem[]>([]);
+const paletteSearching = ref(false);
+let paletteSearchTimer: ReturnType<typeof setTimeout> | null = null;
+/** 当前生效的搜索词（丢弃迟到的旧请求结果） */
+let paletteSearchQuery = "";
+
+function relativeTime(ts?: number): string {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return i18n.global.t("common.timeJustNow");
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  return `${Math.floor(hrs / 24)}d`;
+}
+
+function onPaletteQuery(q: string) {
+  if (paletteSearchTimer) clearTimeout(paletteSearchTimer);
+  const trimmed = q.trim();
+  if (trimmed.length < 3) {
+    paletteSearchQuery = "";
+    paletteSearchResults.value = [];
+    paletteSearching.value = false;
+    return;
+  }
+  paletteSearchQuery = trimmed;
+  paletteSearching.value = true;
+  paletteSearchTimer = setTimeout(async () => {
+    // 面板已关闭（Esc/点击外部）：结果不再注入
+    if (!paletteOpen.value) return;
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}&limit=50`);
+      const data = await res.json();
+      // 请求期间用户又改了词：丢弃这份过期结果
+      if (paletteSearchQuery !== trimmed) return;
+      const hits: SearchHit[] = data.results ?? [];
+      paletteSearchResults.value = hits.map((hit) => {
+        const hint = [
+          hit.projectName,
+          hit.label,
+          relativeTime(hit.timestamp),
+        ].filter(Boolean).join(" · ");
+        return {
+          id: `search:${hit.sessionId}:${hit.timestamp ?? hit.entryId ?? "?"}`,
+          title: hit.snippet || hit.label || hit.sessionId,
+          keywords: hit.label ?? "",
+          hint,
+          kind: "search" as const,
+          run: () => handleSearchJump(hit, trimmed),
+        };
+      });
+    } catch {
+      if (paletteSearchQuery === trimmed) paletteSearchResults.value = [];
+    } finally {
+      if (paletteSearchQuery === trimmed) paletteSearching.value = false;
+    }
+  }, 250);
+}
+
+/** 跳转目标：切到命中的会话后滚动到对应消息（等快照到达后由 MessageTimeline 消费） */
+const pendingScrollTarget = ref<{ sessionId: string; timestamp?: number; query: string } | null>(null);
+
+function handleSearchJump(hit: SearchHit, query: string) {
+  // 先切会话（同步完成 activeInstanceId 切换），再设跳转目标——
+  // 避免 watch 在旧会话的消息上误定位并提前清掉目标
+  handleSelectSession(hit.sessionId, true);
+  pendingScrollTarget.value = { sessionId: hit.sessionId, timestamp: hit.timestamp, query };
 }
 
 /** 桌面端跳转管理面板/设置（Tauri 事件，与 GlobalHeader 设置按钮同一路径） */
@@ -301,6 +387,8 @@ const paletteItems = computed<PaletteItem[]>(() => {
 
 function handlePaletteRun(item: PaletteItem) {
   paletteOpen.value = false;
+  paletteSearchResults.value = [];
+  paletteSearching.value = false;
   item.run();
 }
 
@@ -312,7 +400,9 @@ function onGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
-async function handleSelectSession(instanceId: string) {
+async function handleSelectSession(instanceId: string, keepScroll = false) {
+  // 普通会话切换（侧边栏/面板会话项）会清掉搜索跳转目标；搜索跳转传入 keepScroll
+  if (!keepScroll) pendingScrollTarget.value = null;
   showNewSession.value = false;
   const allProjects = wsSessions.value.length > 0 ? wsSessions.value : sessions.value;
   // 重启后前端内存中没有 per-instance model：从会话列表（runtime 优先、DB 兜底）
@@ -525,6 +615,8 @@ watch(sessionStatus, (status) => {
           :current-model="currentModel"
           :vision-hint="visionHint"
           :slash-commands="slashCommands"
+          :scroll-target="pendingScrollTarget"
+          @scroll-handled="pendingScrollTarget = null"
           @send="handleSend"
           @steer="handleSteer"
           @abort="handleAbort"
@@ -539,13 +631,33 @@ watch(sessionStatus, (status) => {
       </main>
     </div>
 
-    <!-- 扩展通知 toast（notify，即发即弃） -->
-    <div v-if="notifications.length" class="ext-toasts" aria-live="polite">
+    <!-- 扩展通知 toast（notify，即发即弃）→ 双容器：底部 = 扩展 notify（原位置，点击穿透）；
+         顶部 = 会话完成等需要提示的场景（可点击跳转） -->
+    <div
+      v-if="bottomNotifs.length"
+      class="ext-toasts ext-toasts--bottom"
+      aria-live="polite"
+    >
       <div
-        v-for="n in notifications"
+        v-for="n in bottomNotifs"
         :key="n.id"
         class="ext-toast"
         :class="`ext-toast--${n.type}`"
+      >
+        {{ n.message }}
+      </div>
+    </div>
+    <div
+      v-if="topNotifs.length"
+      class="ext-toasts ext-toasts--top"
+      aria-live="polite"
+    >
+      <div
+        v-for="n in topNotifs"
+        :key="n.id"
+        class="ext-toast ext-toast--clickable"
+        :class="`ext-toast--${n.type}`"
+        @click="handleToastClick(n)"
       >
         {{ n.message }}
       </div>
@@ -555,8 +667,11 @@ watch(sessionStatus, (status) => {
     <CommandPalette
       :open="paletteOpen"
       :items="paletteItems"
+      :search-results="paletteSearchResults"
+      :searching="paletteSearching"
       @close="closePalette"
       @run="handlePaletteRun"
+      @update:query="onPaletteQuery"
     />
   </div>
 </template>
@@ -611,7 +726,6 @@ watch(sessionStatus, (status) => {
 .ext-toasts {
   position: fixed;
   left: 50%;
-  bottom: 24px;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
@@ -619,6 +733,13 @@ watch(sessionStatus, (status) => {
   gap: 8px;
   z-index: 90;
   pointer-events: none;
+}
+.ext-toasts--bottom {
+  bottom: 24px;
+}
+.ext-toasts--top {
+  /* 顶部 toast 置于标题栏（44px，--titlebar-h 可覆盖）下方，避免遮挡拖拽区与窗口控制按钮 */
+  top: calc(var(--titlebar-h, 44px) + 12px);
 }
 .ext-toast {
   max-width: min(420px, calc(100vw - 32px));
@@ -639,6 +760,19 @@ watch(sessionStatus, (status) => {
 .ext-toast--error {
   border-color: color-mix(in srgb, var(--danger) 45%, transparent);
   color: var(--danger);
+}
+/* 可点击跳转的 toast（会话完成）：恢复指针事件 + hover/active 反馈。
+   底部扩展 toast 保持 pointer-events:none，避免挡住输入区点击。 */
+.ext-toast--clickable {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+.ext-toast--clickable:hover {
+  border-color: var(--primary);
+}
+.ext-toast--clickable:active {
+  transform: scale(0.97);
 }
 @keyframes extToastIn {
   from { opacity: 0; transform: translateY(8px); }

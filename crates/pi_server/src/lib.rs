@@ -1,6 +1,7 @@
 pub mod broker;
 pub mod gateway;
 pub mod resolve;
+pub mod search;
 pub mod stats;
 
 pub use broker::PiAgentSettings;

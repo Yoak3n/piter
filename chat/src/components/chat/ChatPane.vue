@@ -24,6 +24,8 @@ const props = defineProps<{
   currentModel?: ModelRef | null;
   visionHint?: { text: string; key: number } | null;
   slashCommands?: SlashCommand[] | null;
+  /** 跨会话搜索跳转目标：切到该会话后滚动定位到对应消息 */
+  scrollTarget?: { sessionId: string; timestamp?: number; query: string } | null;
 }>();
 
 const emit = defineEmits<{
@@ -37,6 +39,7 @@ const emit = defineEmits<{
   (e: "restart-pi"): void;
   (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
   (e: "fetch-slash-commands"): void;
+  (e: "scroll-handled"): void;
 }>();
 
 // Draft is owned by the parent (keyed by session), so switching sessions
@@ -109,7 +112,9 @@ function sendAndClose() {
       :current-assistant-content="currentAssistantContent"
       :current-thinking="currentThinking"
       :tool-executions="toolExecutions"
+      :scroll-to="scrollTarget"
       @respond-extension="emit('respond-extension', $event)"
+      @scroll-handled="emit('scroll-handled')"
     />
     <Composer
       v-model="inputText"

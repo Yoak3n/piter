@@ -10,14 +10,18 @@
 //! - `global_extensions` — global extension names
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
+use serde::Serialize;
 
 // ─── Database Handle ────────────────────────────────────────────────────────
 
 pub struct Db {
     conn: Mutex<Connection>,
+    /// FTS5 availability (compile-time flag; false → search falls back to LIKE).
+    fts_available: AtomicBool,
 }
 
 impl Db {
@@ -36,6 +40,7 @@ impl Db {
 
         let db = Arc::new(Self {
             conn: Mutex::new(conn),
+            fts_available: AtomicBool::new(false),
         });
         db.migrate()?;
         db.auto_link_sessions();
@@ -124,6 +129,59 @@ impl Db {
         if !cols.iter().any(|c| c == "model_provider") {
             conn.execute("ALTER TABLE sessions ADD COLUMN model_provider TEXT", [])
                 .map_err(|e| format!("migrate add model_provider: {}", e))?;
+        }
+
+        // ── Cross-session search index (0.2.0) ──────────────────────────
+        // session_messages holds the indexed rows; the FTS5 virtual table is
+        // best-effort over it (trigram tokenizer → CJK substring matching).
+        // The index is kept fresh by `search::index_if_stale` (file-mtime
+        // comparison) and cleaned up when a session is deleted.
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS session_messages (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id  TEXT NOT NULL,
+                entry_id    TEXT,
+                role        TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                timestamp   INTEGER,
+                file_mtime  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_messages_session
+                ON session_messages(session_id);
+            CREATE TABLE IF NOT EXISTS search_index_state (
+                session_id  TEXT PRIMARY KEY,
+                file_mtime  TEXT NOT NULL,
+                indexed_at  TEXT NOT NULL
+            );
+            ",
+        )
+        .map_err(|e| format!("migrate search tables: {}", e))?;
+
+        // FTS5 with external content: the app only ever writes to
+        // session_messages; triggers keep the FTS index in sync. If FTS5 is
+        // compiled out, creation fails and search degrades to LIKE.
+        let fts_ok = conn
+            .execute_batch(
+                "
+                CREATE VIRTUAL TABLE IF NOT EXISTS session_messages_fts USING fts5(
+                    content, role, session_id UNINDEXED, entry_id UNINDEXED, timestamp UNINDEXED,
+                    content='session_messages', content_rowid='id', tokenize='trigram'
+                );
+                CREATE TRIGGER IF NOT EXISTS session_messages_ai AFTER INSERT ON session_messages BEGIN
+                    INSERT INTO session_messages_fts(rowid, content, role, session_id, entry_id, timestamp)
+                    VALUES (new.id, new.content, new.role, new.session_id, new.entry_id, new.timestamp);
+                END;
+                CREATE TRIGGER IF NOT EXISTS session_messages_ad AFTER DELETE ON session_messages BEGIN
+                    INSERT INTO session_messages_fts(session_messages_fts, rowid, content, role, session_id, entry_id, timestamp)
+                    VALUES('delete', old.id, old.content, old.role, old.session_id, old.entry_id, old.timestamp);
+                END;
+                ",
+            )
+            .is_ok();
+        self.fts_available.store(fts_ok, Ordering::SeqCst);
+        if !fts_ok {
+            log::warn!("[db] FTS5 unavailable — cross-session search falls back to LIKE");
         }
 
         Ok(())
@@ -363,6 +421,14 @@ impl Db {
     /// Delete a session record by session_path.
     pub fn delete_session(&self, session_path: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
+        if let Ok(Some(iid)) = conn.query_row(
+            "SELECT instance_id FROM sessions WHERE session_path = ?1",
+            params![session_path],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            let _ = conn.execute("DELETE FROM session_messages WHERE session_id = ?1", params![iid]);
+            let _ = conn.execute("DELETE FROM search_index_state WHERE session_id = ?1", params![iid]);
+        }
         conn.execute(
             "DELETE FROM sessions WHERE session_path = ?1",
             params![session_path],
@@ -371,9 +437,19 @@ impl Db {
         Ok(())
     }
 
-    /// Delete a session record by instance_id.
+    /// Delete a session record by instance_id (also clears its search index).
     pub fn delete_session_by_instance(&self, instance_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM session_messages WHERE session_id = ?1",
+            params![instance_id],
+        )
+        .map_err(|e| format!("delete_session_by_instance messages: {}", e))?;
+        conn.execute(
+            "DELETE FROM search_index_state WHERE session_id = ?1",
+            params![instance_id],
+        )
+        .map_err(|e| format!("delete_session_by_instance state: {}", e))?;
         conn.execute(
             "DELETE FROM sessions WHERE instance_id = ?1",
             params![instance_id],
@@ -502,6 +578,181 @@ impl Db {
             }),
         )
         .ok()
+    }
+
+    // ── Cross-session Search ────────────────────────────────────────────
+
+    /// Whether FTS5 (trigram tokenizer) is available; false → LIKE fallback.
+    pub fn fts_available(&self) -> bool {
+        self.fts_available.load(Ordering::SeqCst)
+    }
+
+    /// Replace a session's indexed messages (full re-index after mtime change).
+    /// The FTS index stays in sync via triggers on `session_messages`.
+    pub fn index_session_messages(
+        &self,
+        session_id: &str,
+        entries: &[IndexedMessage],
+        file_mtime: &str,
+    ) -> Result<(), String> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| format!("index tx: {e}"))?;
+        tx.execute(
+            "DELETE FROM session_messages WHERE session_id = ?1",
+            params![session_id],
+        )
+        .map_err(|e| format!("index delete: {e}"))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO session_messages (session_id, entry_id, role, content, timestamp, file_mtime)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )
+                .map_err(|e| format!("index insert prepare: {e}"))?;
+            for m in entries {
+                stmt.execute(params![
+                    session_id,
+                    m.entry_id,
+                    m.role,
+                    m.content,
+                    m.timestamp,
+                    file_mtime
+                ])
+                .map_err(|e| format!("index insert: {e}"))?;
+            }
+        }
+        tx.execute(
+            "INSERT INTO search_index_state (session_id, file_mtime, indexed_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(session_id) DO UPDATE SET file_mtime = excluded.file_mtime, indexed_at = excluded.indexed_at",
+            params![session_id, file_mtime, chrono::Utc::now().to_rfc3339()],
+        )
+        .map_err(|e| format!("index state: {e}"))?;
+        tx.commit().map_err(|e| format!("index commit: {e}"))?;
+        Ok(())
+    }
+
+    /// Drop a session's indexed messages (and FTS rows via trigger).
+    pub fn delete_session_fts(&self, session_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM session_messages WHERE session_id = ?1",
+            params![session_id],
+        )
+        .map_err(|e| format!("delete fts: {e}"))?;
+        conn.execute(
+            "DELETE FROM search_index_state WHERE session_id = ?1",
+            params![session_id],
+        )
+        .map_err(|e| format!("delete fts state: {e}"))?;
+        Ok(())
+    }
+
+    /// Wipe the whole search index (reindex_all).
+    pub fn clear_search_index(&self) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM session_messages", [])
+            .map_err(|e| format!("clear search: {e}"))?;
+        conn.execute("DELETE FROM search_index_state", [])
+            .map_err(|e| format!("clear search state: {e}"))?;
+        Ok(())
+    }
+
+    /// Last indexed file-mtime for a session (None = never indexed).
+    pub fn search_index_mtime(&self, session_id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT file_mtime FROM search_index_state WHERE session_id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    /// Full-text search across all indexed session messages, newest first.
+    /// Uses FTS5 (trigram) for queries ≥ 3 chars when available, else LIKE.
+    pub fn search_messages(&self, q: &str, limit: u32) -> Result<Vec<SearchHit>, String> {
+        let q = q.trim();
+        let qlen = q.chars().count();
+        if q.is_empty() || qlen < 2 {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 200);
+        let conn = self.conn.lock().unwrap();
+
+        // (content, role, session_id, entry_id, timestamp)
+        let rows: Vec<(String, String, String, Option<String>, Option<i64>)> =
+            if self.fts_available() && qlen >= 3 {
+                // trigram tokenizer: query must be a quoted phrase (≥3 chars)
+                let fts_q = format!("\"{}\"", q.replace('"', "\"\""));
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT f.content, f.role, f.session_id, f.entry_id, f.timestamp
+                         FROM session_messages_fts f
+                         WHERE session_messages_fts MATCH ?1
+                         ORDER BY f.timestamp IS NULL, f.timestamp DESC LIMIT ?2",
+                    )
+                    .map_err(|e| format!("search prepare: {e}"))?;
+                stmt.query_map(params![fts_q, limit], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })
+                .map_err(|e| format!("search query: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect()
+            } else {
+                let like = format!(
+                    "%{}%",
+                    q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+                );
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT content, role, session_id, entry_id, timestamp
+                         FROM session_messages
+                         WHERE content LIKE ?1 ESCAPE '\\'
+                         ORDER BY timestamp IS NULL, timestamp DESC LIMIT ?2",
+                    )
+                    .map_err(|e| format!("search prepare: {e}"))?;
+                stmt.query_map(params![like, limit], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })
+                .map_err(|e| format!("search query: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect()
+            };
+
+        let mut out = Vec::with_capacity(rows.len());
+        for (content, role, session_id, entry_id, ts) in rows {
+            let (label, project_name) = conn
+                .query_row(
+                    "SELECT s.name, p.name FROM sessions s
+                     LEFT JOIN projects p ON p.id = s.project_id
+                     WHERE s.instance_id = ?1",
+                    params![session_id],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .unwrap_or((None, None));
+            out.push(SearchHit {
+                session_id,
+                project_name,
+                label,
+                role,
+                snippet: make_snippet(&content, q),
+                entry_id,
+                timestamp: ts,
+            });
+        }
+        Ok(out)
     }
 
     // ── Global Extensions ──────────────────────────────────────────────
@@ -637,7 +888,67 @@ pub struct SessionRow {
     pub model_provider: Option<String>,
 }
 
+/// A message ready to be inserted into the search index (search module output).
+#[derive(Debug, Clone)]
+pub struct IndexedMessage {
+    pub role: String,
+    pub content: String,
+    pub entry_id: Option<String>,
+    /// Epoch milliseconds (matches the frontend Message.timestamp).
+    pub timestamp: Option<i64>,
+}
+
+/// One cross-session search hit.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub session_id: String,
+    pub project_name: Option<String>,
+    pub label: Option<String>,
+    pub role: String,
+    /// Context window around the first match, ready for display.
+    pub snippet: String,
+    pub entry_id: Option<String>,
+    /// Epoch milliseconds; used by the frontend to scroll to the message.
+    pub timestamp: Option<i64>,
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+/// Char-safe context window around the first case-insensitive match.
+/// `find` on a lowercased copy yields byte offsets that may split UTF-8
+/// (case folding changes byte length), so we convert to a char offset first.
+fn make_snippet(content: &str, q: &str) -> String {
+    const RADIUS: usize = 60;
+    let c_lower = content.to_lowercase();
+    let Some(rel) = c_lower.find(&q.to_lowercase()) else {
+        return truncate_chars(content, 160);
+    };
+    let char_pos = c_lower[..rel].chars().count();
+    let total_chars = content.chars().count();
+    let start_char = char_pos.saturating_sub(RADIUS);
+    let end_char = (char_pos + q.chars().count() + RADIUS).min(total_chars);
+    let mut out: String = content
+        .chars()
+        .skip(start_char)
+        .take(end_char - start_char)
+        .collect();
+    if start_char > 0 {
+        out.insert_str(0, "…");
+    }
+    if end_char < total_chars {
+        out.push('…');
+    }
+    out
+}
+
+fn truncate_chars(s: &str, n: usize) -> String {
+    let mut out: String = s.chars().take(n).collect();
+    if s.chars().count() > n {
+        out.push('…');
+    }
+    out
+}
 
 fn db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("piter.db")

@@ -162,8 +162,21 @@ export interface PaletteItem {
   keywords?: string;
   /** 右侧辅助说明（如会话所属项目名） */
   hint?: string;
-  /** 类型：action = 动作命令；session = 会话切换目标；slash = pi 斜杠命令 */
-  kind: "action" | "session" | "slash";
+  /** 类型：action = 动作命令；session = 会话切换目标；slash = pi 斜杠命令；search = 跨会话搜索结果 */
+  kind: "action" | "session" | "slash" | "search";
   /** 选中后执行（"选择即完成"，无确认步骤） */
   run: () => void;
+}
+
+/** 跨会话搜索结果（后端 /api/search 返回，snake→camel 转换后） */
+export interface SearchHit {
+  sessionId: string;
+  projectName?: string;
+  label?: string;
+  role: "user" | "assistant";
+  /** 命中上下文片段（前端高亮关键词） */
+  snippet: string;
+  entryId?: string;
+  /** 消息时间戳（毫秒），用于跳转后滚动定位 */
+  timestamp?: number;
 }

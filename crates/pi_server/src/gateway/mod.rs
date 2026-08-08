@@ -62,6 +62,10 @@ pub struct GatewayState {
     pub ui_clients: Arc<parking_lot::Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>>,
     /// Session manager for message tracking and idle lifecycle.
     pub session_manager: Arc<parking_lot::Mutex<session_manager::SessionManager>>,
+    /// Agent 完成观察点：会话 agent_end 时回调 (instance_id, session_label)。
+    /// 由桌面壳层注册（用于系统通知——托盘隐藏时前端 WS 不可达，系统通知只能走 Rust 侧）；
+    /// web / headless 场景保持 None。
+    pub agent_end_hook: Arc<parking_lot::Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
 }
 
 // ─── GatewayState lifecycle methods ────────────────────────────────────────
@@ -126,6 +130,7 @@ impl GatewayState {
             extension_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             ui_clients: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             session_manager: session_manager.clone(),
+            agent_end_hook: Arc::new(parking_lot::Mutex::new(None)),
         });
 
         // Warm the extension candidate cache in the background so the first
@@ -154,6 +159,8 @@ impl GatewayState {
                 "/api/delete-session",
                 get(handlers::session::delete_session_handler),
             )
+            // Cross-session search
+            .route("/api/search", get(handlers::search::search_handler))
             .route(
                 "/api/sessions/create",
                 post(handlers::session::create_session_handler),
@@ -284,6 +291,15 @@ impl GatewayState {
             .lock()
             .get(instance_id)
             .and_then(|inst| inst.stdin_tx.clone())
+    }
+
+    /// 注册 agent_end 观察回调（桌面壳层用，发送系统通知）。回调运行在
+    /// gateway 事件循环线程，必须快速返回、不可 panic。
+    pub fn set_agent_end_hook<F>(&self, hook: F)
+    where
+        F: Fn(&str, &str) + Send + Sync + 'static,
+    {
+        *self.agent_end_hook.lock() = Some(Box::new(hook));
     }
 
     /// Start building a persistent pi process spawn.
@@ -453,6 +469,18 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
     // ── 5b. Refresh pi state after agent finishes handling a message ──
     if event_type == "agent_end" {
         command::send_get_state(state, &instance_id);
+        // 会话完成通知观察点：向桌面壳层暴露 agent_end（托盘隐藏时前端 WS 不可达，
+        // 系统通知只能由 Rust 侧基于此回调发送；label 为空时由壳层回退 instance_id）。
+        if let Some(hook) = &*state.agent_end_hook.lock() {
+            let label = state
+                .session_manager
+                .lock()
+                .sessions
+                .get(&instance_id)
+                .and_then(|s| s.session_name.clone())
+                .unwrap_or_default();
+            hook(&instance_id, &label);
+        }
     }
 
     // Persist any auto-generated session names to DB

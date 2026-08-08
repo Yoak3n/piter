@@ -3,6 +3,7 @@
 pub mod extensions;
 pub mod pi;
 pub mod project;
+pub mod search;
 pub mod session;
 pub mod system;
 

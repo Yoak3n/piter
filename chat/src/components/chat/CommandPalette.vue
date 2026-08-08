@@ -8,11 +8,16 @@ const props = defineProps<{
   open: boolean;
   /** 全部候选（动作命令 + 会话），命令源在 App.vue 构建（可扩展） */
   items: PaletteItem[];
+  /** 跨会话搜索结果（App.vue 防抖调用 /api/search 后注入；不参与本地模糊过滤） */
+  searchResults?: PaletteItem[];
+  /** 搜索请求进行中（输入 ≥3 字符但结果未回） */
+  searching?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "run", item: PaletteItem): void;
+  (e: "update:query", q: string): void;
 }>();
 
 const { t } = useI18n();
@@ -60,6 +65,9 @@ function match(items: PaletteItem[]): PaletteItem[] {
 const actions = computed(() => match(props.items.filter((i) => i.kind === "action")));
 const slashes = computed(() => match(props.items.filter((i) => i.kind === "slash")));
 const sessions = computed(() => match(props.items.filter((i) => i.kind === "session")));
+/** 搜索分区：输入 ≥3 字符时展示后端结果（原样，不参与本地模糊过滤） */
+const searchable = computed(() => query.value.trim().length >= 3);
+const searchHits = computed<PaletteItem[]>(() => (searchable.value ? props.searchResults ?? [] : []));
 
 type Row =
   | { type: "group"; label: string }
@@ -69,6 +77,11 @@ type Row =
 const rows = computed<Row[]>(() => {
   const out: Row[] = [];
   let idx = 0;
+  // 搜索分区在前（面板定位"搜索是核心能力"）
+  if (searchHits.value.length) {
+    out.push({ type: "group", label: t("chat.cmdGroupSearch") });
+    for (const s of searchHits.value) out.push({ type: "item", item: s, idx: idx++ });
+  }
   if (actions.value.length) {
     out.push({ type: "group", label: t("chat.cmdGroupActions") });
     for (const a of actions.value) out.push({ type: "item", item: a, idx: idx++ });
@@ -84,7 +97,15 @@ const rows = computed<Row[]>(() => {
   return out;
 });
 
-const itemCount = computed(() => actions.value.length + slashes.value.length + sessions.value.length);
+const itemCount = computed(() => searchHits.value.length + actions.value.length + slashes.value.length + sessions.value.length);
+
+/** 搜索分区空态优先级：短词提示 → 搜索中 → 无匹配 */
+const emptyText = computed(() => {
+  const q = query.value.trim();
+  if (q.length === 0) return t("chat.cmdEmpty");
+  if (q.length < 3) return t("chat.cmdSearchShort");
+  return props.searching ? t("chat.cmdSearching") : t("chat.cmdSearchEmpty");
+});
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "ArrowDown") {
@@ -107,6 +128,45 @@ function runItem(item: PaletteItem) {
   emit("run", item);
 }
 
+/** kind 徽标文案 */
+function kindLabel(kind: PaletteItem["kind"]): string {
+  return kind === "action"
+    ? t("chat.cmdKindAction")
+    : kind === "slash"
+      ? t("chat.cmdKindSlash")
+      : kind === "search"
+        ? t("chat.cmdKindSearch")
+        : t("chat.cmdKindSession");
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** 标题 HTML：搜索结果高亮命中词，其余条目仅做转义 */
+function highlightTitle(item: PaletteItem): string {
+  const text = item.title;
+  if (item.kind !== "search") return escapeHtml(text);
+  const q = query.value.trim();
+  if (!q) return escapeHtml(text);
+  const lower = text.toLowerCase();
+  const qi = lower.indexOf(q.toLowerCase());
+  if (qi < 0) return escapeHtml(text);
+  const start = text.slice(0, qi);
+  const match = text.slice(qi, qi + q.length);
+  const rest = text.slice(qi + q.length);
+  return (
+    escapeHtml(start) +
+    `<mark class="palette__mark">${escapeHtml(match)}</mark>` +
+    highlightTitle({ ...item, title: rest } as PaletteItem)
+  );
+}
+
 watch(
   () => props.open,
   (open) => {
@@ -118,15 +178,16 @@ watch(
   },
 );
 
-// 查询变化时高亮回到顶部
-watch(query, () => {
+// 查询变化时高亮回到顶部；同时把查询上报给父级（防抖触发跨会话搜索）
+watch(query, (q) => {
   highlight.value = 0;
+  emit("update:query", q);
 });
 
-// items 动态变化（slash 懒加载完成 / 会话更新）时：
+// items / searchResults 动态变化（slash 懒加载完成 / 会话更新 / 搜索结果返回）时：
 // 若当前高亮项仍存在则按 id 保持位置，否则钳制到新列表边界——避免 Enter 选中错项
 watch(
-  () => props.items,
+  [() => props.items, () => props.searchResults],
   () => {
     const rowsArr = rows.value;
     const cur = rowsArr.find((r) => r.type === "item" && r.idx === highlight.value);
@@ -170,24 +231,18 @@ watch(
               @mouseenter="highlight = row.idx"
               @click="runItem(row.item)"
             >
-              <span class="palette__item-title">{{ row.item.title }}</span>
+              <span class="palette__item-title" v-html="highlightTitle(row.item)"></span>
               <span v-if="row.item.hint" class="palette__item-hint">{{ row.item.hint }}</span>
               <span
                 class="palette__item-kind"
                 :class="`kind-${row.item.kind}`"
               >
-                {{
-                  row.item.kind === "action"
-                    ? $t("chat.cmdKindAction")
-                    : row.item.kind === "slash"
-                      ? $t("chat.cmdKindSlash")
-                      : $t("chat.cmdKindSession")
-                }}
+                {{ kindLabel(row.item.kind) }}
               </span>
             </button>
           </template>
         </div>
-        <div v-else class="palette__empty">{{ $t("chat.cmdEmpty") }}</div>
+        <div v-else class="palette__empty">{{ emptyText }}</div>
       </div>
     </div>
   </Teleport>
@@ -312,6 +367,16 @@ watch(
 .kind-session {
   color: var(--chart-4);
   background: color-mix(in srgb, var(--chart-4) 14%, transparent);
+}
+.kind-search {
+  color: var(--chart-3);
+  background: color-mix(in srgb, var(--chart-3) 14%, transparent);
+}
+.palette__mark {
+  background: color-mix(in srgb, var(--chart-3) 30%, transparent);
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 1px;
 }
 .palette__empty {
   padding: 24px;

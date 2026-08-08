@@ -2,7 +2,7 @@
 import { ref, nextTick, watch } from "vue";
 import { ArrowDown } from "lucide-vue-next";
 import { EmptyState } from "@piter/ui";
-import type { ChatTurn, ToolExecution } from "../../types";
+import type { ChatTurn, Message, ToolExecution } from "../../types";
 import MessageTurn from "./MessageTurn.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCard from "./ToolCard.vue";
@@ -14,13 +14,78 @@ const props = defineProps<{
   currentAssistantContent: string;
   currentThinking?: string;
   toolExecutions?: ToolExecution[];
+  /** 跨会话搜索跳转目标：滚动到 timestamp/内容匹配的消息并高亮 */
+  scrollTo?: { sessionId?: string; timestamp?: number; query: string } | null;
 }>();
 
 const emit = defineEmits<{
   (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
+  (e: "scroll-handled"): void;
 }>();
 
 const timelineRef = ref<HTMLDivElement | null>(null);
+
+// ─── Search-jump scrolling ─────────────────────────────────────────────
+// 搜索命中后 switchSession，消息快照异步到达（turns 逐次更新）。watch 在
+// 每次 turns 变化时尝试定位目标消息，命中即滚动 + 高亮，并上报 scroll-handled
+// 让父级清除目标（未命中则保持，等下一批消息/快照继续尝试）。
+const turnRefs = ref<Record<number, HTMLElement | null>>({});
+const highlightId = ref<number | null>(null);
+let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flatMessages(): (Message & { turnId: number })[] {
+  const out: (Message & { turnId: number })[] = [];
+  for (const turn of props.turns) {
+    const push = (m: Message | null) => {
+      if (m && m.content) out.push({ ...m, turnId: turn.id });
+    };
+    push(turn.user);
+    for (const a of turn.assistants) push(a);
+    for (const s of turn.system) push(s);
+  }
+  return out;
+}
+
+function locateTarget(scrollTo: { timestamp?: number; query: string }): (Message & { turnId: number }) | null {
+  const msgs = flatMessages();
+  if (!msgs.length) return null;
+  const q = scrollTo.query.toLowerCase();
+  const tsMatches = scrollTo.timestamp !== undefined
+    ? msgs.filter((m) => m.timestamp === scrollTo.timestamp)
+    : [];
+  if (tsMatches.length === 1) return tsMatches[0];
+  const tsAndQ = tsMatches.find((m) => m.content.toLowerCase().includes(q));
+  if (tsAndQ) return tsAndQ;
+  return msgs.find((m) => m.content.toLowerCase().includes(q)) ?? tsMatches[0] ?? null;
+}
+
+/** MessageTurn 根元素 ref：优先取 defineExpose 暴露的 turnEl（多根 fragment 下
+ *  $el 是注释占位节点，须避开）；未暴露时回退 $el，兜底 null */
+function setTurnRef(id: number, el: unknown) {
+  turnRefs.value[id] =
+    (el as { turnEl?: HTMLElement } | null)?.turnEl ?? (el as { $el?: HTMLElement } | null)?.$el ?? null;
+}
+
+watch(
+  [() => props.scrollTo, () => props.turns],
+  async () => {
+    const target = props.scrollTo;
+    if (!target) return;
+    const hit = locateTarget(target);
+    if (!hit) return; // 消息还没到，等下一次 turns 变化
+    await nextTick();
+    const el = turnRefs.value[hit.turnId];
+    // 加固：只有拿到真实元素才滚动（防御 ref 拿到的注释占位/空值）
+    if (!el || typeof (el as HTMLElement).scrollIntoView !== "function") return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    highlightId.value = hit.id;
+    if (highlightTimer) clearTimeout(highlightTimer);
+    highlightTimer = setTimeout(() => {
+      highlightId.value = null;
+    }, 2600);
+    emit("scroll-handled");
+  },
+);
 
 // ─── Auto-scroll with user-override ──────────────────────────────────
 // While streaming, the timeline follows the latest content. If the user
@@ -172,7 +237,9 @@ watch(() => props.currentThinking, scrollToBottom);
     <MessageTurn
       v-for="turn in turns"
       :key="turn.id"
+      :ref="(el) => setTurnRef(turn.id, el)"
       :turn="turn"
+      :highlight-id="highlightId"
       @respond-extension="emit('respond-extension', $event)"
     />
 
