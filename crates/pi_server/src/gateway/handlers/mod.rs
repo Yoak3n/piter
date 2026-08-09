@@ -1,5 +1,6 @@
 //! REST API and shared handler logic for the gateway.
 
+pub mod budget;
 pub mod extensions;
 pub mod pi;
 pub mod project;

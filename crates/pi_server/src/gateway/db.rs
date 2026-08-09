@@ -110,6 +110,17 @@ impl Db {
                 extension_name  TEXT NOT NULL,
                 PRIMARY KEY (project_id, extension_name)
             );
+
+            -- Monthly budget (0.2.0 P3): a single user-configured row. Money is
+            -- stored in cents so it never suffers float rounding; reset_day is
+            -- the day of month a new cycle starts (clamped to the month length).
+            CREATE TABLE IF NOT EXISTS budget_config (
+                id                      INTEGER PRIMARY KEY CHECK (id = 1),
+                monthly_budget_cents    INTEGER NOT NULL DEFAULT 0,
+                reset_day               INTEGER NOT NULL DEFAULT 1,
+                enabled                 INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO budget_config (id) VALUES (1);
             ",
         )
         .map_err(|e| format!("migrate: {}", e))?;
@@ -781,6 +792,47 @@ impl Db {
         Ok(out)
     }
 
+    // ── Monthly Budget ───────────────────────────────────────────────
+
+    /// Read the single-row budget config (defaults when never configured).
+    pub fn get_budget_config(&self) -> BudgetConfig {
+        let conn = self.conn.lock().unwrap();
+        let (budget, day, enabled) = conn
+            .query_row(
+                "SELECT monthly_budget_cents, reset_day, enabled FROM budget_config WHERE id = 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+            )
+            .unwrap_or((0, 1, 0));
+        BudgetConfig {
+            budget_cents: budget,
+            reset_day: day,
+            enabled: enabled != 0,
+        }
+    }
+
+    /// Persist the budget config. `reset_day` is clamped to 1..=31; shorter
+    /// months clamp further at cycle computation time (e.g. 31 → Feb 28/29).
+    pub fn set_budget_config(
+        &self,
+        budget_cents: i64,
+        reset_day: i64,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO budget_config (id, monthly_budget_cents, reset_day, enabled)
+             VALUES (1, ?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+                 monthly_budget_cents = excluded.monthly_budget_cents,
+                 reset_day = excluded.reset_day,
+                 enabled = excluded.enabled",
+            params![budget_cents, reset_day.clamp(1, 31), enabled as i32],
+        )
+        .map_err(|e| format!("set_budget_config: {}", e))?;
+        Ok(())
+    }
+
     // ── Global Extensions ──────────────────────────────────────────────
 
     pub fn get_global_extensions(&self) -> Vec<String> {
@@ -926,6 +978,18 @@ pub struct IndexedMessage {
     pub timestamp: Option<i64>,
 }
 
+/// User-configured monthly budget (single row, id = 1).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetConfig {
+    /// Budget cap in cents (0 = not set).
+    pub budget_cents: i64,
+    /// Day of month a new cycle starts (1..=31, clamped per month).
+    pub reset_day: i64,
+    /// Whether budget tracking is turned on.
+    pub enabled: bool,
+}
+
 /// One cross-session search hit.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1005,5 +1069,34 @@ mod tests {
 
         // Unknown instance → error (mirrors set_pinned).
         assert!(db.set_session_pinned("missing", 1).is_err());
+    }
+
+    #[test]
+    fn budget_config_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+
+        // Defaults when never configured.
+        let cfg = db.get_budget_config();
+        assert_eq!(cfg.budget_cents, 0);
+        assert_eq!(cfg.reset_day, 1);
+        assert!(!cfg.enabled);
+
+        // Update + read back.
+        db.set_budget_config(50_000, 15, true).unwrap();
+        let cfg = db.get_budget_config();
+        assert_eq!(cfg.budget_cents, 50_000);
+        assert_eq!(cfg.reset_day, 15);
+        assert!(cfg.enabled);
+
+        // reset_day is clamped to 1..=31 at write time.
+        db.set_budget_config(100, 0, true).unwrap();
+        assert_eq!(db.get_budget_config().reset_day, 1);
+        db.set_budget_config(100, 99, true).unwrap();
+        assert_eq!(db.get_budget_config().reset_day, 31);
+
+        // Turning tracking off is persisted.
+        db.set_budget_config(50_000, 15, false).unwrap();
+        assert!(!db.get_budget_config().enabled);
     }
 }

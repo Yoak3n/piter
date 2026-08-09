@@ -110,6 +110,7 @@ function readThemeColors() {
 
 onMounted(() => {
   fetchData();
+  fetchBudget();
   readThemeColors();
   themeObserver = new MutationObserver(readThemeColors);
   themeObserver.observe(document.documentElement, {
@@ -152,6 +153,122 @@ function formatSessionDate(time: string): string {
   if (!Number.isFinite(d.getTime())) return "";
   return d.toLocaleDateString(locale.value, { month: "short", day: "numeric" });
 }
+
+// ─── Monthly budget card (0.2.0 P3) ──────────────────────────────────────
+// 配置 + 状态走网关 REST（跨端可用）；金额单位为分（cents），输入框按美元显示。
+// 进度条档位变色：<50 正常 / 50-80 黄 / 80-100 橙 / 100 红；未设置/未启用显示"未设置"。
+const props = defineProps<{ brokerHttpUrl?: string }>();
+
+const gatewayBase = computed(() => {
+  const base = props.brokerHttpUrl ?? "";
+  return base.endsWith("/") ? base : base ? `${base}/` : "";
+});
+
+interface BudgetConfig {
+  budgetCents: number;
+  resetDay: number;
+  enabled: boolean;
+}
+interface BudgetStatus {
+  used: number;
+  budget: number;
+  percent: number;
+  tier: number;
+  resetDay: number;
+  cycleStart: string;
+  cycleEnd: string;
+}
+
+const budgetConfig = ref<BudgetConfig | null>(null);
+const budgetStatus = ref<BudgetStatus | null>(null);
+const budgetLoading = ref(false);
+const budgetSaving = ref(false);
+const budgetError = ref("");
+// 可编辑字段（金额以美元字符串存储，保存时转分）
+const budgetDollars = ref("");
+const budgetResetDay = ref(1);
+const budgetEnabled = ref(false);
+
+async function fetchBudget() {
+  if (!gatewayBase.value) return;
+  budgetLoading.value = true;
+  budgetError.value = "";
+  try {
+    const [cfgRes, statusRes] = await Promise.all([
+      fetch(`${gatewayBase.value}api/budget`),
+      fetch(`${gatewayBase.value}api/budget/status`),
+    ]);
+    const cfg = await cfgRes.json();
+    const status = await statusRes.json();
+    budgetConfig.value = {
+      budgetCents: Number(cfg.budgetCents) || 0,
+      resetDay: Number(cfg.resetDay) || 1,
+      enabled: !!cfg.enabled,
+    };
+    budgetDollars.value = String((budgetConfig.value.budgetCents / 100) || "");
+    budgetResetDay.value = budgetConfig.value.resetDay;
+    budgetEnabled.value = budgetConfig.value.enabled;
+    budgetStatus.value = status;
+  } catch (e) {
+    budgetError.value = t("admin.budgetLoadFailed", { msg: `${e}` });
+  } finally {
+    budgetLoading.value = false;
+  }
+}
+
+async function saveBudget() {
+  if (!gatewayBase.value) return;
+  budgetSaving.value = true;
+  budgetError.value = "";
+  try {
+    const cents = Math.round((Number(budgetDollars.value) || 0) * 100);
+    const res = await fetch(`${gatewayBase.value}api/budget`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        budget_cents: cents,
+        reset_day: budgetResetDay.value,
+        enabled: budgetEnabled.value,
+      }),
+    });
+    const data = await res.json();
+    if (data.success !== true) throw new Error(data.error ?? "save failed");
+    await fetchBudget();
+  } catch (e) {
+    budgetError.value = t("admin.budgetSaveFailed", { msg: `${e}` });
+  } finally {
+    budgetSaving.value = false;
+  }
+}
+
+/** 已启用且预算 > 0 → 显示进度条；否则"未设置" */
+const budgetConfigured = computed(
+  () => !!budgetConfig.value?.enabled && (budgetConfig.value?.budgetCents ?? 0) > 0,
+);
+
+/** 已用金额（分 → 美元，进度条显示用） */
+const budgetUsed = computed(() => (budgetStatus.value?.used ?? 0) / 100);
+
+const budgetPercent = computed(() => {
+  const p = budgetStatus.value?.percent ?? 0;
+  return Math.min(100, Math.max(0, p));
+});
+
+const budgetBarColor = computed(() => {
+  const tier = budgetStatus.value?.tier ?? 0;
+  if (tier >= 3) return "var(--danger)"; // 100%
+  if (tier === 2) return "#f97316"; // 80-100%（橙）
+  if (tier === 1) return "var(--warning)"; // 50-80%（黄）
+  return "var(--accent)";
+});
+
+/** 距下一个周期起点（重置日）的天数 */
+const budgetResetLabel = computed(() => {
+  const end = budgetStatus.value?.cycleEnd;
+  if (!end) return "";
+  const days = Math.ceil((Date.parse(end) - Date.now()) / 86_400_000);
+  return days <= 0 ? t("admin.budgetResetToday") : t("admin.budgetResetIn", { n: days });
+});
 
 // ─── Overview cards ───────────────────────────────────────────────────────
 
@@ -420,6 +537,79 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
 
     <div v-if="error" class="usage-error">{{ error }}</div>
 
+    <!-- Monthly budget card -->
+    <ChartCard class="usage-section" :title="$t('admin.budget')" :subtitle="$t('admin.budgetDesc')">
+      <div v-if="!gatewayBase" class="usage-empty">{{ $t("admin.budgetGatewayHint") }}</div>
+      <template v-else>
+        <div v-if="budgetError" class="usage-error">{{ budgetError }}</div>
+        <div class="budget-row">
+          <!-- Editor -->
+          <div class="budget-form">
+            <div class="budget-field">
+              <span class="budget-label">{{ $t("admin.budgetAmount") }}</span>
+              <div class="budget-input-wrap">
+                <span class="budget-currency">$</span>
+                <input
+                  v-model="budgetDollars"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  class="budget-input"
+                  :placeholder="$t('admin.budgetAmountPlaceholder')"
+                  :disabled="budgetSaving"
+                />
+              </div>
+            </div>
+            <div class="budget-field">
+              <span class="budget-label">{{ $t("admin.budgetResetDay") }}</span>
+              <input
+                v-model.number="budgetResetDay"
+                type="number"
+                min="1"
+                max="31"
+                class="budget-input budget-input--day"
+                :disabled="budgetSaving"
+              />
+              <span class="budget-hint">{{ $t("admin.budgetResetDayDesc") }}</span>
+            </div>
+            <label class="budget-toggle">
+              <input v-model="budgetEnabled" type="checkbox" :disabled="budgetSaving" />
+              <span>{{ $t("admin.budgetEnabled") }}</span>
+            </label>
+            <div class="budget-actions">
+              <button class="btn btn-sm" :disabled="budgetSaving || budgetLoading" @click="saveBudget">
+                {{ budgetSaving ? $t("common.saving") : $t("common.save") }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Gauge -->
+          <div class="budget-gauge">
+            <template v-if="budgetConfigured">
+              <div class="budget-gauge-head">
+                <span class="budget-used">
+                  {{ $t("admin.budgetUsed") }} {{ formatUsd(budgetUsed) }}
+                  <span class="budget-of">{{ $t("admin.budgetOf") }} {{ formatUsd((budgetStatus?.budget ?? 0) / 100) }}</span>
+                </span>
+                <span class="budget-percent" :style="{ color: budgetBarColor }">
+                  {{ Math.round(budgetStatus?.percent ?? 0) }}%
+                </span>
+              </div>
+              <div class="budget-bar">
+                <div
+                  class="budget-bar-fill"
+                  :style="{ width: budgetPercent + '%', background: budgetBarColor }"
+                ></div>
+              </div>
+              <div class="budget-reset">{{ budgetResetLabel }}</div>
+            </template>
+            <div v-else-if="budgetLoading" class="usage-loading">{{ $t("admin.loadingUsage") }}</div>
+            <div v-else class="usage-empty">{{ $t("admin.budgetUnset") }}</div>
+          </div>
+        </div>
+      </template>
+    </ChartCard>
+
     <template v-if="payload">
       <div v-if="!hasData" class="usage-empty">{{ $t("admin.noUsageData") }}</div>
 
@@ -676,6 +866,135 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
 /* ── Sections ── */
 .usage-section {
   margin-bottom: var(--space-lg);
+}
+
+/* ── Budget card ── */
+.budget-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+.budget-form {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.budget-field {
+  display: grid;
+  gap: 4px;
+}
+
+.budget-label {
+  font-size: var(--font-size-micro);
+  color: var(--text-tertiary);
+}
+
+.budget-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.budget-currency {
+  position: absolute;
+  left: 10px;
+  font-size: var(--font-size-control);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.budget-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: var(--font-size-control);
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-input-wrap .budget-input {
+  padding-left: 22px;
+}
+
+.budget-input--day {
+  width: 72px;
+}
+
+.budget-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.budget-hint {
+  font-size: var(--font-size-micro);
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+
+.budget-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-size-control);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.budget-actions {
+  margin-top: var(--space-xs);
+}
+
+.budget-gauge {
+  display: grid;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.budget-gauge-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.budget-used {
+  font-size: var(--font-size-control);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-of {
+  font-size: var(--font-size-micro);
+  color: var(--text-tertiary);
+}
+
+.budget-percent {
+  font-size: var(--font-size-title);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+
+.budget-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s var(--ease);
+}
+
+.budget-reset {
+  font-size: var(--font-size-micro);
+  color: var(--text-tertiary);
 }
 
 .usage-columns {
@@ -948,6 +1267,9 @@ const hasData = computed(() => (payload.value?.overview.sessions ?? 0) > 0);
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .usage-columns {
+    grid-template-columns: 1fr;
+  }
+  .budget-row {
     grid-template-columns: 1fr;
   }
 }

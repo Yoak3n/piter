@@ -230,6 +230,64 @@ export function usePiConnection() {
     });
   }
 
+  // ── 月度预算提醒（0.2.0 P3）────────────────────────────
+  // 拉取对比：定时轮询 GET /api/budget/status，与 localStorage 记录的"上次档位"
+  // 比较，只有跨档上升（如 49%→52%）才 toast（50=info / 80=warning / 100=error）。
+  // 月初重置后回落（100%→5%）不提醒；budget 未设置 / 拉取失败一律静默（percent 0）。
+  const BUDGET_TIER_KEY = "piter:budgetTier";
+  const BUDGET_POLL_MS = 5 * 60 * 1000; // 预算低频，5 分钟轮询足够
+  let budgetTimer: ReturnType<typeof setInterval> | null = null;
+
+  interface BudgetStatusPayload {
+    used: number;
+    budget: number;
+    percent: number;
+    tier: number;
+    resetDay: number;
+    cycleStart: string;
+    cycleEnd: string;
+  }
+
+  function readBudgetTier(): number {
+    try {
+      const v = Number(localStorage.getItem(BUDGET_TIER_KEY) ?? "0");
+      return Number.isFinite(v) ? v : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function writeBudgetTier(tier: number) {
+    try {
+      localStorage.setItem(BUDGET_TIER_KEY, String(tier));
+    } catch {
+      // localStorage 不可用时忽略（下次仍是"首见"语义）
+    }
+  }
+
+  async function checkBudget() {
+    try {
+      const res = await fetch("/api/budget/status");
+      if (!res.ok) return;
+      const data = (await res.json()) as BudgetStatusPayload;
+      const tier = Number(data.tier) || 0;
+      const prev = readBudgetTier();
+      if (tier > prev) {
+        // 与会话完成通知同一 top 通道（顶部 toast）
+        if (tier >= 3) pushNotify("error", i18n.global.t("chat.budgetTier100"), { placement: "top" });
+        else if (tier === 2) pushNotify("warning", i18n.global.t("chat.budgetTier80"), { placement: "top" });
+        else if (tier === 1) pushNotify("info", i18n.global.t("chat.budgetTier50"), { placement: "top" });
+      }
+      writeBudgetTier(tier);
+    } catch {
+      // 拉取失败静默，不打扰用户
+    }
+  }
+
+  // 启动时立即检查一次（覆盖"打开应用时才跨档"的场景），随后按固定间隔轮询
+  void checkBudget();
+  budgetTimer = setInterval(checkBudget, BUDGET_POLL_MS);
+
   // ── 启动期会话诊断（扩展加载失败 / pi 启动失败）──
   // 事件可能在会话状态创建之前到达，且会话快照重建会整体替换 messages；
   // 先用 Map 暂存，快照重建时重新注入，保证用户打开该会话时仍能看到失败原因。
@@ -1324,6 +1382,10 @@ export function usePiConnection() {
     if (watchdogTimer) {
       clearInterval(watchdogTimer);
       watchdogTimer = null;
+    }
+    if (budgetTimer) {
+      clearInterval(budgetTimer);
+      budgetTimer = null;
     }
     disconnect();
   });

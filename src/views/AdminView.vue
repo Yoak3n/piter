@@ -134,7 +134,7 @@ function handlePackagesChanged(packages: string[]) {
         @update-pi-settings="handlePiUpdate"
       />
 
-      <UsageTab v-if="activeTab === 'usage'" />
+      <UsageTab v-if="activeTab === 'usage'" :broker-http-url="status?.broker_http_url ?? ''" />
 
       <ShareTab
         v-if="activeTab === 'share'"

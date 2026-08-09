@@ -1,4 +1,5 @@
 pub mod broker;
+pub mod budget;
 pub mod gateway;
 pub mod resolve;
 pub mod search;

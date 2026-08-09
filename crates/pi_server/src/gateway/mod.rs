@@ -226,6 +226,13 @@ impl GatewayState {
                 "/api/session-config",
                 put(handlers::extensions::update_session_config_handler),
             )
+            // Budget (monthly usage cap)
+            .route("/api/budget", get(handlers::budget::get_budget_handler))
+            .route("/api/budget", put(handlers::budget::put_budget_handler))
+            .route(
+                "/api/budget/status",
+                get(handlers::budget::budget_status_handler),
+            )
             // WebSocket
             .route("/ws", get(ws::ws_handler))
             .route("/ui-ws", get(ws::ws_handler))

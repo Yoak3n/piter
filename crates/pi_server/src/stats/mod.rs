@@ -159,6 +159,19 @@ pub(crate) fn build_dashboard_at(
 
 // ─── File discovery ────────────────────────────────────────────────────────
 
+/// Sum the total cost of messages on/after `from` across the given session
+/// files. Reuses the same per-line parsing as [`build_dashboard`]; the budget
+/// module calls this to compute the current billing cycle's spend.
+pub(crate) fn sum_cost_at(files: &[PathBuf], from: DateTime<Utc>) -> f64 {
+    let mut acc = Accum::default();
+    for file in files {
+        if let Err(e) = parse_session_file(file, from, Scope::All, None, &mut acc) {
+            log::warn!("[stats] skipping {}: {}", file.display(), e);
+        }
+    }
+    acc.total_cost
+}
+
 fn walk_jsonl(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if !dir.is_dir() {
