@@ -13,6 +13,7 @@ pub mod db;
 pub mod ext_cache;
 pub mod handlers;
 mod helper;
+mod lan_auth;
 mod messages;
 pub mod project;
 pub mod session_manager;
@@ -25,6 +26,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::middleware;
 use axum::routing::{delete, get, post, put};
 use tokio::sync::{broadcast as tokio_broadcast_channel, mpsc};
 use tower_http::cors::CorsLayer;
@@ -233,9 +235,40 @@ impl GatewayState {
                 "/api/budget/status",
                 get(handlers::budget::budget_status_handler),
             )
+            // LAN auth (PIN + per-device tokens)
+            .route(
+                "/api/lan/auth",
+                post(handlers::lan_auth::lan_auth_handler),
+            )
+            .route(
+                "/api/lan/auth/config",
+                get(handlers::lan_auth::get_lan_auth_config_handler),
+            )
+            .route(
+                "/api/lan/auth/config",
+                put(handlers::lan_auth::put_lan_auth_config_handler),
+            )
+            .route(
+                "/api/lan/auth/devices",
+                get(handlers::lan_auth::lan_auth_devices_handler),
+            )
+            .route(
+                "/api/lan/auth/devices/:id",
+                delete(handlers::lan_auth::delete_lan_auth_device_handler),
+            )
+            .route(
+                "/api/lan/auth/revoke",
+                post(handlers::lan_auth::lan_auth_revoke_handler),
+            )
             // WebSocket
             .route("/ws", get(ws::ws_handler))
             .route("/ui-ws", get(ws::ws_handler))
+            // LAN auth: outermost layer so it gates every route AND the SPA
+            // fallback (loopback exempt / auth disabled → transparent).
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                lan_auth::lan_auth_middleware,
+            ))
             // CORS
             .layer(CorsLayer::permissive())
             .with_state(state.clone())
@@ -271,7 +304,14 @@ impl GatewayState {
                             return;
                         }
                     };
-                    if let Err(e) = axum::serve(listener, app).await {
+                    if let Err(e) = axum::serve(
+                        listener,
+                        // ConnectInfo<SocketAddr> → LAN auth can see the peer
+                        // address and exempt loopback (desktop) traffic.
+                        app.into_make_service_with_connect_info::<SocketAddr>(),
+                    )
+                    .await
+                    {
                         log::error!("[gateway] server error: {}", e);
                     }
                 }

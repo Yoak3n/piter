@@ -75,10 +75,9 @@ watch(
     const hit = locateTarget(target);
     if (!hit) return; // 消息还没到，等下一次 turns 变化
     await nextTick();
-    const el = turnRefs.value[hit.turnId];
     // 加固：只有拿到真实元素才滚动（防御 ref 拿到的注释占位/空值）
-    if (!el || typeof (el as HTMLElement).scrollIntoView !== "function") return;
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (!turnRefs.value[hit.turnId]) return;
+    scrollTurnIntoView(hit.turnId);
     highlightId.value = hit.id;
     if (highlightTimer) clearTimeout(highlightTimer);
     highlightTimer = setTimeout(() => {
@@ -110,18 +109,20 @@ function scheduleLayoutUpdate() {
 
 // positions = minimap 坐标：内容高度按比例缩放到固定轨道高度
 // （clientHeight/scrollHeight），全部横线常驻轨道 → 小星星全貌可见、
-// 任意横线点击跳转（与滚动位置无关）。
+// 任意横线点击跳转（与滚动位置无关）。clamp 到轨道可见范围内，保证
+// 首尾横线完整可点（首轮 offsetTop 含 16px padding，末轮可能越出轨道底）。
 function refreshPositions() {
   const el = timelineRef.value;
   if (!el) return;
   const total = el.scrollHeight;
   if (total <= 0) return;
   const scale = el.clientHeight / total;
+  const trackBottom = Math.max(0, el.clientHeight - 6); // 命中区半高 6px
   const next: Record<number, number> = {};
   for (const t of userTurns.value) {
     const turnEl = turnRefs.value[t.id];
     if (turnEl && typeof turnEl.offsetTop === "number") {
-      next[t.id] = turnEl.offsetTop * scale;
+      next[t.id] = Math.min(Math.max(turnEl.offsetTop * scale, 0), trackBottom);
     }
   }
   positions.value = next;
@@ -166,10 +167,22 @@ onBeforeUnmount(() => layoutObserver?.disconnect());
 // 轮次增删后（flush post 保证新元素已渲染）重新测量
 watch(userTurns, () => scheduleLayoutUpdate(), { flush: "post" });
 
-function jumpToTurn(turnId: number) {
+/** 滚动 .timeline 让该轮精确居中。手动计算 scrollTop（offsetTop 相对
+ *  .timeline 的 padding 内边，与 updateActiveTurn 同一坐标系），绕开
+ *  scrollIntoView 在不同浏览器/WebView 对 flex+gap+padding 容器的居中
+ *  实现差异——这是"跳转不准确"的根因；且只滚动本容器，不碰祖先。 */
+function scrollTurnIntoView(turnId: number, smooth = true) {
+  const wrap = timelineRef.value;
   const el = turnRefs.value[turnId];
-  if (!el || typeof (el as HTMLElement).scrollIntoView !== "function") return;
-  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (!wrap || !el || typeof el.offsetTop !== "number") return;
+  const centerTop = el.offsetTop - wrap.clientHeight / 2 + el.offsetHeight / 2;
+  const maxTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+  const target = Math.min(Math.max(centerTop, 0), maxTop);
+  wrap.scrollTo({ top: target, behavior: smooth ? "smooth" : "auto" });
+}
+
+function jumpToTurn(turnId: number) {
+  scrollTurnIntoView(turnId);
   // 与搜索跳转同款：跳转后置 paused，流式输出不把用户拽回底部；
   // scroll 事件会随之触发 handleScroll，rAF 内更新当前轮。
   isPaused.value = true;

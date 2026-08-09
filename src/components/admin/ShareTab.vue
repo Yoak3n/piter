@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { RefreshCw, Copy, Check, QrCode, WifiOff, Cable, Globe } from "lucide-vue-next";
+import { RefreshCw, Copy, Check, QrCode, WifiOff, Cable, Globe, KeyRound, Eye, EyeOff, Trash2 } from "lucide-vue-next";
 import { EmptyState } from "@piter/ui";
 import type { AdminStatus } from "../../composables/useAdmin";
 
@@ -153,15 +153,172 @@ function fmtUptime(secs: number): string {
   return `${s}s`;
 }
 
+// ─── LAN auth (PIN gate, 0.2.0 P3) ────────────────────────────────────────
+// 配置走网关 REST；PIN 仅在"重新生成"时明文返回一次，UI 仅保留在内存中展示。
+// 首次开启且尚无 PIN 时自动生成（一并展示）。
+interface LanAuthConfigResponse {
+  success: boolean;
+  enabled?: boolean;
+  pinSet?: boolean;
+  pin?: string;
+  error?: string;
+}
+interface LanDevice {
+  token: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+const authEnabled = ref(false);
+const pinSet = ref(false);
+/** 内存中的当前 PIN（重新生成后明文展示一次；刷新页面后回到未知态） */
+const pin = ref<string | null>(null);
+const pinVisible = ref(false);
+const devices = ref<LanDevice[]>([]);
+const authBusy = ref(false);
+const authError = ref("");
+const pinCopied = ref(false);
+
+async function fetchLanAuth() {
+  if (!gatewayBase.value) return;
+  try {
+    const [cfgRes, devRes] = await Promise.all([
+      fetch(`${gatewayBase.value}api/lan/auth/config`),
+      fetch(`${gatewayBase.value}api/lan/auth/devices`),
+    ]);
+    const cfg: LanAuthConfigResponse = await cfgRes.json();
+    const dev = await devRes.json();
+    if (cfg.success) {
+      authEnabled.value = !!cfg.enabled;
+      pinSet.value = !!cfg.pinSet;
+    }
+    if (dev.success) devices.value = dev.devices ?? [];
+  } catch (e) {
+    authError.value = t("admin.lanLoadFailed", { msg: `${e}` });
+  }
+}
+
+async function saveAuth(body: Record<string, unknown>): Promise<LanAuthConfigResponse | null> {
+  if (!gatewayBase.value) return null;
+  authBusy.value = true;
+  authError.value = "";
+  try {
+    const res = await fetch(`${gatewayBase.value}api/lan/auth/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data: LanAuthConfigResponse = await res.json();
+    if (data.success !== true) throw new Error(data.error ?? "save failed");
+    pinSet.value = !!data.pinSet;
+    return data;
+  } catch (e) {
+    authError.value = t("admin.lanSaveFailed", { msg: `${e}` });
+    return null;
+  } finally {
+    authBusy.value = false;
+  }
+}
+
+async function toggleAuth() {
+  const target = !authEnabled.value;
+  // 首次开启且还没有 PIN → 一并生成并展示（启用才有意义）
+  const data = await saveAuth({ enabled: target, regenerate: target && !pinSet.value });
+  if (!data) return;
+  authEnabled.value = target;
+  if (data.pin) {
+    pin.value = data.pin;
+    pinVisible.value = true;
+  }
+  if (target) await fetchLanAuth();
+}
+
+async function regeneratePin() {
+  const data = await saveAuth({ regenerate: true });
+  if (!data) return;
+  pin.value = data.pin ?? null;
+  pinVisible.value = true;
+}
+
+async function revokeDevice(token: string) {
+  if (!gatewayBase.value) return;
+  if (!window.confirm(t("admin.lanRevokeConfirm"))) return;
+  authBusy.value = true;
+  authError.value = "";
+  try {
+    const res = await fetch(
+      `${gatewayBase.value}api/lan/auth/devices/${encodeURIComponent(token)}`,
+      { method: "DELETE" },
+    );
+    const data = await res.json();
+    if (data.success !== true) throw new Error(data.error ?? "revoke failed");
+    devices.value = devices.value.filter((d) => d.token !== token);
+  } catch (e) {
+    authError.value = t("admin.lanSaveFailed", { msg: `${e}` });
+  } finally {
+    authBusy.value = false;
+  }
+}
+
+async function revokeAll() {
+  if (!gatewayBase.value) return;
+  if (!window.confirm(t("admin.lanRevokeAllConfirm"))) return;
+  authBusy.value = true;
+  authError.value = "";
+  try {
+    const res = await fetch(`${gatewayBase.value}api/lan/auth/revoke`, { method: "POST" });
+    const data = await res.json();
+    if (data.success !== true) throw new Error(data.error ?? "revoke failed");
+    devices.value = [];
+  } catch (e) {
+    authError.value = t("admin.lanSaveFailed", { msg: `${e}` });
+  } finally {
+    authBusy.value = false;
+  }
+}
+
+function copyPin() {
+  if (!pin.value) return;
+  const done = () => {
+    pinCopied.value = true;
+    setTimeout(() => (pinCopied.value = false), 2000);
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(pin.value).then(done).catch(() => fallbackCopyText(pin.value!, done));
+  } else {
+    fallbackCopyText(pin.value, done);
+  }
+}
+
+function fallbackCopyText(text: string, done: () => void) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;left:-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+  done();
+}
+
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime())
+    ? d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+    : "—";
+}
+
 watch(gatewayBase, (base) => {
   if (base) {
     qrUrlFetched = "";
     fetchAll();
+    fetchLanAuth();
   }
 });
 
 onMounted(() => {
   fetchAll();
+  fetchLanAuth();
   // Poll so the LAN URL / QR refresh automatically after the backend
   // rediscovers the IP (2s TTL) — no restart needed on wifi change.
   pollTimer = setInterval(() => fetchAll(true), 5000);
@@ -263,6 +420,98 @@ onUnmounted(() => {
             <div class="info-row">
               <span class="info-key">{{ $t("admin.piVersion") }}</span>
               <code class="info-value">{{ health?.pi_version || "—" }}</code>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LAN access PIN gate -->
+      <div class="share-card lan-auth-card">
+        <div class="share-card-header">
+          <span class="share-card-title">
+            <KeyRound :size="14" />
+            {{ $t("admin.lanAuth") }}
+          </span>
+          <span class="share-card-desc">{{ $t("admin.lanAuthDesc") }}</span>
+        </div>
+
+        <div v-if="authError" class="lan-auth-error">{{ authError }}</div>
+
+        <div class="lan-auth-main">
+          <!-- PIN block -->
+          <div class="lan-pin-block">
+            <div class="lan-pin-row">
+              <span class="lan-pin-code">
+                <!-- pin 在内存中：明文/模糊切换；仅已设置但刷新后不可见（pinSet
+                     && !pin）→ 提示"已设置 · 重新生成可查看"，避免误判为未设置 -->
+                {{ pin ? (pinVisible ? pin : "••••••") : (pinSet ? $t("admin.lanPinMasked") : $t("admin.lanPinNotSet")) }}
+              </span>
+              <button
+                v-if="pin"
+                class="btn btn-ghost btn-icon btn-sm"
+                :title="pinVisible ? $t('admin.lanHidePin') : $t('admin.lanShowPin')"
+                @click="pinVisible = !pinVisible"
+              >
+                <EyeOff v-if="pinVisible" :size="14" />
+                <Eye v-else :size="14" />
+              </button>
+              <button
+                v-if="pin"
+                class="btn btn-ghost btn-icon btn-sm"
+                :title="pinCopied ? $t('common.copied') : $t('admin.copyUrlHint')"
+                @click="copyPin"
+              >
+                <Check v-if="pinCopied" :size="14" />
+                <Copy v-else :size="14" />
+              </button>
+            </div>
+            <p class="lan-pin-hint">{{ $t("admin.lanPinHint") }}</p>
+            <div class="lan-auth-actions">
+              <label class="lan-toggle">
+                <input
+                  type="checkbox"
+                  :checked="authEnabled"
+                  :disabled="authBusy"
+                  @change="toggleAuth"
+                />
+                <span>{{ $t("admin.lanPinEnabled") }}</span>
+              </label>
+              <button class="btn btn-sm" :disabled="authBusy" @click="regeneratePin">
+                {{ $t("admin.lanRegeneratePin") }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Authorized devices -->
+          <div class="lan-devices">
+            <div class="lan-devices-head">
+              <span class="lan-devices-title">{{ $t("admin.lanDevices") }}</span>
+              <button
+                v-if="devices.length"
+                class="btn btn-ghost btn-sm"
+                :disabled="authBusy"
+                @click="revokeAll"
+              >
+                <Trash2 :size="12" />
+                {{ $t("admin.lanRevokeAll") }}
+              </button>
+            </div>
+            <div v-if="!devices.length" class="lan-empty">{{ $t("admin.lanDevicesEmpty") }}</div>
+            <div v-else class="lan-device-list">
+              <div v-for="d in devices" :key="d.token" class="lan-device-row">
+                <div class="lan-device-meta">
+                  <code class="lan-device-id">{{ d.token.slice(0, 8) }}…</code>
+                  <span class="lan-device-date">{{ fmtDate(d.createdAt) }} → {{ fmtDate(d.expiresAt) }}</span>
+                </div>
+                <button
+                  class="btn btn-ghost btn-icon btn-sm"
+                  :disabled="authBusy"
+                  :title="$t('admin.lanRevoke')"
+                  @click="revokeDevice(d.token)"
+                >
+                  <Trash2 :size="13" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -542,11 +791,139 @@ onUnmounted(() => {
   word-break: break-all;
 }
 
+/* ── LAN auth card ── */
+.lan-auth-card {
+  margin-top: var(--space-md);
+}
+
+.lan-auth-error {
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
+}
+
+.lan-auth-main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+.lan-pin-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.lan-pin-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.lan-pin-code {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.35em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-height: 28px;
+}
+
+.lan-pin-hint {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.lan-auth-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-top: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.lan-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-size-control);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.lan-devices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.lan-devices-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.lan-devices-title {
+  font-size: var(--font-size-control);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.lan-empty {
+  font-size: var(--font-size-caption);
+  color: var(--text-tertiary);
+}
+
+.lan-device-list {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.lan-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.lan-device-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lan-device-id {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.lan-device-date {
+  font-size: var(--font-size-micro);
+  color: var(--text-tertiary);
+}
+
 @media (max-width: 900px) {
   .share-grid {
     grid-template-columns: 1fr;
   }
   .guide-grid {
+    grid-template-columns: 1fr;
+  }
+  .lan-auth-main {
     grid-template-columns: 1fr;
   }
 }

@@ -214,6 +214,27 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 | GET | `/api/session-config` | — | `{success, idle_timeout_secs}` |
 | PUT | `/api/session-config` | `{idle_timeout_secs}` | `{success}` |
 
+### 2.6 局域网鉴权（LAN auth，0.2.0 P3）
+
+非 loopback（局域网）请求在鉴权开启时需先通过 PIN 换取 30 天设备 cookie（`piter_lan_token`）。
+未授权时：`/api/*` 与 WS upgrade 返回 `401 {success:false, error:"lan_auth_required"}`；页面请求返回服务端内联 PIN 页（不暴露 SPA）。
+
+| 方法 | 路径 | Body | 响应 |
+|------|------|------|------|
+| POST | `/api/lan/auth` | `{pin}` | 校验成功：`200 {success, expiresAt}` + `Set-Cookie: piter_lan_token=...`；错误 PIN：`401 {success:false, error:"lan_auth_bad_pin"}` |
+| GET | `/api/lan/auth/config` | — | `{success, enabled, pinSet}`（不返回 PIN 明文） |
+| PUT | `/api/lan/auth/config` | `{enabled?}` 和/或 `{regenerate:true}` | `{success, enabled, pinSet, pin?}`（`pin` 仅在重新生成时返回一次） |
+| GET | `/api/lan/auth/devices` | — | `{success, devices: [{token, createdAt, expiresAt}...]}` |
+| DELETE | `/api/lan/auth/devices/:id` | — | `{success}`（`id` 即设备 token） |
+| POST | `/api/lan/auth/revoke` | — | `{success}`（清空全部设备） |
+
+豁免路径：loopback 请求（桌面端）、鉴权未开启、`/api/lan/auth` 本身、`/api/health`。
+
+安全约束：
+- **爆破防护**：`POST /api/lan/auth` 按来源 IP 连续 5 次输错锁定 60 秒（内存表，重启清零），锁定期间返回 `429 {error:"lan_auth_rate_limited", retryAfter}`。
+- **配置变更仅限本机**：`PUT /api/lan/auth/config`、`DELETE /api/lan/auth/devices/:id`、`POST /api/lan/auth/revoke` 仅 loopback 可调用（admin 面板走 127.0.0.1），非 loopback 返回 `403 {error:"lan_forbidden_local_only"}`；只读查询（config/devices）保持 cookie 门禁。
+- **威胁模型**：PIN 以加盐 SHA-256（快哈希）存储，6 位 PIN 熵低——本地 `piter.db` 被窃取即可秒破 PIN；鉴权定位是"防误入"，不视为强密码。
+
 ---
 
 ## 三、数据模型
@@ -358,6 +379,24 @@ Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提�
 |----|------|------|
 | extension_name | TEXT | PRIMARY KEY |
 | extension_path | TEXT | 可为 NULL（写入时自动解析存储） |
+
+### lan_auth_config（单行，id=1）
+
+| 列 | 类型 | 约束 |
+|----|------|------|
+| id | INTEGER | PRIMARY KEY CHECK (id=1) |
+| enabled | INTEGER | NOT NULL DEFAULT 0 |
+| pin_hash | TEXT | NOT NULL DEFAULT ''（salt 化 SHA-256，不落明文） |
+| pin_salt | TEXT | NOT NULL DEFAULT '' |
+| updated_at | TEXT | NOT NULL (RFC3339) |
+
+### lan_tokens（每设备一条）
+
+| 列 | 类型 | 约束 |
+|----|------|------|
+| token | TEXT | PRIMARY KEY（随机 32 hex） |
+| created_at | TEXT | NOT NULL (RFC3339) |
+| expires_at | TEXT | NOT NULL (RFC3339)，30 天后过期 |
 
 ---
 

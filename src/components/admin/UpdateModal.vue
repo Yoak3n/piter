@@ -30,13 +30,17 @@ async function handleInstall() {
   phase.value = "downloading";
   progress.value = 0;
   errorMsg.value = "";
-  const ok = await installUpdate((p) => {
-    if (p.total && p.total > 0) {
-      progress.value = Math.min(100, Math.round((p.downloaded / p.total) * 100));
-    } else {
-      progress.value = -1;
-    }
-  });
+  const ok = await installUpdate(
+    (p) => {
+      if (p.total && p.total > 0) {
+        progress.value = Math.min(100, Math.round((p.downloaded / p.total) * 100));
+      } else {
+        progress.value = -1;
+      }
+    },
+    // 失败时回填真实错误（原实现只显示空 msg 的通用文案，真实错误被吞）
+    (msg) => { errorMsg.value = msg; },
+  );
   if (!ok) {
     phase.value = "error";
     // The app relaunches on success, so reaching here always means failure.

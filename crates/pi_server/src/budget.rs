@@ -54,11 +54,6 @@ struct CacheEntry {
 
 static CACHE: Mutex<Option<CacheEntry>> = Mutex::new(None);
 
-#[cfg(test)]
-fn reset_cache() {
-    *CACHE.lock().unwrap() = None;
-}
-
 // ─── Payload ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -314,7 +309,9 @@ mod tests {
 
     #[test]
     fn sums_cost_within_cycle_only() {
-        reset_cache();
+        // 注：缓存键 = (budget, reset_day, enabled, cycle) 不含 files，测试
+        // 必须用全局唯一的键（见 cache_returns_consistent_status 的注释），
+        // 否则并行运行时不同测试会互相命中/覆盖缓存。
         let dir = TempDir::new().unwrap();
         let files = vec![write(
             &dir,
@@ -330,16 +327,15 @@ mod tests {
         )];
 
         let now = ts("2026-02-15T12:00:00Z");
-        let status = budget_status_at(files, 10_000, 1, true, now).unwrap();
+        let status = budget_status_at(files, 20_000, 1, true, now).unwrap();
         assert_eq!(status.used, 150);
         assert_eq!(status.cycle_start, "2026-02-01");
         assert_eq!(status.cycle_end, "2026-03-01");
-        assert_eq!(status.tier, 0); // 1.5% < 50%
+        assert_eq!(status.tier, 0); // 0.75% < 50%
     }
 
     #[test]
     fn tier_rises_and_used_is_percent_of_budget() {
-        reset_cache();
         let dir = TempDir::new().unwrap();
         let files = vec![write(
             &dir,
@@ -359,7 +355,6 @@ mod tests {
 
     #[test]
     fn disabled_or_zero_budget_returns_zero_percent() {
-        reset_cache();
         let dir = TempDir::new().unwrap();
         let files = vec![write(
             &dir,
@@ -381,7 +376,7 @@ mod tests {
 
     #[test]
     fn cache_returns_consistent_status() {
-        reset_cache();
+        // 键 (10000, 1, true) 与其它测试互斥（sums=20000, tier=100）。
         let dir = TempDir::new().unwrap();
         let files = vec![write(
             &dir,

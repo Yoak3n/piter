@@ -982,6 +982,27 @@ export function usePiConnection() {
     });
   }
 
+  // ── LAN 未授权（WS upgrade 401）提示（0.2.0 P3 审查项）────────
+  // WS 握手失败页面拿不到 HTTP 状态码；onerror 时轻量探测一个 REST 端点：
+  // 若返回 401 lan_auth_required → 设备 cookie 已失效（被撤销/过期），
+  // 提示"需要 PIN"并停止自动重连循环（否则只会无限"已断开"）。
+  async function checkLanAuthRequired() {
+    if (suspendReconnect) return;
+    try {
+      const res = await fetch("/api/sessions");
+      if (res.status === 401) {
+        const data = await res.json();
+        if (data?.error === "lan_auth_required") {
+          statusText.value = i18n.global.t("chat.lanAuthRequired");
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          suspendReconnect = true;
+        }
+      }
+    } catch {
+      // 网关整体不可达时忽略（不是鉴权问题）
+    }
+  }
+
   function connectWebSocket() {
     registerWindowLifecycleListeners();
     const url = getWsUrl();
@@ -1011,6 +1032,8 @@ export function usePiConnection() {
     };
     ws.onerror = () => {
       ws?.close();
+      // WS upgrade 可能因 LAN 鉴权 401 失败 → 探测并提示（见上）
+      void checkLanAuthRequired();
     };
   }
 

@@ -389,7 +389,10 @@ export function useAdmin() {
   }
 
   /** Download + install the pending update; the app relaunches on success. */
-  async function installUpdate(onProgress: (p: UpdateProgress) => void): Promise<boolean> {
+  async function installUpdate(
+    onProgress: (p: UpdateProgress) => void,
+    onError?: (msg: string) => void,
+  ): Promise<boolean> {
     error.value = "";
     try {
       const channel = new Channel<UpdateProgress>();
@@ -398,6 +401,7 @@ export function useAdmin() {
       return true;
     } catch (e) {
       error.value = `Failed to install update: ${e}`;
+      onError?.(String(e));
       return false;
     }
   }

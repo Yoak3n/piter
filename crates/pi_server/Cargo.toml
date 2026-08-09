@@ -28,6 +28,8 @@ tar = "0.4"
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 futures-util = "0.3"
+# PIN hashing (LAN auth)
+sha2 = { workspace = true }
 
 # Broker utilities
 chrono = "0.4"

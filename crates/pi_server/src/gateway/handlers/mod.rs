@@ -2,6 +2,7 @@
 
 pub mod budget;
 pub mod extensions;
+pub mod lan_auth;
 pub mod pi;
 pub mod project;
 pub mod search;
