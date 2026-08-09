@@ -1,17 +1,16 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
-import { useI18n } from "vue-i18n";
+import { watch } from "vue";
 import {
-  Store, Search, Package, Download, ExternalLink, Globe,
+  Search, Package, Globe,
   Loader2, RefreshCw, ChevronLeft, ChevronRight,
-  Puzzle, Paintbrush, MessageSquare, Zap,
 } from "lucide-vue-next";
 import { EmptyState } from "@piter/ui";
-import { invoke } from "@tauri-apps/api/core";
-import {
-  useMarketplace,
-  type MarketPackage, type PackageType, type SortMode,
-} from "../../composables/useMarketplace";
+import MarketPackageCard from "./MarketPackageCard.vue";
+import { useMarketplace } from "../../composables/useMarketplace";
+
+// ─── Marketplace Tab ────────────────────────────────────────────────────
+// 数据/过滤/分页/安装动作在 useMarketplace；卡片展示在 MarketPackageCard。
+// 本组件只做模板组装（工具栏 + 网格 + 分页）。
 
 const props = defineProps<{
   packages: string[];
@@ -27,103 +26,15 @@ const {
   installingPkg, installError,
   filteredPackages, pagedPackages,
   totalPages, pageNumbers,
-  loadPackages, isInstalled, setInstalled,
-  setType, setPage, setSearch,
-} = useMarketplace();
-
-const searchInput = ref("");
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
-
-const { t } = useI18n();
-
-function onSearchInput(e: Event) {
-  const val = (e.target as HTMLInputElement).value;
-  searchInput.value = val;
-  if (searchTimer) clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => setSearch(val), 180);
-}
-
-const typeFilters: { key: PackageType; labelKey: string; icon: any }[] = [
-  { key: "all", labelKey: "admin.filterAll", icon: Store },
-  { key: "extension", labelKey: "admin.filterExtensions", icon: Puzzle },
-  { key: "skill", labelKey: "admin.filterSkills", icon: Zap },
-  { key: "theme", labelKey: "admin.filterThemes", icon: Paintbrush },
-  { key: "prompt", labelKey: "admin.filterPrompts", icon: MessageSquare },
-];
-
-const sortOptions: { value: SortMode; labelKey: string }[] = [
-  { value: "downloads", labelKey: "admin.sortDownloads" },
-  { value: "name", labelKey: "admin.sortName" },
-  { value: "updated", labelKey: "admin.sortUpdated" },
-];
-
-function fmtDownloads(n: number): string {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return String(n);
-}
-
-function badgeClass(pkg: MarketPackage): string {
-  if (pkg.types?.includes("extension")) return "badge-accent";
-  if (pkg.types?.includes("skill")) return "badge-success";
-  return "badge-muted";
-}
-
-function primaryType(pkg: MarketPackage): string {
-  if (pkg.types?.length) return pkg.types[0];
-  return "package";
-}
-
-async function fetchInstalled(): Promise<string[]> {
-  try {
-    return await invoke<string[]>("list_pi_packages");
-  } catch {
-    return props.packages.map((p) => p.replace(/^npm:/, ""));
-  }
-}
-
-async function loadAll() {
-  const installed = await fetchInstalled();
-  await loadPackages(installed);
-}
-
-async function handleInstall(pkg: MarketPackage) {
-  installingPkg.value = pkg.name;
-  installError.value = null;
-  try {
-    await invoke("install_pi_package", { source: `npm:${pkg.name}` });
-    const installed = await fetchInstalled();
-    setInstalled(pkg.name, true);
-    emit("packages-changed", installed);
-  } catch (e) {
-    installError.value = t("admin.installFailed", { msg: `${pkg.name}: ${e}` });
-  } finally {
-    installingPkg.value = null;
-  }
-}
-
-async function handleUninstall(pkg: MarketPackage) {
-  installingPkg.value = pkg.name;
-  installError.value = null;
-  try {
-    await invoke("remove_pi_package", { source: `npm:${pkg.name}` });
-    const installed = await fetchInstalled();
-    setInstalled(pkg.name, false);
-    emit("packages-changed", installed);
-  } catch (e) {
-    installError.value = t("admin.installFailed", { msg: `${pkg.name}: ${e}` });
-  } finally {
-    installingPkg.value = null;
-  }
-}
-
-async function openLink(url: string) {
-  try {
-    await invoke("open_path", { path: url });
-  } catch {
-    window.open(url, "_blank");
-  }
-}
+  searchInput, onSearchInput,
+  typeFilters, sortOptions,
+  loadAll, isInstalled,
+  setType, setPage,
+  handleInstall, handleUninstall, openLink,
+} = useMarketplace({
+  fallbackInstalled: () => props.packages.map((p) => p.replace(/^npm:/, "")),
+  onPackagesChanged: (installed) => emit("packages-changed", installed),
+});
 
 // Auto-load on mount
 watch(() => props.packages, () => {
@@ -232,75 +143,16 @@ watch(() => props.packages, () => {
       </EmptyState>
 
       <div v-else class="mp-grid">
-        <div v-for="pkg in pagedPackages" :key="pkg.name" class="mp-card">
-          <div class="mp-card-header">
-            <div class="mp-card-title-row">
-              <span class="mp-card-name truncate">{{ pkg.name }}</span>
-              <span class="badge" :class="badgeClass(pkg)">{{ primaryType(pkg) }}</span>
-            </div>
-            <p v-if="pkg.description" class="mp-card-desc truncate">{{ pkg.description }}</p>
-          </div>
-
-          <div class="mp-card-meta">
-            <span v-if="pkg.author" class="mp-card-author">{{ pkg.author }}</span>
-            <span v-if="pkg.downloads" class="mp-card-downloads">
-              <Download :size="10" />
-              {{ fmtDownloads(pkg.downloads) }}
-            </span>
-          </div>
-
-          <div class="mp-card-footer">
-            <div class="mp-card-links">
-              <button
-                v-if="pkg.links?.npm"
-                class="mp-link"
-                :title="$t('admin.linkNpm')"
-                @click="openLink(pkg.links.npm!)"
-              >
-                <ExternalLink :size="11" />
-                npm
-              </button>
-              <button
-                v-if="pkg.links?.repository"
-                class="mp-link"
-                :title="$t('admin.linkRepo')"
-                @click="openLink(pkg.links.repository!)"
-              >
-                <ExternalLink :size="11" />
-                repo
-              </button>
-              <button
-                v-if="pkg.links?.homepage"
-                class="mp-link"
-                :title="$t('admin.linkHome')"
-                @click="openLink(pkg.links.homepage!)"
-              >
-                <ExternalLink :size="11" />
-                home
-              </button>
-            </div>
-
-            <button
-              v-if="isInstalled(pkg)"
-              class="btn btn-sm btn-danger"
-              :disabled="installingPkg === pkg.name"
-              @click="handleUninstall(pkg)"
-            >
-              <Loader2 v-if="installingPkg === pkg.name" :size="12" class="spin" />
-              {{ $t("admin.uninstall") }}
-            </button>
-            <button
-              v-else
-              class="btn btn-sm btn-primary"
-              :disabled="installingPkg === pkg.name"
-              @click="handleInstall(pkg)"
-            >
-              <Loader2 v-if="installingPkg === pkg.name" :size="12" class="spin" />
-              <Download v-else :size="12" />
-              {{ $t("admin.install") }}
-            </button>
-          </div>
-        </div>
+        <MarketPackageCard
+          v-for="pkg in pagedPackages"
+          :key="pkg.name"
+          :pkg="pkg"
+          :installed="isInstalled(pkg)"
+          :installing="installingPkg === pkg.name"
+          @install="handleInstall(pkg)"
+          @uninstall="handleUninstall(pkg)"
+          @open-link="openLink"
+        />
       </div>
 
       <!-- Pagination -->
@@ -552,103 +404,6 @@ watch(() => props.packages, () => {
   .mp-grid {
     grid-template-columns: 1fr;
   }
-}
-
-/* Card */
-.mp-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  padding: var(--space-md);
-  background: var(--bg-muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  transition: border-color var(--duration-fast) var(--ease), background var(--duration-fast) var(--ease);
-}
-.mp-card:hover {
-  border-color: var(--border-hover);
-  background: var(--bg-hover);
-}
-
-.mp-card-header {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 0;
-}
-
-.mp-card-title-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  min-width: 0;
-}
-
-.mp-card-name {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-control);
-  font-weight: 600;
-  color: var(--text);
-  min-width: 0;
-}
-
-.mp-card-desc {
-  font-size: var(--font-size-caption);
-  color: var(--text-tertiary);
-  margin: 0;
-  line-height: var(--line-height-caption);
-}
-
-.mp-card-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  font-size: var(--font-size-micro);
-  color: var(--text-tertiary);
-}
-
-.mp-card-author {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mp-card-downloads {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-}
-
-.mp-card-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: auto;
-  padding-top: var(--space-xs);
-}
-
-.mp-card-links {
-  display: flex;
-  gap: var(--space-xs);
-}
-
-.mp-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  font-size: 10px;
-  color: var(--text-tertiary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: color var(--duration-fast) var(--ease), background var(--duration-fast) var(--ease);
-}
-.mp-link:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
 }
 
 /* Pagination */

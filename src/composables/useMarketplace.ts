@@ -1,4 +1,13 @@
 import { ref, computed } from "vue";
+import type { Component } from "vue";
+import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "vue-i18n";
+import { Store, Puzzle, Paintbrush, MessageSquare, Zap } from "lucide-vue-next";
+
+// ─── Marketplace（MarketplaceTab）：包列表 + 过滤/分页 + 安装动作 ──────
+// 数据/过滤/分页/安装卸载/打开外链全部在此；组件只做模板组装。
+// deps：fallbackInstalled（invoke 不可用时的兜底已装列表，来自父级 props）、
+//       onPackagesChanged（安装/卸载后把最新已装列表回传父级）。
 
 const API_BASE = "https://pi-packages-api.shixin.workers.dev";
 const PAGE_SIZE = 250; // fetch page size from remote
@@ -21,7 +30,28 @@ export interface MarketPackage {
 export type PackageType = "all" | "extension" | "skill" | "theme" | "prompt";
 export type SortMode = "downloads" | "name" | "updated";
 
-export function useMarketplace() {
+// ─── 工具栏静态选项（类型筛选 / 排序）───
+
+const typeFilters: { key: PackageType; labelKey: string; icon: Component }[] = [
+  { key: "all", labelKey: "admin.filterAll", icon: Store },
+  { key: "extension", labelKey: "admin.filterExtensions", icon: Puzzle },
+  { key: "skill", labelKey: "admin.filterSkills", icon: Zap },
+  { key: "theme", labelKey: "admin.filterThemes", icon: Paintbrush },
+  { key: "prompt", labelKey: "admin.filterPrompts", icon: MessageSquare },
+];
+
+const sortOptions: { value: SortMode; labelKey: string }[] = [
+  { value: "downloads", labelKey: "admin.sortDownloads" },
+  { value: "name", labelKey: "admin.sortName" },
+  { value: "updated", labelKey: "admin.sortUpdated" },
+];
+
+export function useMarketplace(deps: {
+  fallbackInstalled: () => string[];
+  onPackagesChanged: (installed: string[]) => void;
+}) {
+  const { t } = useI18n();
+
   const allPackages = ref<MarketPackage[]>([]);
   const installedSources = ref<Set<string>>(new Set());
   const loading = ref(false);
@@ -38,6 +68,16 @@ export function useMarketplace() {
   // Install tracking
   const installingPkg = ref<string | null>(null);
   const installError = ref<string | null>(null);
+
+  // ─── Search input（防抖同步到 searchQuery）───
+  const searchInput = ref("");
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  function onSearchInput(e: Event) {
+    const val = (e.target as HTMLInputElement).value;
+    searchInput.value = val;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => setSearch(val), 180);
+  }
 
   async function fetchAllPackages(): Promise<MarketPackage[]> {
     const results: MarketPackage[] = [];
@@ -68,6 +108,58 @@ export function useMarketplace() {
       error.value = `Failed to load packages: ${e}`;
     } finally {
       loading.value = false;
+    }
+  }
+
+  // ─── 已装列表（invoke 失败时用父级 props 兜底）───
+  async function fetchInstalled(): Promise<string[]> {
+    try {
+      return await invoke<string[]>("list_pi_packages");
+    } catch {
+      return deps.fallbackInstalled();
+    }
+  }
+
+  async function loadAll() {
+    const installed = await fetchInstalled();
+    await loadPackages(installed);
+  }
+
+  async function handleInstall(pkg: MarketPackage) {
+    installingPkg.value = pkg.name;
+    installError.value = null;
+    try {
+      await invoke("install_pi_package", { source: `npm:${pkg.name}` });
+      const installed = await fetchInstalled();
+      setInstalled(pkg.name, true);
+      deps.onPackagesChanged(installed);
+    } catch (e) {
+      installError.value = t("admin.installFailed", { msg: `${pkg.name}: ${e}` });
+    } finally {
+      installingPkg.value = null;
+    }
+  }
+
+  async function handleUninstall(pkg: MarketPackage) {
+    installingPkg.value = pkg.name;
+    installError.value = null;
+    try {
+      await invoke("remove_pi_package", { source: `npm:${pkg.name}` });
+      const installed = await fetchInstalled();
+      setInstalled(pkg.name, false);
+      deps.onPackagesChanged(installed);
+    } catch (e) {
+      installError.value = t("admin.installFailed", { msg: `${pkg.name}: ${e}` });
+    } finally {
+      installingPkg.value = null;
+    }
+  }
+
+  async function openLink(url: string) {
+    try {
+      await invoke("open_path", { path: url });
+    } catch {
+      window.open(url, "_blank");
     }
   }
 
@@ -176,6 +268,10 @@ export function useMarketplace() {
     loaded,
     activeType,
     searchQuery,
+    searchInput,
+    onSearchInput,
+    typeFilters,
+    sortOptions,
     installedOnly,
     sortMode,
     currentPage,
@@ -187,6 +283,11 @@ export function useMarketplace() {
     totalPages,
     pageNumbers,
     loadPackages,
+    loadAll,
+    fetchInstalled,
+    handleInstall,
+    handleUninstall,
+    openLink,
     isInstalled,
     setInstalled,
     setType,
