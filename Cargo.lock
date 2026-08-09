@@ -3318,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "pi_server"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "axum",
  "chrono",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "piter"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",

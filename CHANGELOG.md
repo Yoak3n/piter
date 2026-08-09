@@ -2,6 +2,36 @@
 
 本文件记录 piter 的重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.0] - 2026-08-08
+
+> 版本主线：对话记录管理（消息撤回 + 文件回滚）+ 跨会话搜索 + 命令面板 + 局域网鉴权 + 预算提醒 + 大规模代码组织重构。
+
+### 新增
+
+- **消息撤回（对话记录管理）**：user 消息 hover 撤回按钮 → fork 截断该消息及后续 → **无感撤回**（删除旧 jsonl、DB 指向更新，磁盘始终只留一个会话文件）→ **文件回滚**（git 仓库自动 checkpoint：agent_end 时 `git stash create` + untracked 清单，撤回时 `git restore` 恢复该轮文件改动）；非 git 仓库降级为仅消息撤回；撤回确认三选（恢复文件 / 仅撤回消息 / 取消）
+- **跨会话搜索**：FTS5 trigram 全文搜索（LIKE 兜底）+ mtime 增量索引，命令面板搜索分区，命中跳转定位；连带修复 BUG-018（重启后自动命名覆盖会话名）
+- **命令面板**：Ctrl+K 统一入口（会话切换 / 新建 / 设置 / 搜索），导航/动作类范围
+- **斜杠命令补全**：composer 输入 `/` 补全 pi 命令（get_commands：extension/prompt/skill），精确 caret 定位 / IME 兼容 / 最近使用置顶
+- **会话完成通知**：agent_end 两层提示——前端顶部可点击 toast + Rust 系统通知（窗口不可见/失焦时，tauri-plugin-notification）
+- **会话级置顶**：sessions 表 pinned 列 + 项目内排序置前 + hover Pin 按钮（warning 琥珀色区分项目 pin）
+- **消息时间轴导航**：固定 minimap 轨道 + 当前 turn 声波波形 + 点击跳转（小星星彩蛋 + hover 摘要）
+- **预算提醒**：月度预算 + 自定义重置日 + 50/80/100% 三档 toast（周期含闰月/跨年边界，UsageTab 进度条）
+- **局域网鉴权**：LAN 分享加 PIN（6 位数字，哈希存储）——服务端内联 PIN 页 + 设备 token 30 天 + 逐设备管理（撤销/清空）；loopback 豁免、鉴权关闭放行；chat WS 同源 cookie 自动生效
+- **扩展 UI 交互**：extension_ui_request/response 前端对话框（select/confirm/input/editor），解锁 rpiv-ask-user-question / piolium 交互；Pi 升级至 0.83.0
+
+### 重构（代码组织重构，0.2.0 专项）
+
+- **gateway 拆分**：mod.rs 按生命周期拆为 state/server/event_loop/responses 四文件；db.rs 按领域拆为 db/ 目录（sessions/projects/extensions/search/settings + checkpoints）；resolve.rs 按职责拆为 resolve/ 目录（locations/download/install/version）；session_manager 标题生成逻辑抽为 title.rs
+- **命名消歧**：删除 gateway/messages 空壳（send_get_state 并入 ws/broker/command.rs）；src-tauri/src/pi/ → pi_runtime/
+- **chat 前端拆分**：usePiConnection（1451 行）→ 分层 composable（usePiEvents/useSessionStore/usePiNotify/useExtensionCards），事件分发表（Record<EventType, Handler>）+ 按事件域分组（lifecycle/meta/extensions/tools）；App.vue 全局逻辑下沉（useTheme/useDefaultModel/useSearchJump/useCommandPalette/useSessionActions）；NewSessionPane 拆三子组件
+- **admin 前端拆分**：UsageTab（1277→834）/ ShareTab（931→391）/ NewSessionPane / ProvidersTab / MarketplaceTab / PiVersionsTab 全部拆分（逻辑抽 composable + 纯展示子组件）
+- **i18n 拆分**：messages.ts（975→25 行）按语言 × 领域分文件（messages/{en,zh}/{common,chat,admin}），键一致性自动核对通过
+- **新增模块**：budget.rs / lan_auth.rs / checkpoint.rs / git.rs / db/checkpoints.rs——均为"纯逻辑 + 独立测试"组织（延续 stats/search 模式）
+
+### 修复
+
+- **BUG-018**：恢复会话时还原 DB 会话名（防重启后自动命名覆盖）
+
 ## [0.1.2] - 2026-08-06
 
 > 版本主线：图片/文本附件与多模态 + 模型切换加固 + admin 分享与连接页 + 应用更新检查 UI。

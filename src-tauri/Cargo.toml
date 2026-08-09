@@ -1,6 +1,6 @@
 [package]
 name = "piter"
-version = "0.1.2"
+version = "0.2.0"
 description = "AI coding agent client — Tauri desktop shell + web chat UI driving pi coding agent sessions over WebSocket & REST"
 authors = ["Yoak3n <3354590676@qq.com>"]
 edition = "2021"
