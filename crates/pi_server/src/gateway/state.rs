@@ -1,14 +1,191 @@
-use crate::GatewayState;
+//! GatewayState 结构体与生命周期方法，以及"项目→会话"树构建。
+//!
+//! 做什么：定义 gateway 的共享状态（事件通道、broker 句柄、DB、会话管理器等），
+//! 提供 spawn / URL / kill_all / LAN IP 等生命周期操作，并基于数据库 + 运行时状态
+//! 构建 sessions_list 的 ProjectGroup 树。
+//! 不做什么：不绑定端口、不建 Router（那是 server.rs）；不消费 broker 事件
+//! （那是 event_loop.rs / responses.rs）。
+//! 依赖：broker（SpawnBuilder/EventTx）、session_manager、db、broadcast（kill_all 推送）。
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use tokio::sync::mpsc;
+
+use crate::broker::types::{BrokerInner, EventTx};
+
 use super::{
-    RuntimeSessionInfo, session_manager,
-    db::SessionRow, handlers, project::list_projects
+    broadcast::push_sessions_list_to_clients, db::SessionRow, helper::discover_lan_ips, handlers,
+    project::list_projects, session_manager,
 };
 
+// ─── Gateway State ─────────────────────────────────────────────────────────
+
+/// Clone-able state passed into every axum handler via `State`.
+#[derive(Clone)]
+pub struct GatewayState {
+    pub event_tx: EventTx,
+    pub inner: Arc<BrokerInner>,
+    /// Cached LAN IPs, lazily refreshed with a short TTL so addresses stay
+    /// accurate after network changes (e.g. switching WiFi).
+    pub lan_ips: Arc<parking_lot::Mutex<(std::time::Instant, Vec<String>)>>,
+    pub http_port: u16,
+    pub pi_version: String,
+    pub pi_exe: PathBuf,
+    pub static_dir: PathBuf,
+    pub start_time: std::time::Instant,
+    /// SQLite database for project/session/extension management.
+    pub db: Arc<crate::gateway::db::Db>,
+    /// Cached discovered extension candidates (global / per-project), filled
+    /// at startup and refreshed in the background. DB state is not cached.
+    pub extension_cache: Arc<parking_lot::RwLock<HashMap<String, Vec<super::project::ExtensionEntry>>>>,
+    /// Connected UI WebSocket clients.
+    pub ui_clients: Arc<parking_lot::Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>>,
+    /// Session manager for message tracking and idle lifecycle.
+    pub session_manager: Arc<parking_lot::Mutex<session_manager::SessionManager>>,
+    /// Agent 完成观察点：会话 agent_end 时回调 (instance_id, session_label)。
+    /// 由桌面壳层注册（用于系统通知——托盘隐藏时前端 WS 不可达，系统通知只能走 Rust 侧）；
+    /// web / headless 场景保持 None。
+    pub agent_end_hook: Arc<parking_lot::Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
+}
+
+// ─── GatewayState lifecycle methods ────────────────────────────────────────
+// start_gateway（端口绑定 + Router 构建 + 线程 spawn）见 server.rs。
+
+impl GatewayState {
+    /// Clone the stdin sender for a running instance, if it exists.
+    pub fn instance_stdin_tx(&self, instance_id: &str) -> Option<mpsc::UnboundedSender<String>> {
+        self.inner
+            .instances
+            .lock()
+            .get(instance_id)
+            .and_then(|inst| inst.stdin_tx.clone())
+    }
+
+    /// 注册 agent_end 观察回调（桌面壳层用，发送系统通知）。回调运行在
+    /// gateway 事件循环线程，必须快速返回、不可 panic。
+    pub fn set_agent_end_hook<F>(&self, hook: F)
+    where
+        F: Fn(&str, &str) + Send + Sync + 'static,
+    {
+        *self.agent_end_hook.lock() = Some(Box::new(hook));
+    }
+
+    /// Start building a persistent pi process spawn.
+    ///
+    /// ```ignore
+    /// let id = gw.spawn().cwd("/project").extensions(&exts).run()?;
+    /// ```
+    pub fn spawn(&self) -> crate::broker::process::SpawnBuilder {
+        crate::broker::process::SpawnBuilder::new(
+            self.inner.clone(),
+            self.event_tx.clone(),
+            self.pi_exe.clone(),
+            self.static_dir.clone(),
+            self.pi_version.clone(),
+            true, // persistent
+        )
+    }
+
+    /// Start building an ephemeral pi process spawn (no session).
+    pub fn spawn_ephemeral(&self) -> crate::broker::process::SpawnBuilder {
+        crate::broker::process::SpawnBuilder::new(
+            self.inner.clone(),
+            self.event_tx.clone(),
+            self.pi_exe.clone(),
+            self.static_dir.clone(),
+            self.pi_version.clone(),
+            false, // ephemeral
+        )
+    }
+
+    pub fn ws_url(&self) -> String {
+        format!("ws://127.0.0.1:{}/ws", self.http_port)
+    }
+
+    pub fn http_url(&self) -> String {
+        format!("http://127.0.0.1:{}/", self.http_port)
+    }
+
+    pub fn port(&self) -> u16 {
+        self.http_port
+    }
+
+    /// Current LAN IPs, rediscovered at most once per TTL so the addresses
+    /// stay fresh after network changes without spawning a subprocess on
+    /// every call.
+    pub fn current_lan_ips(&self) -> Vec<String> {
+        const LAN_IPS_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+        let mut cache = self.lan_ips.lock();
+        if cache.0.elapsed() >= LAN_IPS_TTL {
+            cache.1 = discover_lan_ips();
+            cache.0 = std::time::Instant::now();
+        }
+        cache.1.clone()
+    }
+
+    pub fn lan_urls(&self) -> Vec<String> {
+        self.current_lan_ips()
+            .iter()
+            .map(|ip| {
+                format!(
+                    "http://{}:{}/chat?brokerWs=ws://{}:{}/ws",
+                    ip, self.http_port, ip, self.http_port
+                )
+            })
+            .collect()
+    }
+
+    pub fn uptime_secs(&self) -> u64 {
+        self.start_time.elapsed().as_secs()
+    }
+
+    /// Kill all pi instances.
+    pub fn kill_all(&self) {
+        use std::sync::atomic::Ordering;
+        let mut instances = self.inner.instances.lock();
+        for (_, mut inst) in instances.drain() {
+            inst.running.store(false, Ordering::SeqCst);
+            inst.killed.store(true, Ordering::SeqCst);
+            let _ = inst.child.kill();
+        }
+        drop(instances);
+        log::info!("[gateway] all pi instances stopped");
+
+        // Mark all tracked sessions unloaded (processes are gone) and push
+        // the updated sessions list so clients immediately see the stopped state.
+        {
+            let mut mgr = self.session_manager.lock();
+            let ids: Vec<String> = mgr.sessions.keys().cloned().collect();
+            if !ids.is_empty() {
+                mgr.mark_unloaded(&ids);
+            }
+        }
+        push_sessions_list_to_clients(self);
+    }
+
+    pub fn has_active_processes(&self) -> bool {
+        !self.inner.instances.lock().is_empty()
+    }
+}
+
+/// Lightweight runtime info from session manager for enriching project tree.
+#[derive(Clone)]
+struct RuntimeSessionInfo {
+    state: String,
+    model: Option<String>,
+    model_provider: Option<String>,
+    thinking_level: Option<String>,
+    message_count: u32,
+    message_seq: u64,
+    session_name: Option<String>,
+    last_active_epoch: u64,
+}
 
 /// Build project-session tree from database + session file metadata + runtime state.
 pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::ProjectGroup> {
     use handlers::{ProjectGroup, SessionInfo};
-    use std::collections::HashMap;
 
     // Build lookup: session_file_path → (instance_id, state_info) from session manager
     let mgr = state.session_manager.lock();
@@ -247,4 +424,3 @@ mod tests {
         assert_eq!(ids(&state), vec!["s2", "s1"]);
     }
 }
-
