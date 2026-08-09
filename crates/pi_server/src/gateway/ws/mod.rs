@@ -6,7 +6,7 @@
 mod helper;
 mod broker;
 
-pub use broker::{dispatch_control, send_get_state};
+pub use broker::{dispatch_control, send_get_messages, send_get_state};
 
 use std::sync::Arc;
 
@@ -227,6 +227,15 @@ fn dispatch_gateway_command(
         }
         "get_lan_info" => {
             Ok(serde_json::to_value(super::handlers::system::get_lan_info(state)).unwrap_or_default())
+        }
+        "fork_capability" => {
+            // 撤回确认框需要知道该会话是否支持文件回滚（cwd 是否 git 仓库）。
+            let iid = data.get("instanceId").and_then(Value::as_str).ok_or("missing instanceId")?;
+            let cwd = state.session_manager.lock().sessions.get(iid).map(|s| s.cwd.clone());
+            let rollback_available = cwd
+                .map(|c| super::git::is_git_repo(std::path::Path::new(&c)))
+                .unwrap_or(false);
+            Ok(json!({ "rollbackAvailable": rollback_available }))
         }
         _ => Err(format!("unknown gateway command: {}", command)),
     }

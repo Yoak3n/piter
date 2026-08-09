@@ -67,6 +67,7 @@ impl Db {
         ) {
             let _ = conn.execute("DELETE FROM session_messages WHERE session_id = ?1", params![iid]);
             let _ = conn.execute("DELETE FROM search_index_state WHERE session_id = ?1", params![iid]);
+            let _ = conn.execute("DELETE FROM checkpoints WHERE session_id = ?1", params![iid]);
         }
         conn.execute(
             "DELETE FROM sessions WHERE session_path = ?1",
@@ -89,6 +90,11 @@ impl Db {
             params![instance_id],
         )
         .map_err(|e| format!("delete_session_by_instance state: {}", e))?;
+        conn.execute(
+            "DELETE FROM checkpoints WHERE session_id = ?1",
+            params![instance_id],
+        )
+        .map_err(|e| format!("delete_session_by_instance checkpoints: {}", e))?;
         conn.execute(
             "DELETE FROM sessions WHERE instance_id = ?1",
             params![instance_id],

@@ -17,9 +17,11 @@
 //! - session_manager.rs / project.rs / ext_cache.rs / lan_auth.rs  领域逻辑
 
 mod broadcast;
+mod checkpoint;
 pub mod db;
 pub mod ext_cache;
 mod event_loop;
+mod git;
 pub mod handlers;
 mod helper;
 mod lan_auth;
@@ -36,3 +38,11 @@ pub use state::GatewayState;
 // 兼容别名：以下符号被子模块通过 `super::` 引用（历史路径，随后续拆分逐步收敛为直接导入）。
 use crate::broker::types::PROTOCOL_VERSION;
 use broadcast::push_sessions_list_to_clients;
+
+/// Current wall-clock epoch milliseconds（checkpoint 时间戳用）。
+pub fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}

@@ -107,7 +107,8 @@ fn parse_session_entries(path: &Path) -> Result<Vec<IndexedMessage>, String> {
 }
 
 /// Extract plain text from a message (string content or text content blocks).
-fn extract_text(msg: &Value) -> String {
+/// pub(crate)：消息撤回 fork 链路也用它解析会话文件里的 user 消息文本。
+pub(crate) fn extract_text(msg: &Value) -> String {
     let Some(content) = msg.get("content") else {
         return String::new();
     };

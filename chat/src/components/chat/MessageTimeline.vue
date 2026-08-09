@@ -21,6 +21,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
+  (e: "recall", message: Message): void;
   (e: "scroll-handled"): void;
 }>();
 
@@ -344,7 +345,9 @@ watch(() => props.currentThinking, scrollToBottom);
       :ref="(el) => setTurnRef(turn.id, el)"
       :turn="turn"
       :highlight-id="highlightId"
+      :can-recall="!isStreaming"
       @respond-extension="emit('respond-extension', $event)"
+      @recall="emit('recall', $event)"
     />
 
     <!-- Streaming state -->

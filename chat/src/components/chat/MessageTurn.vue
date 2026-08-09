@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import type { ChatTurn } from "../../types";
+import type { ChatTurn, Message } from "../../types";
 import { imageContentToSrc } from "../../utils/image";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCard from "./ToolCard.vue";
@@ -11,10 +11,13 @@ defineProps<{
   turn: ChatTurn;
   /** 跨会话搜索命中消息的 id（非 null 时对应消息闪一下高亮） */
   highlightId?: number | null;
+  /** 是否允许撤回（非流式中）——显示用户消息 hover 撤回按钮 */
+  canRecall?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
+  (e: "recall", message: Message): void;
 }>();
 
 // Per-turn expand state (isolated per turn, no cross-turn collisions)
@@ -51,6 +54,12 @@ defineExpose({ turnEl });
       class="user-block"
       :class="{ 'is-slash': turn.user.meta?.slashCommand, 'msg-highlight': highlightId === turn.user.id }"
     >
+      <button
+        v-if="canRecall && turn.user"
+        class="recall-btn"
+        :title="$t('chat.recallMessage')"
+        @click.stop="emit('recall', turn.user)"
+      >{{ $t("chat.recallMessage") }}</button>
       <span v-if="turn.user.meta?.slashCommand" class="slash-exec-label">{{ $t("chat.slashExecuted") }}</span>
       <div v-if="turn.user.images?.length" class="msg-images user-images">
         <div v-for="(img, i) in turn.user.images" :key="i" class="msg-image-item">
@@ -102,6 +111,15 @@ defineExpose({ turnEl });
 .system-msg { align-self:center; font-size:10px; color:var(--text-tertiary); background:var(--bg-muted); padding:2px 10px; border-radius:var(--radius-sm); min-width:0; }
 .tool-executions { display:flex; flex-direction:column; gap:4px; align-self:flex-start; max-width:90%; min-width:0; }
 .user-block { display:flex; flex-direction:column; align-items:flex-end; align-self:flex-end; max-width:90%; min-width:0; gap:4px; }
+/* 撤回按钮：hover 用户消息时浮现（撤回需用户知情，仅非流式显示） */
+.recall-btn {
+  opacity:0; pointer-events:none; transition:opacity var(--duration-fast) var(--ease);
+  font-size:10px; color:var(--text-tertiary); background:transparent;
+  border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:1px 8px; cursor:pointer; line-height:1.6; user-select:none;
+}
+.user-block:hover .recall-btn { opacity:1; pointer-events:auto; }
+.recall-btn:hover { color:var(--danger); border-color:var(--danger); }
 /* 面板执行的 slash 命令（meta.slashCommand）：整组弱化 + 灰显标签 */
 .user-block.is-slash { gap:2px; opacity:0.85; }
 .slash-exec-label { font-size:10px; color:var(--text-tertiary); padding:0 4px; user-select:none; }

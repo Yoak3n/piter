@@ -1,16 +1,20 @@
 //! Response 事件处理：pi 对 gateway 命令的响应。
 //!
-//! 做什么：`handle_response_event` 分拣 response 给三个子 handler ——
+//! 做什么：`handle_response_event` 分拣 response 给四个子 handler ——
 //! `handle_session_response`（会话确认 → 路由表 + get_state）、
-//! `handle_get_state_response`（完整状态落 DB + session manager + 模型持久化）、
-//! `handle_model_response`（set_model/cycle_model 成功 → 刷新运行时模型 + default 回滚）。
+//! `handle_get_state_response`（完整状态落 DB + session manager + 模型持久化
+//!   + 撤回后的删旧文件/文件回滚收尾）、
+//! `handle_model_response`（set_model/cycle_model 成功 → 刷新运行时模型 + default 回滚）、
+//! `handle_fork_response`（撤回成功 → get_state/get_messages 补发）与
+//! `handle_get_messages_response`（fork 后重置消息缓存并推送快照）。
 //! 不做什么：不广播事件（event_loop.rs）；不解析非 response 事件。
-//! 依赖：ws::send_get_state、session_manager、db、broadcast、broker::util。
+//! 依赖：ws::send_get_state / send_get_messages、session_manager、db、broadcast、checkpoint。
 
 use std::sync::Arc;
 
 use super::{
-    broadcast::push_sessions_list_to_clients, session_manager, ws::send_get_state, GatewayState,
+    broadcast::{broadcast_to_clients, broadcast_to_subscribers, push_sessions_list_to_clients},
+    session_manager, ws::{send_get_messages, send_get_state}, GatewayState,
 };
 
 /// Handle response-type events: session tracking, get_state triggers, and state completion.
@@ -22,6 +26,8 @@ pub(super) fn handle_response_event(state: &Arc<GatewayState>, raw: &str, instan
     handle_session_response(state, &resp, instance_id);
     handle_get_state_response(state, &resp, instance_id);
     handle_model_response(state, &resp, instance_id);
+    handle_fork_response(state, &resp, instance_id);
+    handle_get_messages_response(state, &resp, instance_id);
 }
 
 /// 1a/1b. On session-related responses: track assignment + trigger get_state.
@@ -85,6 +91,34 @@ fn handle_get_state_response(
             .remove(instance_id);
         if pending.is_some() {
             push_sessions_list_to_clients(state);
+        }
+        // 无感撤回收尾：get_state 确认新文件 B 已落盘 → 删旧文件 A + 文件回滚。
+        // 任一失败只推送提示、不阻断（消息已撤回、B 已生效，A 留待下次清理）。
+        let cleanup = state
+            .session_manager
+            .lock()
+            .take_pending_fork_cleanup(instance_id);
+        if let Some(pf) = cleanup {
+            if pf.old_path != sf {
+                if pf.rollback {
+                    if let Err(e) = super::checkpoint::restore_checkpoint(state, instance_id, pf.target_ms) {
+                        log::warn!("[gateway] fork rollback failed for {}: {}", instance_id, e);
+                        broadcast_fork_notice(state, instance_id, "fork_warn", &format!(
+                            "文件恢复失败：{}", e
+                        ));
+                    }
+                }
+                // 旧文件可能已在上一轮收尾中删掉（清理失败留待下次），再遇到时不再重复告警。
+                if std::path::Path::new(&pf.old_path).exists() {
+                    if let Err(e) = std::fs::remove_file(&pf.old_path) {
+                        log::warn!("[gateway] fork cleanup of old session failed: {}", e);
+                        broadcast_fork_notice(state, instance_id, "fork_warn", "旧记录未清理，下次启动可清理");
+                    } else {
+                        log::info!("[gateway] fork: removed old session file {}", pf.old_path);
+                    }
+                }
+                push_sessions_list_to_clients(state);
+            }
         }
     }
 
@@ -222,4 +256,110 @@ fn handle_model_response(
     }
     let _ = state.db.set_session_model(instance_id, Some(id), provider);
     push_sessions_list_to_clients(state);
+}
+
+/// 消息撤回（fork）响应：成功（且未被扩展取消）→ 转入 cleanup 槽 + 补发
+/// get_state（更新 DB 指向新文件 B）/ get_messages（重置消息缓存）。
+/// 失败 / 取消 → 推送前端提示（不改变会话）。
+fn handle_fork_response(
+    state: &Arc<GatewayState>,
+    resp: &pi_rpc::event::Response,
+    instance_id: &str,
+) {
+    if resp.command != "fork" {
+        return;
+    }
+
+    // 取出 pending（broker/command.rs 已记录），失败时也清掉，避免残留。
+    let pf = state.session_manager.lock().take_pending_fork(instance_id);
+
+    if !resp.success {
+        let err = resp.error.clone().unwrap_or_else(|| "unknown".to_string());
+        broadcast_fork_notice(state, instance_id, "fork_error", &format!("撤回失败：{}", err));
+        return;
+    }
+    let cancelled = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("cancelled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if cancelled {
+        broadcast_fork_notice(state, instance_id, "fork_error", "撤回被取消");
+        return;
+    }
+
+    if let Some(pf) = pf {
+        state
+            .session_manager
+            .lock()
+            .set_pending_fork_cleanup(instance_id, pf);
+    }
+
+    push_sessions_list_to_clients(state);
+    send_get_state(state, instance_id);
+    send_get_messages(state, instance_id);
+}
+
+/// get_messages 响应（fork 后重置消息缓存）：整表替换内存消息 + 清 partial +
+/// 重置 message_seq，然后把截断后的消息快照推给订阅者/所有客户端。
+fn handle_get_messages_response(
+    state: &Arc<GatewayState>,
+    resp: &pi_rpc::event::Response,
+    instance_id: &str,
+) {
+    if resp.command != "get_messages" || !resp.success {
+        return;
+    }
+    let Some(msgs) = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("messages"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return;
+    };
+
+    {
+        let mut mgr = state.session_manager.lock();
+        if let Some(s) = mgr.sessions.get_mut(instance_id) {
+            s.messages = msgs.clone();
+            s.partial_message = None;
+            s.message_seq = s.messages.len() as u64;
+            mgr.mark_dirty();
+        }
+    }
+
+    let snapshot = serde_json::json!({
+        "type": "session_snapshot",
+        "instanceId": instance_id,
+        "messages": msgs,
+        "messageSeq": msgs.len(),
+    })
+    .to_string();
+    if state.session_manager.lock().has_subscribers(instance_id) {
+        broadcast_to_subscribers(state, instance_id, &snapshot);
+    } else {
+        broadcast_to_clients(state, &snapshot);
+    }
+}
+
+/// 向该会话的订阅者（无订阅者则广播全部客户端）推送撤回提示事件。
+fn broadcast_fork_notice(
+    state: &Arc<GatewayState>,
+    instance_id: &str,
+    event_type: &str,
+    message: &str,
+) {
+    let msg = serde_json::json!({
+        "type": event_type,
+        "message": message,
+        "instanceId": instance_id,
+    })
+    .to_string();
+    if state.session_manager.lock().has_subscribers(instance_id) {
+        broadcast_to_subscribers(state, instance_id, &msg);
+    } else {
+        broadcast_to_clients(state, &msg);
+    }
 }

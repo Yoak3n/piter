@@ -38,6 +38,7 @@ const emit = defineEmits<{
   (e: "update:attachments", attachments: Attachment[]): void;
   (e: "restart-pi"): void;
   (e: "respond-extension", payload: { id: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }): void;
+  (e: "recall", message: Message): void;
   (e: "fetch-slash-commands"): void;
   (e: "scroll-handled"): void;
 }>();
@@ -114,6 +115,7 @@ function sendAndClose() {
       :tool-executions="toolExecutions"
       :scroll-to="scrollTarget"
       @respond-extension="emit('respond-extension', $event)"
+      @recall="emit('recall', $event)"
       @scroll-handled="emit('scroll-handled')"
     />
     <Composer

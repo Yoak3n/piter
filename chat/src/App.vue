@@ -16,7 +16,7 @@ import { useCommandPalette } from "./composables/useCommandPalette";
 import { useSessionActions } from "./composables/useSessionActions";
 import { buildPromptPayload } from "./utils/attachments";
 import { i18n } from "./i18n";
-import type { ImageContent, Attachment } from "./types";
+import type { ImageContent, Attachment, Message } from "./types";
 import type { ExtensionNotify } from "./composables/usePiConnection";
 
 // ─── 连接与会话（usePiConnection：连接 + 会话 store + 通知 + 扩展卡片）──
@@ -48,6 +48,7 @@ const {
   restartPi,
   clearMessages,
   sendCommand,
+  sendGatewayCommand,
   fetchSlashCommands,
   setActiveInstanceId,
 } = usePiConnection();
@@ -200,6 +201,43 @@ function handleRespondExtension(payload: {
   respondExtensionDialog(payload.id, payload.answer);
 }
 
+// ─── 消息撤回（fork 无感撤回 + 可选文件回滚）────────────────────
+const recallTarget = ref<Message | null>(null);
+const recallRollbackAvailable = ref(false);
+
+/** 点击撤回 → 打开确认框（先探测该会话是否 git 仓库以决定回滚选项） */
+async function handleRecallMessage(msg: Message) {
+  if (isStreaming.value) return;
+  recallTarget.value = msg;
+  recallRollbackAvailable.value = false;
+  const iid = activeInstanceId.value;
+  if (!iid) return;
+  try {
+    const r = await sendGatewayCommand("fork_capability", { instanceId: iid });
+    recallRollbackAvailable.value = r.rollbackAvailable === true;
+  } catch {
+    recallRollbackAvailable.value = false; // 探测失败视为不可回滚
+  }
+}
+
+function closeRecallDialog() {
+  recallTarget.value = null;
+}
+
+/** 执行 fork（rollback=true → 撤回并恢复文件；false → 仅撤回消息） */
+function doRecall(rollback: boolean) {
+  const target = recallTarget.value;
+  const iid = activeInstanceId.value;
+  if (!target || !iid) return;
+  closeRecallDialog();
+  // entryId 由网关从会话文件按 content+timestamp 解析；payload 里的
+  // timestamp 就是该消息本地时间戳（ms），content 为兜底匹配键。
+  sendCommand(
+    { type: "fork", content: target.content, timestamp: target.timestamp, rollback },
+    iid,
+  );
+}
+
 // ─── 生命周期 ──
 
 onMounted(() => {
@@ -342,6 +380,7 @@ watch(sessionStatus, (status) => {
           @update:attachments="handleAttachmentsUpdate"
           @restart-pi="restartPi"
           @respond-extension="handleRespondExtension"
+          @recall="handleRecallMessage"
           @fetch-slash-commands="fetchSlashCommands"
         />
       </main>
@@ -389,6 +428,34 @@ watch(sessionStatus, (status) => {
       @run="handlePaletteRun"
       @update:query="onPaletteQuery"
     />
+
+    <!-- 消息撤回确认框：三选项（撤回并恢复文件 / 仅撤回消息 / 取消）+ 不可恢复警示；
+         非 git 仓库时文件回滚不可用，只显示后两项 -->
+    <div v-if="recallTarget" class="recall-overlay" @click.self="closeRecallDialog">
+      <div class="recall-dialog" role="dialog" aria-modal="true" aria-label="Recall message">
+        <h3 class="recall-title">{{ $t("chat.recallTitle") }}</h3>
+        <p class="recall-warning">{{ $t("chat.recallWarning") }}</p>
+        <p v-if="recallRollbackAvailable" class="recall-rollback-hint">
+          {{ $t("chat.recallRollbackHint") }}
+        </p>
+        <p v-else class="recall-rollback-unavailable">
+          {{ $t("chat.recallRollbackUnavailable") }}
+        </p>
+        <div class="recall-actions">
+          <button
+            v-if="recallRollbackAvailable"
+            class="recall-action recall-both"
+            @click="doRecall(true)"
+          >{{ $t("chat.recallBoth") }}</button>
+          <button class="recall-action recall-only" @click="doRecall(false)">
+            {{ $t("chat.recallOnly") }}
+          </button>
+          <button class="recall-action recall-cancel" @click="closeRecallDialog">
+            {{ $t("chat.recallCancel") }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -493,6 +560,80 @@ watch(sessionStatus, (status) => {
 @keyframes extToastIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── 消息撤回确认框 ─── */
+.recall-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-backdrop, rgba(0,0,0,0.4));
+  animation: recallFadeIn 0.15s var(--ease);
+}
+.recall-dialog {
+  width: min(420px, calc(100vw - 32px));
+  padding: 20px;
+  border-radius: var(--radius-lg, 12px);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-lg, 0 12px 40px rgba(0,0,0,0.25));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.recall-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.recall-warning {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--danger);
+}
+.recall-rollback-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--warning);
+}
+.recall-rollback-unavailable {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.recall-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.recall-action {
+  padding: 6px 14px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: var(--bg-hover, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease);
+}
+.recall-action:hover { background: var(--bg-hover); color: var(--text); }
+.recall-both {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+.recall-both:hover { background: color-mix(in srgb, var(--danger) 24%, transparent); }
+.recall-cancel { background: transparent; }
+@keyframes recallFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @media (max-width: 640px) {

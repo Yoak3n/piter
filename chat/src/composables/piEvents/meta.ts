@@ -43,6 +43,16 @@ function handleSessionStatus(data: EventPayload) {
   sessionStatus.value = (data.status as "running" | "idle") || null;
 }
 
+/** 消息撤回（fork）失败/降级提示：以 system 消息进入对应会话时间线 */
+function handleForkNotice(data: EventPayload, instanceId: string | null) {
+  const s = getOrCreateState(instanceId);
+  const msg = (data.message as string) || "";
+  const isError = data.type === "fork_error";
+  if (msg) {
+    addMessage(s, "system", isError ? `[Error] ${msg}` : `[撤回] ${msg}`);
+  }
+}
+
 function handleResponse(data: EventPayload, instanceId: string | null) {
   const cmd = data.command as string;
   // pi 斜杠命令列表（get_commands RPC）：解析 data.commands 写入对应会话缓存。
@@ -126,4 +136,6 @@ export const metaHandlers: Record<string, Handler> = {
   sessions_list: handleSessionsList,
   session_status: handleSessionStatus,
   response: handleResponse,
+  fork_error: handleForkNotice,
+  fork_warn: handleForkNotice,
 };

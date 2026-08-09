@@ -1,3 +1,5 @@
+use std::io::BufRead;
+
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use pi_rpc::command::Command;
@@ -10,7 +12,7 @@ use crate::{
     GatewayState,
     gateway::{
         broadcast::push_sessions_list_to_clients,
-        session_manager::{SessionManager, SessionResult, SessionActivity},
+        session_manager::{SessionManager, SessionResult, SessionActivity, PendingFork},
         ws::helper::extract_cwd,
         handlers::session::load_session,
         project::effective_project_extensions
@@ -22,6 +24,14 @@ use crate::{
 pub fn send_get_state(state: &GatewayState, instance_id: &str) {
     if let Some(tx) = state.instance_stdin_tx(instance_id) {
         let _ = tx.send(Command::GetState.to_json_line());
+    }
+}
+
+/// Send `get_messages` to a specific pi instance (fire-and-forget).
+/// fork 后用来重置消息缓存（responses.rs 处理其响应）。
+pub fn send_get_messages(state: &GatewayState, instance_id: &str) {
+    if let Some(tx) = state.instance_stdin_tx(instance_id) {
+        let _ = tx.send(Command::GetMessages.to_json_line());
     }
 }
 
@@ -39,6 +49,7 @@ pub fn handler_broker_command(
     match effective_type {
         "new_session" => handle_new_session(state, value, client_tx, client_id),
         "switch_session" => handle_switch_session(state, raw_text, value, client_tx, client_id),
+        "fork" => handle_fork_command(state, value, client_tx),
         "ack_review" => handle_ack_review(state, value, client_id),
         "deactivate_session" => {
             let iid = value
@@ -321,4 +332,231 @@ fn handle_switch_session(
         }
     }
     return;
+}
+
+/// 消息撤回（fork）：把目标 user 消息的 entryId 透传给 pi 执行 fork。
+/// 无感撤回链路：fork response → get_state（更新 DB session_path）→
+/// get_messages（重置消息缓存）→ 删旧文件 A + 文件回滚（get_state 确认后）。
+fn handle_fork_command(
+    state: &GatewayState,
+    value: &Value,
+    client_tx: &mpsc::UnboundedSender<String>,
+) {
+    let iid = value
+        .get("instanceId")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if iid.is_empty() {
+        notify_undeliverable(client_tx, &value, "missing_instanceId");
+        return;
+    }
+
+    // 流式中不撤回（fork 会打断 agent 的进行中状态；该场景走取消/outbox 按钮）
+    let busy = state
+        .session_manager
+        .lock()
+        .sessions
+        .get(iid)
+        .map(|s| s.activity == SessionActivity::Busy)
+        .unwrap_or(false);
+    if busy {
+        notify_undeliverable(client_tx, &value, "fork_busy");
+        return;
+    }
+
+    let payload = value.get("payload").cloned().unwrap_or(Value::Null);
+    let content = payload
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let timestamp = payload
+        .get("timestamp")
+        .and_then(Value::as_i64)
+        .filter(|t| *t > 0);
+    let rollback = payload
+        .get("rollback")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    // 前端一般不持有 entryId：从会话文件按 (content, timestamp) 解析。
+    let entry_id = payload
+        .get("entryId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let session_path = state.db.get_session_path(iid);
+    let resolved = match entry_id {
+        Some(eid) => {
+            // 有 entryId 仍取文件里该 entry 的 message.timestamp 作为回滚基准。
+            let ts = session_path
+                .as_deref()
+                .and_then(|p| entry_timestamp(p, &eid))
+                .or(timestamp)
+                .unwrap_or(0);
+            Some((eid, ts))
+        }
+        None => match session_path.as_deref() {
+            Some(path) => resolve_fork_target(path, content.as_deref(), timestamp),
+            None => None,
+        },
+    };
+    let Some((entry_id, target_ms)) = resolved else {
+        log::warn!("[gateway] fork: no matching user message for instance {}", iid);
+        notify_undeliverable(client_tx, &value, "fork_entry_not_found");
+        return;
+    };
+
+    // 记录 pending：fork response 后转入 cleanup（get_state 确认新文件落盘再删 A + 回滚）
+    state.session_manager.lock().set_pending_fork(
+        iid,
+        PendingFork {
+            old_path: session_path.unwrap_or_default(),
+            rollback,
+            target_ms,
+        },
+    );
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let fork_value = json!({
+        "type": "broker_command",
+        "instanceId": iid,
+        "payload": { "type": "fork", "entryId": entry_id, "id": request_id },
+    });
+    forward_to_instance(&fork_value.to_string(), &fork_value, iid, state, client_tx);
+    log::info!(
+        "[gateway] fork: instance={} entry={} rollback={}",
+        iid, entry_id, rollback
+    );
+}
+
+/// 从会话文件解析目标 user 消息：(entryId, message.timestamp ms)。
+/// 匹配优先级：timestamp 精确（±10s 容差）> content 全文相等；两者同中
+/// 直接返回。返回的 timestamp 用作 checkpoint 选取基准。
+fn resolve_fork_target(path: &str, content: Option<&str>, timestamp: Option<i64>) -> Option<(String, i64)> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    let mut by_content: Option<(String, i64)> = None;
+    let mut best_ts: Option<(String, i64, i64)> = None; // (entry, msg_ts, |diff|)
+    for line in reader.lines().flatten() {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(msg) = value.get("message") else { continue };
+        if msg.get("role").and_then(Value::as_str) != Some("user") {
+            continue;
+        }
+        let Some(entry_id) = value.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let entry_id = entry_id.to_string();
+        let msg_ts = msg.get("timestamp").and_then(Value::as_i64).unwrap_or(0);
+        let text = crate::search::extract_text(msg);
+
+        if let Some(ts) = timestamp {
+            let diff = (msg_ts - ts).abs();
+            let ts_hit = diff <= 10_000;
+            if ts_hit && best_ts.as_ref().map_or(true, |(_, _, d)| diff < *d) {
+                best_ts = Some((entry_id.clone(), msg_ts, diff));
+            }
+            if let Some(c) = content {
+                if !c.is_empty() && text == c {
+                    if ts_hit {
+                        return Some((entry_id, msg_ts)); // 双命中，最确定
+                    }
+                    if by_content.is_none() {
+                        by_content = Some((entry_id, msg_ts));
+                    }
+                }
+            }
+        } else if let Some(c) = content {
+            if !c.is_empty() && text == c && by_content.is_none() {
+                by_content = Some((entry_id, msg_ts));
+            }
+        }
+    }
+    best_ts.map(|(e, t, _)| (e, t)).or(by_content)
+}
+
+/// 取指定 entryId 的 message.timestamp（ms），供已带 entryId 的 fork 用。
+fn entry_timestamp(path: &str, entry_id: &str) -> Option<i64> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines().flatten() {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("id").and_then(Value::as_str) == Some(entry_id) {
+            return value
+                .get("message")
+                .and_then(|m| m.get("timestamp"))
+                .and_then(Value::as_i64);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn sample_file(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("sess.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"type":"session","timestamp":"2026-08-10T00:00:00Z"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","id":"m1","timestamp":"2026-08-10T00:00:01Z","message":{{"role":"user","content":"第一条消息","timestamp":1780000001000}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","id":"m2","timestamp":"2026-08-10T00:00:02Z","message":{{"role":"assistant","content":[{{"type":"text","text":"回复"}}],"timestamp":1780000002000}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","id":"m3","timestamp":"2026-08-10T00:00:03Z","message":{{"role":"user","content":"第二条消息","timestamp":1780000003000}}}}"#
+        )
+        .unwrap();
+        drop(f);
+        path
+    }
+
+    #[test]
+    fn resolves_entry_by_timestamp_then_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sample_file(dir.path()).to_string_lossy().to_string();
+
+        // 精确 timestamp → m3
+        let (eid, ts) = resolve_fork_target(&path, None, Some(1780000003000)).unwrap();
+        assert_eq!(eid, "m3");
+        assert_eq!(ts, 1780000003000);
+
+        // 容差内（±10s）→ m1
+        let (eid, _) = resolve_fork_target(&path, None, Some(1780000001005)).unwrap();
+        assert_eq!(eid, "m1");
+
+        // 仅 content → m1
+        let (eid, _) = resolve_fork_target(&path, Some("第一条消息"), None).unwrap();
+        assert_eq!(eid, "m1");
+
+        // 双命中直接返回
+        let (eid, _) = resolve_fork_target(&path, Some("第二条消息"), Some(1780000003000)).unwrap();
+        assert_eq!(eid, "m3");
+
+        // 都匹配不上 → None
+        assert!(resolve_fork_target(&path, Some("不存在"), Some(1)).is_none());
+    }
+
+    #[test]
+    fn entry_timestamp_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sample_file(dir.path()).to_string_lossy().to_string();
+        assert_eq!(entry_timestamp(&path, "m2"), Some(1780000002000));
+        assert_eq!(entry_timestamp(&path, "nope"), None);
+    }
 }

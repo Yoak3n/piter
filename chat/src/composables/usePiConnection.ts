@@ -58,6 +58,36 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+// ── gateway_command（WS 上的 REST 式一问一答，撤回能力探测等用）──
+interface GatewayResponse {
+  requestId: string;
+  success: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
+}
+const gatewayPending = new Map<string, (r: GatewayResponse) => void>();
+let gatewayReqSeq = 0;
+
+/** 发送 gateway_command 并等待 gateway_response（requestId 关联）。 */
+export function sendGatewayCommand(
+  command: string,
+  data: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const requestId = `gw-${++gatewayReqSeq}-${Date.now()}`;
+    gatewayPending.set(requestId, (r) => {
+      if (r.success) resolve(r.data ?? {});
+      else reject(new Error(r.error ?? "gateway command failed"));
+    });
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "gateway_command", requestId, command, data }));
+    } else {
+      gatewayPending.delete(requestId);
+      reject(new Error("not connected"));
+    }
+  });
+}
+
 // ── Tauri 窗口隐藏：暂停 WS 重连（BUG-011 衍生）────────────
 // 窗口关闭（隐藏到托盘）时主动断 WS → 后端 onclose 立即清理订阅；
 // 隐藏期间暂停自动重连，恢复可见时重连（重新订阅）。
@@ -178,9 +208,20 @@ export function connectWebSocket() {
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
+      // gateway_command 的应答单独结算（带 requestId，不走事件分发）
+      if (data.type === "gateway_response") {
+        const cb = gatewayPending.get(data.requestId as string);
+        if (cb) {
+          gatewayPending.delete(data.requestId as string);
+          cb(data as GatewayResponse);
+        }
+        return;
+      }
       handlePiEvent(data);
-    } catch {
-      // ignored
+    } catch (err) {
+      // 事件处理异常绝不能被静默吞掉：卡片丢失/状态卡死往往源自这里，
+      // 打印原始消息便于排查（事件本身独立，不影响后续消息）。
+      console.error("[ws] error processing message:", err, e.data);
     }
   };
   ws.onclose = () => {
@@ -334,6 +375,7 @@ export function usePiConnection() {
     connectWebSocket,
     sendPrompt,
     sendCommand,
+    sendGatewayCommand,
     fetchSlashCommands,
     respondExtensionDialog,
     abortGeneration,

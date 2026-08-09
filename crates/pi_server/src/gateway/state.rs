@@ -37,6 +37,8 @@ pub struct GatewayState {
     pub start_time: std::time::Instant,
     /// SQLite database for project/session/extension management.
     pub db: Arc<crate::gateway::db::Db>,
+    /// App data dir（piter.db 所在目录）；checkpoint 快照存 `<data_dir>/checkpoints/`。
+    pub data_dir: PathBuf,
     /// Cached discovered extension candidates (global / per-project), filled
     /// at startup and refreshed in the background. DB state is not cached.
     pub extension_cache: Arc<parking_lot::RwLock<HashMap<String, Vec<super::project::ExtensionEntry>>>>,
@@ -380,6 +382,7 @@ mod tests {
             static_dir: std::path::PathBuf::new(),
             start_time: std::time::Instant::now(),
             db,
+            data_dir: std::path::PathBuf::new(),
             extension_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             ui_clients: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             session_manager: Arc::new(parking_lot::Mutex::new(SessionManager::new(None))),

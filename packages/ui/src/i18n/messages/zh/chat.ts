@@ -136,4 +136,15 @@ export default {
   budgetTier50: "本月预算已使用 50%",
   budgetTier80: "本月预算已使用 80%",
   budgetTier100: "本月预算已用尽",
+  // 消息撤回（fork，0.2.0 P3）
+  recallMessage: "撤回",
+  recallTitle: "撤回这条消息？",
+  recallWarning: "撤回后，该消息及其后的对话记录将被移除，无法找回。",
+  recallRollbackHint: "同时把代码文件恢复到这条消息发出前的状态——期间未提交的文件改动（包括你自己的）也会被回滚。",
+  recallBoth: "撤回并恢复文件",
+  recallOnly: "仅撤回消息",
+  recallCancel: "取消",
+  recallRollbackUnavailable: "文件回滚不可用（该目录不是 Git 仓库）",
+  recallFailed: "撤回失败：{msg}",
+  recallBusy: "正在生成中，无法撤回",
 };

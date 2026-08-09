@@ -8,12 +8,14 @@
 //! sessions.rs / projects.rs / extensions.rs / search.rs / settings.rs。
 //! 依赖：rusqlite；上层（state.rs / handlers / src-tauri）通过 `gateway::db` 使用。
 
+pub mod checkpoints;
 pub mod extensions;
 pub mod projects;
 pub mod search;
 pub mod sessions;
 pub mod settings;
 
+pub use checkpoints::*;
 pub use projects::*;
 pub use search::*;
 pub use sessions::*;
@@ -147,6 +149,22 @@ impl Db {
                 created_at  TEXT NOT NULL,
                 expires_at  TEXT NOT NULL
             );
+
+            -- File rollback checkpoints (消息撤回 0.2.0 P3): one row per
+            -- completed agent turn in a git repo. `git_ref` is the stash-create
+            -- commit-ish usable with `git restore --source`; `manifest` is a
+            -- JSON array of {path, snapshot} for untracked files whose content
+            -- was copied into <data_dir>/checkpoints/<id>/.
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id    TEXT NOT NULL,
+                turn_seq      INTEGER NOT NULL,
+                git_ref       TEXT NOT NULL,
+                manifest      TEXT NOT NULL DEFAULT '[]',
+                created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_checkpoints_session
+                ON checkpoints(session_id, created_at_ms);
             ",
         )
         .map_err(|e| format!("migrate: {}", e))?;

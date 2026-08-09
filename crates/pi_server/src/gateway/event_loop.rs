@@ -84,6 +84,8 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
 
     // ── 5b. Refresh pi state after agent finishes handling a message ──
     if event_type == "agent_end" {
+        // 撤回文件回滚的 checkpoint：agent_end 时若 git 仓库有改动即落一个快照。
+        super::checkpoint::create_checkpoint(state, &instance_id);
         send_get_state(state, &instance_id);
         // 会话完成通知观察点：向桌面壳层暴露 agent_end（托盘隐藏时前端 WS 不可达，
         // 系统通知只能由 Rust 侧基于此回调发送；label 为空时由壳层回退 instance_id）。

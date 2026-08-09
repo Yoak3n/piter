@@ -60,7 +60,12 @@ function handleExtensionUiRequest(data: EventPayload, instanceId: string | null)
     console.log("[extension_ui]", method, data);
     return;
   }
-  if (!requestId || !["select", "confirm", "input", "editor"].includes(method)) return;
+  if (!requestId || !["select", "confirm", "input", "editor"].includes(method)) {
+    // 未知/缺 id 的阻塞型请求：pi 会阻塞等待应答，静默丢弃会永久卡住该会话。
+    // 打印原始载荷便于排查（如 pi 新 method 未接入）。
+    console.warn("[extension_ui] unhandled blocking request:", method, data);
+    return;
+  }
 
   const card: ExtensionUiCard = {
     id: requestId,

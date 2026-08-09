@@ -37,5 +37,9 @@ export function handlePiEvent(raw: Record<string, unknown>) {
   }
 
   const instanceId = eventInstanceId || activeInstanceId.value;
+  // ── 临时诊断（BUG：后台会话 ask_user_question 卡片不显示，排查用，定位后移除）──
+  if (data.type === "extension_ui_request") {
+    console.log("[diag] extension_ui_request arrived:", data, "instanceId=", instanceId, "active=", activeInstanceId.value);
+  }
   handlers[data.type as string]?.(data, instanceId);
 }

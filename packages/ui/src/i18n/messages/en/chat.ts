@@ -143,4 +143,15 @@ export default {
   budgetTier50: "You've used 50% of this month's budget",
   budgetTier80: "You've used 80% of this month's budget",
   budgetTier100: "This month's budget is used up",
+  // Message recall (fork, 0.2.0 P3)
+  recallMessage: "Recall",
+  recallTitle: "Recall this message?",
+  recallWarning: "This message and everything after it will be removed and can't be recovered.",
+  recallRollbackHint: "Also restore code files to how they were before this message — uncommitted changes made meanwhile (including yours) will be rolled back.",
+  recallBoth: "Recall & restore files",
+  recallOnly: "Recall message only",
+  recallCancel: "Cancel",
+  recallRollbackUnavailable: "File rollback unavailable (not a Git repository)",
+  recallFailed: "Recall failed: {msg}",
+  recallBusy: "Can't recall while generating",
 };

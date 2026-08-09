@@ -85,6 +85,7 @@ impl GatewayState {
             static_dir,
             start_time: std::time::Instant::now(),
             db,
+            data_dir,
             extension_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             ui_clients: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             session_manager: session_manager.clone(),

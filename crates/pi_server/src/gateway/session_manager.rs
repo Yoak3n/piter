@@ -111,6 +111,22 @@ pub struct SessionManager {
     /// Session names that need to be persisted to DB.
     /// Drained by the event loop. Vec of (instance_id, name).
     pending_names: Vec<(String, String)>,
+    /// 消息撤回：已下发给 pi 的 fork 请求（keyed by instance_id），等 fork
+    /// response 确认后转入 `pending_fork_cleanups`。
+    pending_forks: HashMap<String, PendingFork>,
+    /// fork 成功、等 get_state 确认新 sessionFile 落盘后执行的文件回滚/删旧文件。
+    pending_fork_cleanups: HashMap<String, PendingFork>,
+}
+
+/// A fork in flight (消息撤回无感链路)。
+#[derive(Debug, Clone)]
+pub struct PendingFork {
+    /// 被 fork 掉的原会话文件（A）；B 落盘确认后删除。
+    pub old_path: String,
+    /// 是否同时回滚 agent 本轮的文件修改（git restore + untracked 处理）。
+    pub rollback: bool,
+    /// 被撤回 user 消息的时间戳（ms）——选 checkpoint 用（之前最近一个）。
+    pub target_ms: i64,
 }
 
 pub enum ActivateResult {
@@ -155,6 +171,8 @@ impl SessionManager {
             pending_links: HashMap::new(),
             dirty: false,
             pending_names: Vec::new(),
+            pending_forks: HashMap::new(),
+            pending_fork_cleanups: HashMap::new(),
         }
     }
 
@@ -516,6 +534,37 @@ impl SessionManager {
     }
 
     // ── Queries ────────────────────────────────────────────────────────
+
+    /// Completed turn count for an instance (used as checkpoint `turn_seq`).
+    pub fn turn_count(&self, instance_id: &str) -> u32 {
+        self.sessions
+            .get(instance_id)
+            .map(|s| s.turn_count)
+            .unwrap_or(0)
+    }
+
+    // ── Message recall (fork) bookkeeping ──────────────────────────────
+
+    /// Record a fork about to be sent to pi (command handler side).
+    pub fn set_pending_fork(&mut self, instance_id: &str, pf: PendingFork) {
+        self.pending_forks.insert(instance_id.to_string(), pf);
+    }
+
+    /// Consume the pending fork after its response arrives.
+    pub fn take_pending_fork(&mut self, instance_id: &str) -> Option<PendingFork> {
+        self.pending_forks.remove(instance_id)
+    }
+
+    /// Move a confirmed fork to the cleanup slot, waiting for get_state to
+    /// confirm the new session file on disk before deleting the old one.
+    pub fn set_pending_fork_cleanup(&mut self, instance_id: &str, pf: PendingFork) {
+        self.pending_fork_cleanups.insert(instance_id.to_string(), pf);
+    }
+
+    /// Consume the pending cleanup (get_state response handler).
+    pub fn take_pending_fork_cleanup(&mut self, instance_id: &str) -> Option<PendingFork> {
+        self.pending_fork_cleanups.remove(instance_id)
+    }
 
     pub fn has_subscribers(&self, instance_id: &str) -> bool {
         self.sessions
