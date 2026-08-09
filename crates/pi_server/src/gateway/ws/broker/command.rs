@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
+use pi_rpc::command::Command;
 
 use super::super::{
     notify_undeliverable, forward_to_instance,
@@ -8,13 +9,21 @@ use super::super::{
 use crate::{
     GatewayState,
     gateway::{
-        broadcast::push_sessions_list_to_clients, command,
+        broadcast::push_sessions_list_to_clients,
         session_manager::{SessionManager, SessionResult, SessionActivity},
         ws::helper::extract_cwd,
         handlers::session::load_session,
         project::effective_project_extensions
     },
 };
+
+/// Send `get_state` to a specific pi instance (fire-and-forget).
+/// The pi response is handled by the event loop (`responses.rs` §1c).
+pub fn send_get_state(state: &GatewayState, instance_id: &str) {
+    if let Some(tx) = state.instance_stdin_tx(instance_id) {
+        let _ = tx.send(Command::GetState.to_json_line());
+    }
+}
 
 pub fn handler_broker_command(
     state: &GatewayState,
@@ -123,8 +132,8 @@ fn handle_new_session(
             push_sessions_list_to_clients(state);
 
             // Fire-and-forget get_state so we learn sessionId/sessionFile/model ASAP.
-            // The response is handled by the event loop (mod.rs §1c).
-            command::send_get_state(state, &instance_id);
+            // The response is handled by the event loop (responses.rs §1c).
+            send_get_state(state, &instance_id);
 
             // Send snapshot (empty for new session)
             let snapshot = json!({

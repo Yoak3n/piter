@@ -4,7 +4,7 @@
 //! （response 交给 responses.rs、会话消息跟踪 + 广播、sessions_list 推送、agent_end
 //! 收尾）；`track_and_broadcast` 包装事件信封转发给 WS 客户端。
 //! 不做什么：不解析 response 细节（responses.rs）；不建路由（server.rs）。
-//! 依赖：broadcast、messages::command、responses、session_manager、db、GatewayState。
+//! 依赖：broadcast、ws::send_get_state、responses、session_manager、db、GatewayState。
 
 use std::sync::Arc;
 
@@ -15,8 +15,8 @@ use crate::broker::types::PROTOCOL_VERSION;
 
 use super::{
     broadcast::{broadcast_to_clients, broadcast_to_subscribers, push_sessions_list_to_clients},
-    messages::command,
     responses::handle_response_event,
+    ws::send_get_state,
     GatewayState,
 };
 
@@ -84,7 +84,7 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
 
     // ── 5b. Refresh pi state after agent finishes handling a message ──
     if event_type == "agent_end" {
-        command::send_get_state(state, &instance_id);
+        send_get_state(state, &instance_id);
         // 会话完成通知观察点：向桌面壳层暴露 agent_end（托盘隐藏时前端 WS 不可达，
         // 系统通知只能由 Rust 侧基于此回调发送；label 为空时由壳层回退 instance_id）。
         if let Some(hook) = &*state.agent_end_hook.lock() {

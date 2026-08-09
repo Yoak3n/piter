@@ -6,6 +6,8 @@
 mod helper;
 mod broker;
 
+pub use broker::{dispatch_control, send_get_state};
+
 use std::sync::Arc;
 
 use axum::extract::ws;
@@ -14,7 +16,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::{broker::types::PROTOCOL_VERSION, gateway::ws::broker::dispatch_control};
+use crate::broker::types::PROTOCOL_VERSION;
 use super::{GatewayState, helper::{notify_undeliverable, forward_to_instance}};
 use helper::resolve_command_instance;
 

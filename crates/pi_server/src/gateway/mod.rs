@@ -23,7 +23,6 @@ mod event_loop;
 pub mod handlers;
 mod helper;
 mod lan_auth;
-mod messages;
 pub mod project;
 mod responses;
 pub mod server;
@@ -36,4 +35,3 @@ pub use state::GatewayState;
 // 兼容别名：以下符号被子模块通过 `super::` 引用（历史路径，随后续拆分逐步收敛为直接导入）。
 use crate::broker::types::PROTOCOL_VERSION;
 use broadcast::push_sessions_list_to_clients;
-use messages::command;

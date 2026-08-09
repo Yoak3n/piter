@@ -2,7 +2,7 @@ use tauri::{AppHandle, Manager};
 
 use super::super::types::{AdminStatus, SessionInfo};
 use crate::base::state::GatewaySlot;
-use crate::pi;
+use crate::pi_runtime;
 
 #[tauri::command]
 pub fn get_admin_status(
@@ -40,7 +40,7 @@ pub fn get_admin_status(
         active_sessions,
         pi_version: pi_server::locked_pi_version().to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
-        pi_binary_missing: !pi::is_pi_binary_available(&app),
+        pi_binary_missing: !pi_runtime::is_pi_binary_available(&app),
         broker_ws_url,
         broker_http_url,
         uptime_secs,

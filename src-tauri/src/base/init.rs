@@ -10,7 +10,7 @@ use crate::base::{
         schema::{WindowState, WindowType},
     },
 };
-use crate::pi::{try_resolve_pi_binary, locked_pi_version};
+use crate::pi_runtime::{try_resolve_pi_binary, locked_pi_version};
 
 use tauri::{AppHandle, Builder, Emitter, Listener, Manager, RunEvent, generate_handler};
 use tauri_plugin_log::{Target, TargetKind};

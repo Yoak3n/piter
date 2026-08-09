@@ -1,6 +1,6 @@
 pub mod command;
 
-pub use command::handler_broker_command;
+pub use command::{handler_broker_command, send_get_state};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 

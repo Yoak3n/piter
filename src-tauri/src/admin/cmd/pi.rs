@@ -164,7 +164,7 @@ fn parse_list_output(output: &str) -> Vec<String> {
 #[tauri::command]
 pub async fn list_pi_packages(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
-        let bin = crate::pi::try_resolve_pi_binary(&app)?;
+        let bin = crate::pi_runtime::try_resolve_pi_binary(&app)?;
         let output = run_pi_command(&bin, &["list".to_string()])?;
         Ok(parse_list_output(&output))
     })
@@ -186,7 +186,7 @@ pub async fn install_pi_package(
     let source = source.trim().to_string();
     let gw_opt: Option<std::sync::Arc<pi_server::gateway::GatewayState>> = gw.inner().lock().clone();
     tokio::task::spawn_blocking(move || {
-        let bin = crate::pi::try_resolve_pi_binary(&app)?;
+        let bin = crate::pi_runtime::try_resolve_pi_binary(&app)?;
         run_pi_command(&bin, &["install".to_string(), source.clone()])?;
         if let Some(gw) = gw_opt.as_ref() {
             if let Err(e) = gw.db.add_global_extension(&source) {
@@ -218,7 +218,7 @@ pub async fn remove_pi_package(
     let source = source.trim().to_string();
     let gw_opt: Option<std::sync::Arc<pi_server::gateway::GatewayState>> = gw.inner().lock().clone();
     tokio::task::spawn_blocking(move || {
-        let bin = crate::pi::try_resolve_pi_binary(&app)?;
+        let bin = crate::pi_runtime::try_resolve_pi_binary(&app)?;
         run_pi_command(&bin, &["remove".to_string(), source.clone()])?;
         if let Some(gw) = gw_opt.as_ref() {
             if let Err(e) = gw.db.remove_global_extension(&source) {

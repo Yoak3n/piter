@@ -5,12 +5,12 @@
 //! `handle_get_state_response`（完整状态落 DB + session manager + 模型持久化）、
 //! `handle_model_response`（set_model/cycle_model 成功 → 刷新运行时模型 + default 回滚）。
 //! 不做什么：不广播事件（event_loop.rs）；不解析非 response 事件。
-//! 依赖：messages::command、session_manager、db、broadcast、broker::util。
+//! 依赖：ws::send_get_state、session_manager、db、broadcast、broker::util。
 
 use std::sync::Arc;
 
 use super::{
-    broadcast::push_sessions_list_to_clients, messages::command, session_manager, GatewayState,
+    broadcast::push_sessions_list_to_clients, session_manager, ws::send_get_state, GatewayState,
 };
 
 /// Handle response-type events: session tracking, get_state triggers, and state completion.
@@ -47,7 +47,7 @@ fn handle_session_response(
             .insert(sf.to_string(), instance_id.to_string());
     }
     push_sessions_list_to_clients(state);
-    command::send_get_state(state, instance_id);
+    send_get_state(state, instance_id);
 }
 
 /// 1c. On get_state response → complete pending link + store full state.
