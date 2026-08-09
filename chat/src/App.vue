@@ -9,33 +9,17 @@ import NewSessionPane from "./components/session/NewSessionPane.vue";
 import { usePiConnection } from "./composables/usePiConnection";
 import { useSessions } from "./composables/useSessions";
 import { useRecentCommands } from "./composables/useRecentCommands";
-import { i18n } from "./i18n";
-import { supportsVision, registerModelCapabilities } from "./utils/modelCapability";
+import { useTheme } from "./composables/useTheme";
+import { useDefaultModel } from "./composables/useDefaultModel";
+import { useSearchJump } from "./composables/useSearchJump";
+import { useCommandPalette } from "./composables/useCommandPalette";
+import { supportsVision } from "./utils/modelCapability";
 import { buildPromptPayload } from "./utils/attachments";
-import type { ModelRef, Attachment, ImageContent, PaletteItem, SearchHit } from "./types";
+import { i18n } from "./i18n";
+import type { ModelRef, Attachment, ImageContent } from "./types";
 import type { ExtensionNotify } from "./composables/usePiConnection";
 
-// ─── Theme ────────────────────────────────────────────────────────────────
-// This app is served by the gateway as a plain web page and must not depend
-// on the Tauri runtime. The desktop app injects the saved theme as a `theme`
-// query param when navigating here; otherwise we follow the OS preference.
-const darkMedia = window.matchMedia("(prefers-color-scheme: dark)");
-let currentTheme = "system";
-
-function applyTheme() {
-  const dark =
-    currentTheme === "dark" || (currentTheme === "system" && darkMedia.matches);
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
-}
-
-function applySavedTheme() {
-  const urlTheme = new URLSearchParams(window.location.search).get("theme");
-  if (urlTheme === "light" || urlTheme === "dark" || urlTheme === "system") {
-    currentTheme = urlTheme;
-  }
-  applyTheme();
-}
-
+// ─── 连接与会话（usePiConnection：连接 + 会话 store + 通知 + 扩展卡片）──
 const {
   messages,
   isRunning,
@@ -70,6 +54,77 @@ const {
 
 const { sessions, fetchSessions } = useSessions();
 
+// ─── 主题（明暗）──
+useTheme();
+
+// ─── 默认模型 / 视觉能力注册表 / 多模态弱提示 ──
+const {
+  ensureDefaultModel,
+  warmModelCapabilities,
+  refreshModelCapabilities,
+  capabilitiesWarmed,
+  visionHint,
+  showVisionHint,
+} = useDefaultModel();
+
+// ─── 搜索跳转（跨会话搜索结果 → 切会话 + 滚动定位）──
+const { pendingScrollTarget, relativeTime, handleSearchJump } = useSearchJump({
+  selectSession: (iid, keepScroll) => handleSelectSession(iid, keepScroll),
+});
+
+// ─── 命令面板（Ctrl+K）──
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/** 桌面端跳转管理面板/设置（Tauri 事件，与 GlobalHeader 设置按钮同一路径） */
+async function openAdmin() {
+  if (!isTauri) return;
+  try {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit("navigate-to-admin");
+  } catch (e) {
+    console.error("[nav] emit navigate-to-admin failed:", e);
+  }
+}
+
+/** 最近使用 pi 命令（模块级单例，与斜杠补全共享同一份记录） */
+const { record: recordRecentCommand, reorderByRecent } = useRecentCommands();
+
+const {
+  paletteOpen,
+  paletteSearchResults,
+  paletteSearching,
+  paletteItems,
+  openPalette,
+  closePalette,
+  onPaletteQuery,
+  handlePaletteRun,
+  onGlobalKeydown,
+} = useCommandPalette({
+  isTauri,
+  openAdmin,
+  handleNewSession,
+  handleSelectSession,
+  slashCommands,
+  wsSessions,
+  recordRecentCommand,
+  reorderByRecent,
+  sendPrompt,
+  fetchSlashCommands,
+  handleSearchJump,
+  relativeTime,
+});
+
+// ─── 扩展通知 toast 双容器（0.2.0 P3）────────────────────────
+// 扩展 notify 保持默认 bottom（底部居中，不挡输入区指针）；会话完成等走 top（顶部，可点击跳转）。
+const bottomNotifs = computed(() => notifications.value.filter((n) => n.placement !== "top"));
+const topNotifs = computed(() => notifications.value.filter((n) => n.placement === "top"));
+
+/** 点击可跳转 toast（会话完成）→ 切换到目标会话 */
+function handleToastClick(n: ExtensionNotify) {
+  if (n.targetInstanceId) switchSession(n.targetInstanceId);
+}
+
+// ─── 侧栏 / 新会话准备 / 会话级草稿 ──
 const sidebarOpen = ref(window.innerWidth > 640);
 const sessionName = ref("");
 const showNewSession = ref(true);
@@ -82,87 +137,11 @@ const pendingFirstAttachments = ref<Attachment[] | null>(null);
 // 使新会话立即显示所选 model（pi 上报前不至于回退到默认）。
 const pendingNewModel = ref<ModelRef | null>(null);
 
-// ── 扩展通知 toast 双容器（0.2.0 P3）────────────────────────
-// 扩展 notify 保持默认 bottom（底部居中，不挡输入区指针）；会话完成等走 top（顶部，可点击跳转）。
-const bottomNotifs = computed(() => notifications.value.filter((n) => n.placement !== "top"));
-const topNotifs = computed(() => notifications.value.filter((n) => n.placement === "top"));
-
-/** 点击可跳转 toast（会话完成）→ 切换到目标会话 */
-function handleToastClick(n: ExtensionNotify) {
-  if (n.targetInstanceId) switchSession(n.targetInstanceId);
-}
-
-// 全局默认模型缓存（/api/pi/settings）：该 instance 未指定 model 时回退用它
-const defaultModel = ref<ModelRef | null>(null);
-async function ensureDefaultModel(): Promise<ModelRef | null> {
-  if (defaultModel.value) return defaultModel.value;
-  try {
-    const res = await fetch("/api/pi/settings");
-    const data = await res.json();
-    if (data.success && data.default_model) {
-      defaultModel.value = {
-        id: data.default_model,
-        provider: data.default_provider,
-      };
-    }
-  } catch {
-    // non-critical
-  }
-  return defaultModel.value;
-}
-
-// ── 视觉能力注册表（方案 B：以 pi 模态声明为准） ─────────────────────
-// 数据来源全部"不额外启动 pi 进程"：
-//   1. 启动时：只读本地动态目录缓存 /api/pi/model-catalog（零成本，覆盖 opencode-go 等）；
-//   2. 会话激活后：pi 已在运行，get_available_models 带上该会话 instanceId 复用实例
-//      （补齐内置目录 DeepSeek/OpenAI… 与自定义 provider），且只取一次；
-//   3. 打开模型下拉时 ModelSelector 也会登记（最新/自定义 provider）。
-// 判定入口 supportsVision(注册表 → 正则回退)，用于附加图片/切换模型时的弱提示。
-let capabilitiesWarmedOnce = false;
-async function warmModelCapabilities() {
-  try {
-    const res = await fetch("/api/pi/model-catalog");
-    const data = await res.json();
-    if (data.success && Array.isArray(data.models)) {
-      registerModelCapabilities(data.models);
-    }
-  } catch {
-    // non-critical
-  }
-}
-
-async function refreshModelCapabilities(instanceId: string) {
-  try {
-    const res = await fetch("/api/rpc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "get_available_models", instanceId }),
-    });
-    const data = await res.json();
-    if (data.success && Array.isArray(data.data?.models)) {
-      registerModelCapabilities(data.data.models);
-    }
-  } catch {
-    // non-critical
-  }
-}
-
 // Per-session input drafts, keyed by instanceId.
 const drafts = ref<Record<string, string>>({});
 
 // Per-session composer attachments, keyed by instanceId (lifted with drafts).
 const attachmentDrafts = ref<Record<string, Attachment[]>>({});
-
-// 多模态弱提示（选图时模型不支持 / 切换模型后仍带附图），传给 Composer 提示条
-const visionHint = ref<{ text: string; key: number } | null>(null);
-let visionHintTimer: ReturnType<typeof setTimeout> | null = null;
-function showVisionHint(text: string) {
-  visionHint.value = { text, key: (visionHint.value?.key ?? 0) + 1 };
-  if (visionHintTimer) clearTimeout(visionHintTimer);
-  visionHintTimer = setTimeout(() => {
-    visionHint.value = null;
-  }, 4000);
-}
 
 const activeDraft = computed(() =>
   activeInstanceId.value && activeInstanceId.value !== "NewSession"
@@ -201,6 +180,8 @@ function closeSidebar() {
   sidebarOpen.value = false;
 }
 
+// ─── 会话动作 handlers ──
+
 function handleSend(payload: { text: string; images: ImageContent[] }) {
   sendPrompt(payload.text, undefined, undefined, payload.images);
 }
@@ -221,183 +202,6 @@ function handleRespondExtension(payload: {
   answer: { value?: string; confirmed?: boolean; cancelled?: boolean };
 }) {
   respondExtensionDialog(payload.id, payload.answer);
-}
-
-// ── 命令面板（Ctrl+K）─────────────────────────────────────────────────
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-/** 最近使用 pi 命令（模块级单例，与斜杠补全共享同一份记录） */
-const { record: recordRecentCommand, reorderByRecent } = useRecentCommands();
-
-const paletteOpen = ref(false);
-function openPalette() {
-  paletteOpen.value = true;
-  // "运行 pi 命令"分区复用 get_commands 数据源：缓存为空时懒加载
-  fetchSlashCommands();
-}
-function closePalette() {
-  paletteOpen.value = false;
-  paletteSearchResults.value = [];
-  paletteSearching.value = false;
-}
-
-// ── 跨会话搜索（面板搜索分区）─────────────────────────────────────────
-// 面板输入即搜索词：≥3 字符后防抖 250ms 调 /api/search（trigram 索引下限），
-// 结果转 PaletteItem（kind: "search"）注入面板；跳转 = 切会话 + 滚动定位。
-const paletteSearchResults = ref<PaletteItem[]>([]);
-const paletteSearching = ref(false);
-let paletteSearchTimer: ReturnType<typeof setTimeout> | null = null;
-/** 当前生效的搜索词（丢弃迟到的旧请求结果） */
-let paletteSearchQuery = "";
-
-function relativeTime(ts?: number): string {
-  if (!ts) return "";
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return i18n.global.t("common.timeJustNow");
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
-}
-
-function onPaletteQuery(q: string) {
-  if (paletteSearchTimer) clearTimeout(paletteSearchTimer);
-  const trimmed = q.trim();
-  if (trimmed.length < 3) {
-    paletteSearchQuery = "";
-    paletteSearchResults.value = [];
-    paletteSearching.value = false;
-    return;
-  }
-  paletteSearchQuery = trimmed;
-  paletteSearching.value = true;
-  paletteSearchTimer = setTimeout(async () => {
-    // 面板已关闭（Esc/点击外部）：结果不再注入
-    if (!paletteOpen.value) return;
-    try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}&limit=50`);
-      const data = await res.json();
-      // 请求期间用户又改了词：丢弃这份过期结果
-      if (paletteSearchQuery !== trimmed) return;
-      const hits: SearchHit[] = data.results ?? [];
-      paletteSearchResults.value = hits.map((hit) => {
-        const hint = [
-          hit.projectName,
-          hit.label,
-          relativeTime(hit.timestamp),
-        ].filter(Boolean).join(" · ");
-        return {
-          id: `search:${hit.sessionId}:${hit.timestamp ?? hit.entryId ?? "?"}`,
-          title: hit.snippet || hit.label || hit.sessionId,
-          keywords: hit.label ?? "",
-          hint,
-          kind: "search" as const,
-          run: () => handleSearchJump(hit, trimmed),
-        };
-      });
-    } catch {
-      if (paletteSearchQuery === trimmed) paletteSearchResults.value = [];
-    } finally {
-      if (paletteSearchQuery === trimmed) paletteSearching.value = false;
-    }
-  }, 250);
-}
-
-/** 跳转目标：切到命中的会话后滚动到对应消息（等快照到达后由 MessageTimeline 消费） */
-const pendingScrollTarget = ref<{ sessionId: string; timestamp?: number; query: string } | null>(null);
-
-function handleSearchJump(hit: SearchHit, query: string) {
-  // 先切会话（同步完成 activeInstanceId 切换），再设跳转目标——
-  // 避免 watch 在旧会话的消息上误定位并提前清掉目标
-  handleSelectSession(hit.sessionId, true);
-  pendingScrollTarget.value = { sessionId: hit.sessionId, timestamp: hit.timestamp, query };
-}
-
-/** 桌面端跳转管理面板/设置（Tauri 事件，与 GlobalHeader 设置按钮同一路径） */
-async function openAdmin() {
-  if (!isTauri) return;
-  try {
-    const { emit } = await import("@tauri-apps/api/event");
-    await emit("navigate-to-admin");
-  } catch (e) {
-    console.error("[nav] emit navigate-to-admin failed:", e);
-  }
-}
-
-/**
- * 命令源（可扩展）：动作命令在前、会话切换目标在后。
- * "选择即完成"：选中即执行，无确认步骤；对象操作类（置顶/归档/删除/重命名）留在侧边栏，不进面板。
- * 后续新增命令（如跨会话搜索）只需向此列表 push 一条。
- */
-const paletteItems = computed<PaletteItem[]>(() => {
-  const items: PaletteItem[] = [];
-  if (isTauri) {
-    items.push({
-      id: "open-settings",
-      title: i18n.global.t("chat.cmdOpenSettings"),
-      keywords: "settings admin providers 设置 管理 面板",
-      kind: "action",
-      run: () => void openAdmin(),
-    });
-  }
-  items.push({
-    id: "new-session",
-    title: i18n.global.t("chat.cmdNewSession"),
-    keywords: "new chat project 新建 会话 项目",
-    kind: "action",
-    run: () => handleNewSession(),
-  });
-  // "运行 pi 命令"分区：复用 get_commands 数据源（与斜杠补全共享），最近使用置顶
-  for (const c of reorderByRecent(slashCommands.value ?? [])) {
-    const srcLabel =
-      c.source === "prompt"
-        ? i18n.global.t("chat.slashSourcePrompt")
-        : c.source === "skill"
-          ? i18n.global.t("chat.slashSourceSkill")
-          : i18n.global.t("chat.slashSourceExtension");
-    items.push({
-      id: `slash:${c.name}`,
-      title: `/${c.name}`,
-      keywords: `pi command ${c.source} ${c.description ?? ""}`,
-      hint: c.description || srcLabel,
-      kind: "slash",
-      run: () => {
-        recordRecentCommand(c.name);
-        // meta.slashCommand：时间线灰显"已执行命令"（扩展命令不产 agent turn，避免孤立空消息）
-        sendPrompt(`/${c.name}`, undefined, undefined, undefined, { slashCommand: true });
-      },
-    });
-  }
-  for (const project of wsSessions.value) {
-    for (const s of project.sessions) {
-      const iid = s.instanceId ?? s.id;
-      items.push({
-        id: `session:${iid}`,
-        title: s.label || s.id,
-        keywords: `${s.id} ${s.cwd ?? ""} ${project.name}`,
-        hint: project.name,
-        kind: "session",
-        run: () => handleSelectSession(iid),
-      });
-    }
-  }
-  return items;
-});
-
-function handlePaletteRun(item: PaletteItem) {
-  paletteOpen.value = false;
-  paletteSearchResults.value = [];
-  paletteSearching.value = false;
-  item.run();
-}
-
-/** Ctrl/Cmd+K 全局开关（web 端与浏览器无默认冲突，可安全使用；输入框聚焦时也接管） */
-function onGlobalKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-    e.preventDefault();
-    paletteOpen.value = !paletteOpen.value;
-  }
 }
 
 async function handleSelectSession(instanceId: string, keepScroll = false) {
@@ -484,9 +288,9 @@ function handleModelSelect(model: ModelRef) {
   }
 }
 
+// ─── 生命周期 ──
+
 onMounted(() => {
-  darkMedia.addEventListener("change", applyTheme);
-  applySavedTheme();
   connectWebSocket();
   fetchSessions();
   // 预热多模态能力注册表（读本地模型库，立即生效）
@@ -511,8 +315,8 @@ watch(activeInstanceId, (id) => {
   // 卡在"无真实会话 + 无准备页"的过渡状态。
   if (id && id !== "NewSession") {
     // 会话激活（pi 已在运行）：复用该实例拉取一次完整模型目录，补齐视觉能力注册表
-    if (!capabilitiesWarmedOnce) {
-      capabilitiesWarmedOnce = true;
+    if (!capabilitiesWarmed.value) {
+      capabilitiesWarmed.value = true;
       refreshModelCapabilities(id);
     }
     // 新会话创建后首次激活：把创建时携带的 model seed 到该会话
