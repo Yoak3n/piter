@@ -11,7 +11,7 @@
 //! - event_loop.rs run_event_loop + process_broker_event + track_and_broadcast
 //! - responses.rs  handle_response_event 及三个子 handler（session/get_state/model）
 //! - broadcast.rs  WS 广播 / sessions_list 推送
-//! - db.rs         SQLite 数据层（会话/项目/扩展/搜索/设置，A2 后按领域分文件）
+//! - db/           SQLite 数据层（sessions/projects/extensions/search/settings）
 //! - ws/           WebSocket handler 与命令路由
 //! - handlers/     薄 HTTP 路由层（各领域一个文件）
 //! - session_manager.rs / project.rs / ext_cache.rs / lan_auth.rs  领域逻辑
