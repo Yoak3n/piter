@@ -28,6 +28,7 @@ mod responses;
 pub mod server;
 pub mod session_manager;
 pub mod state;
+mod title;
 pub mod ws;
 
 pub use state::GatewayState;

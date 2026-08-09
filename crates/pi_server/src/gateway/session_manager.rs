@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::title;
 use super::GatewayState;
 
 // ─── Tracked Event Types ────────────────────────────────────────────────────
@@ -440,7 +441,7 @@ impl SessionManager {
                             self.dirty = true;
                         }
                         if !session.title_set {
-                            let text = extract_message_text(m);
+                            let text = title::extract_message_text(m);
                             if text.len() >= 10 {
                                 session.title_candidates.push(text);
                             }
@@ -480,20 +481,16 @@ impl SessionManager {
                 // Auto-title: after 2 turns, generate a session name from user messages
                 if matches!(tracked, TrackedEvent::TurnEnd) {
                     session.turn_count += 1;
-                    if !session.title_set
-                        && session.turn_count >= 2
-                        && !session.title_candidates.is_empty()
-                    {
-                        if let Some(title) = generate_session_title(&session.title_candidates) {
-                            log::info!(
-                                "[session_manager] auto-title for {}: {}",
-                                session.instance_id, title
-                            );
-                            session.session_name = Some(title.clone());
-                            session.title_set = true;
-                            self.dirty = true;
-                            self.pending_names.push((session.instance_id.clone(), title));
-                        }
+                    if let Some(title) = title::maybe_generate(
+                        &session.instance_id,
+                        session.turn_count,
+                        session.title_set,
+                        &session.title_candidates,
+                    ) {
+                        session.session_name = Some(title.clone());
+                        session.title_set = true;
+                        self.dirty = true;
+                        self.pending_names.push((session.instance_id.clone(), title));
                     }
                 }
             }
@@ -573,90 +570,6 @@ impl SessionManager {
 
     pub fn set_idle_timeout(&mut self, secs: u64) {
         self.idle_timeout = Duration::from_secs(secs);
-    }
-}
-
-// ─── Auto-title helpers ────────────────────────────────────────────────────
-
-/// Extract plain text from a user message (handles string or content blocks).
-fn extract_message_text(msg: &Value) -> String {
-    let content = match msg.get("content") {
-        Some(c) => c,
-        None => return String::new(),
-    };
-    if let Some(s) = content.as_str() {
-        return s.to_string();
-    }
-    if let Some(arr) = content.as_array() {
-        return arr
-            .iter()
-            .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
-            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
-            .collect::<Vec<_>>()
-            .join("\n");
-    }
-    String::new()
-}
-
-/// Generate a session title from captured user messages (Picot-style heuristic).
-fn generate_session_title(messages: &[String]) -> Option<String> {
-    static GREETING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static OPENER_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-
-    let greeting = GREETING_RE.get_or_init(|| {
-        regex::Regex::new(r"^(hey|hello|hi|morning|good morning|howdy|yo|sup)[\s!.:,]*$").unwrap()
-    });
-    let opener = OPENER_RE.get_or_init(|| {
-        regex::Regex::new(r"(?i)^(ok|okay|so|actually|hey|please|can you|could you|i want(?:ed)? to|i wanna|let'?s)\s+").unwrap()
-    });
-
-    // Find first substantive message
-    let text = messages
-        .iter()
-        .find(|m| {
-            let trimmed = m.trim();
-            !trimmed.is_empty()
-                && !greeting.is_match(trimmed)
-                && !trimmed.to_lowercase().starts_with("read your memory")
-                && !trimmed.to_lowercase().starts_with("read your seed")
-                && trimmed.len() >= 10
-        })
-        .or_else(|| messages.first())?;
-
-    // Strip conversational openers
-    let cleaned = opener.replace(text.trim(), "").to_string();
-    let first_line = cleaned.lines().next().unwrap_or(&cleaned);
-
-    // Extract first sentence (boundary between char 10-80)
-    let char_count = first_line.chars().count();
-    let start = 10.min(char_count);
-    let title = if let Some(pos) = first_line.chars().skip(start)
-        .position(|c| c == '.' || c == '!' || c == '?')
-    {
-        let end = start + pos + 1;
-        first_line.chars().take(end.min(char_count)).collect::<String>()
-    } else {
-        first_line.to_string()
-    };
-
-    // Truncate at 60 chars
-    let title = if title.chars().count() > 60 {
-        let truncated: String = title.chars().take(57).collect();
-        let cut = truncated.rfind(' ').unwrap_or(truncated.len());
-        format!("{}…", &truncated[..cut])
-    } else {
-        title
-    };
-
-    // Capitalize first letter
-    let mut chars = title.chars();
-    let first = chars.next()?;
-    let capitalized: String = first.to_uppercase().collect::<String>() + chars.as_str();
-
-    if capitalized.is_empty() {
-        None
-    } else {
-        Some(capitalized)
     }
 }
 
