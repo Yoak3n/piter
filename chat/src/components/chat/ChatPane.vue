@@ -5,6 +5,7 @@ import type { Message, ToolExecution, ChatTurn, Attachment, ImageContent, ModelR
 import type { PendingItem } from "../../composables/usePiConnection";
 import { buildPromptPayload } from "../../utils/attachments";
 import MessageTimeline from "./MessageTimeline.vue";
+import ExtensionCardDock from "./ExtensionCardDock.vue";
 import Composer from "./Composer.vue";
 import FullscreenEditor from "./FullscreenEditor.vue";
 
@@ -117,6 +118,11 @@ function sendAndClose() {
       @respond-extension="emit('respond-extension', $event)"
       @recall="emit('recall', $event)"
       @scroll-handled="emit('scroll-handled')"
+    />
+    <!-- BUG-019：未应答扩展卡片置底悬浮（Composer 上方），避免被长输出挤出视口 -->
+    <ExtensionCardDock
+      :messages="messages"
+      @respond="emit('respond-extension', $event)"
     />
     <Composer
       v-model="inputText"

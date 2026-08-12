@@ -135,6 +135,9 @@ export default {
   extensionResultConfirmed: "Confirmed",
   extensionResultRejected: "Rejected",
   extensionResultCancelled: "Cancelled",
+  // Extension card dock (BUG-019: pending cards float above the composer)
+  extDockMore: "+{n} more",
+  extDockCollapse: "Collapse",
   piStartupFailed: "Pi failed to start",
   startupVersionHint: "Possibly an extension–Pi version mismatch — upgrade Pi in Settings › Versions",
   sessionCompleted: "{name} completed",

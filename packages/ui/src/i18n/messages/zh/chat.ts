@@ -128,6 +128,9 @@ export default {
   extensionResultConfirmed: "已确认",
   extensionResultRejected: "已拒绝",
   extensionResultCancelled: "已取消",
+  // 扩展卡片 dock（BUG-019：未应答卡片悬浮在 Composer 上方）
+  extDockMore: "+{n} 更多",
+  extDockCollapse: "收起",
   piStartupFailed: "Pi 启动失败",
   startupVersionHint: "可能是扩展与 Pi 版本不匹配，可在 设置 › 版本 中升级 Pi",
   sessionCompleted: "{name} 已完成",

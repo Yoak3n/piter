@@ -265,9 +265,12 @@ function submit(value: string) {
   font-weight: 600;
 }
 .ext-opt-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* BUG-020：选项需基于完整文本选择，溢出省略（nowrap+ellipsis）破坏可读性 →
+     改为自动换行完整显示；overflow-wrap:anywhere 让长单词/路径也换行不溢出。
+     标题（.ext-title）与已应答摘要（.ext-result-text）保留单行省略是合理场景。 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .ext-empty {
   margin: 0;
