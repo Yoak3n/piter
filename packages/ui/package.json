@@ -1,6 +1,6 @@
 {
   "name": "@piter/ui",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Shared UI shell for the piter frontends (chat + admin). Source-shared — consumers compile the SFCs themselves.",

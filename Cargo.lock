@@ -3310,7 +3310,7 @@ dependencies = [
 
 [[package]]
 name = "pi_rpc"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3318,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "pi_server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "chrono",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "piter"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
