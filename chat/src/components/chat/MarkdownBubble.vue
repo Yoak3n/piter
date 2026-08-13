@@ -7,6 +7,69 @@ import { formatMessageTime } from "../../utils/message";
 
 marked.setOptions({ breaks: true, gfm: true });
 
+// ─── 链接渲染修正（LLM 输出常见坑）─────────────────────────────────
+// 1) marked gfm 裸链接会把 URL 后的闭合标点/全角括号组吞进 href（如 "v0.2.1）" →
+//    %EF%BC%89、"docs（说明）" 整组），点击 404 → 渲染时修剪尾部标点与全角括号组。
+// 2) 桌面端（Tauri）点击链接应在系统浏览器打开，而非在 webview 内导航；
+//    web 端 target=_blank 新标签打开（见 handleBodyClick）。
+// 规则：
+//  - 全角括号组（如 （说明））整体剪（URL 用 ASCII，全角组必是附加文本）；
+//  - 无配对语义的标点（。，、；：!？等）直接剪；
+//  - 单 `)`/`）` 仅当 URL 内没有未配对的 `(`/`（` 才剪（配对括号是 URL 合法部分，如维基 Foo_(bar)）。
+function trimLinkTrailing(href: string): string {
+  // 1) 连续全角括号组整体剪
+  let s = href.replace(/(（[^）]*）)+$/g, "");
+  // 2) 从尾部扫描剪标点与单闭合括号（配对检查）
+  let i = s.length;
+  while (i > 0) {
+    const ch = s[i - 1];
+    if (/[」』】、，,。.;；:：!！?？]/.test(ch)) {
+      i--;
+      continue;
+    }
+    if (ch === ")" || ch === "）") {
+      const openCh = ch === ")" ? "(" : "（";
+      let open = 0;
+      for (let j = 0; j < i - 1; j++) if (s[j] === openCh) open++;
+      if (open > 0) break; // 配对了 URL 内的开括号 → 保留
+      i--;
+      continue;
+    }
+    break;
+  }
+  return s.slice(0, i);
+}
+
+/** 修剪尾部标点/括号组；仅放行安全 scheme（http/https/mailto/tel/相对/锚点），
+ *  防 javascript: 等注入（沿用既有 XSS 加固思路）。返回 null 表示丢弃链接。 */
+function safeLinkHref(href: string): string | null {
+  const trimmed = trimLinkTrailing(href);
+  if (/^(https?:|mailto:|tel:|#|\/)/i.test(trimmed)) return trimmed;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return trimmed; // 无 scheme（相对路径）
+  return null;
+}
+
+marked.use({
+  renderer: {
+    link({ href, title, text }) {
+      const safe = safeLinkHref(href);
+      if (safe === null) return escapeHtml(text); // 危险 scheme：仅显示文本，不生成链接
+      const display = text === href ? safe : text.replace(/(（[^）]*）)+$/, "");
+      const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+      return `<a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer"${titleAttr}>${display}</a>`;
+    },
+    image({ href, title, text }) {
+      const safe = safeLinkHref(href);
+      if (safe === null) return "";
+      const alt = text ? ` alt="${escapeHtml(text)}"` : "";
+      const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+      return `<img src="${escapeHtml(safe)}"${alt}${titleAttr}>`;
+    },
+  },
+});
+
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
 const { t } = useI18n();
 
 const props = defineProps<{
@@ -105,6 +168,18 @@ function decorateCodeBlocks(root: HTMLElement) {
 
 function handleBodyClick(e: MouseEvent) {
   const target = e.target as HTMLElement;
+  // 链接：桌面端（Tauri）在系统浏览器打开（webview 内导航会破坏应用）；
+  // web 端 target=_blank 已生效，保持默认（新标签）。
+  const link = target.closest<HTMLAnchorElement>("a");
+  if (link && link.href) {
+    if (isTauri) {
+      e.preventDefault();
+      import("@tauri-apps/plugin-opener")
+        .then(({ openUrl }) => openUrl(link.href))
+        .catch(() => window.open(link.href, "_blank"));
+    }
+    return;
+  }
   const btn = target.closest<HTMLButtonElement>(".code-copy-btn");
   if (!btn) return;
   const pre = btn.closest<HTMLElement>(".code-block")?.querySelector("pre");
@@ -187,6 +262,8 @@ onMounted(() => {
 .copy-btn.copied { opacity:1 !important; color:var(--success); }
 
 .markdown-body { min-width:0; overflow-wrap:anywhere; word-break:break-word; }
+.markdown-body :deep(a){ color:var(--accent); text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:2px; word-break:break-all; }
+.markdown-body :deep(a:hover){ opacity:0.85; }
 .markdown-body :deep(h1),.markdown-body :deep(h2),.markdown-body :deep(h3){ margin:0.4em 0 0.2em; line-height:1.3; }
 .markdown-body :deep(h1){ font-size:1.15em; }
 .markdown-body :deep(h2){ font-size:1.05em; }
