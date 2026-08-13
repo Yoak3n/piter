@@ -4,12 +4,16 @@
 
 Piter Gateway 通过 **WebSocket** 和 **HTTP REST API** 两种方式对外提供服务。
 
-- WebSocket 端点：`/ws`、`/ui-ws`（等价）
+- WebSocket 端点（按 path 判定客户端类型，0.3.0 起）：
+  - `/chat-ws` → chat（Vue chat / App chat WebView）
+  - `/work-ws` → work（工作空间视图/App；初始握手不发 `sessions_list`）
+  - `/ws`、`/ui-ws` → ui（历史/管理兼容，不冒充业务客户端）
 - HTTP 基础路径：`/api/*`
 
-连接 WebSocket 后，服务器会立即推送两条消息：
+连接 WebSocket 后，服务器会立即推送 `capabilities`；其中 `work` 客户端**不再推送 `sessions_list`**（chat/ui 客户端仍会收到）：
+
 1. `{"type": "capabilities", "protocolVersion": "...", "client_id": <u64>}`
-2. `{"type": "sessions_list", "projects": [...]}`
+2. `{"type": "sessions_list", "projects": [...]}`（work 客户端无此条）
 
 ---
 

@@ -202,7 +202,9 @@ Gateway 负责管理多个 pi coding agent 进程实例，每个实例对应一�
 | `GET/POST/PUT/DELETE /api/projects` | 项目 CRUD 与置顶/归档 |
 | `GET/PUT /api/global-extensions` | 全局扩展管理 |
 | `GET/PUT /api/session-config` | 会话配置（空闲超时） |
-| `GET /ws` / `GET /ui-ws` | WebSocket 端点 |
+| `GET /chat-ws` | WebSocket 端点（chat 客户端） |
+| `GET /work-ws` | WebSocket 端点（work 客户端，初始握手不发 sessions_list） |
+| `GET /ws` / `GET /ui-ws` | WebSocket 端点（ui/历史/管理兼容） |
 
 详细契约见 [gateway-api-reference.md](gateway-api-reference.md)。
 

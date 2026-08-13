@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { RefreshCw, Copy, Check, QrCode, WifiOff, Globe } from "lucide-vue-next";
+import { computed, ref, watch } from "vue";
+import { RefreshCw, Copy, Check, QrCode, WifiOff, Globe, MonitorSmartphone, Users, FolderOpen } from "lucide-vue-next";
 import { EmptyState } from "@piter/ui";
 import LanAuthPanel from "./LanAuthPanel.vue";
 import ShareInfoCard from "./ShareInfoCard.vue";
@@ -39,6 +39,10 @@ const {
   gatewayPort,
   manualExample,
   online,
+  workUrl,
+  workQrSvg,
+  connections,
+  mdns,
   handleRefresh,
   copyUrl,
   authEnabled,
@@ -54,7 +58,62 @@ const {
   revokeDevice,
   revokeAll,
   copyPin,
+  wsBaseDir,
+  wsBaseDirBusy,
+  wsBaseDirError,
+  setWsBaseDir,
 } = useLanShare(gatewayBase, () => emit("refresh"));
+
+// ── 工作空间存储：基目录配置 + 迁移（0.3.0）──
+const wsDirInput = ref("");
+const wsDirTouched = ref(false);
+watch(wsBaseDir, (info) => {
+  if (info && !wsDirTouched.value) {
+    wsDirInput.value = info.configured || info.baseDir || "";
+  }
+});
+async function saveWsBaseDir() {
+  const ok = await setWsBaseDir(wsDirInput.value.trim());
+  if (ok) wsDirTouched.value = true;
+}
+async function resetWsBaseDir() {
+  const ok = await setWsBaseDir("");
+  if (ok) {
+    wsDirTouched.value = true;
+    wsDirInput.value = "";
+  }
+}
+
+// ── Work 卡片：复制 work URL（与 chat 的 copyUrl 分开）──
+const workCopied = ref(false);
+function copyWorkUrl() {
+  if (!workUrl.value) return;
+  const done = () => {
+    workCopied.value = true;
+    setTimeout(() => (workCopied.value = false), 2000);
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(workUrl.value).then(done).catch(() => fallbackCopyText(done));
+  } else {
+    fallbackCopyText(done);
+  }
+}
+
+function fallbackCopyText(done: () => void) {
+  const ta = document.createElement("textarea");
+  ta.value = workUrl.value;
+  ta.style.cssText = "position:fixed;left:-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+  done();
+}
+
+function fmtClientTime(ms: number): string {
+  const d = new Date(ms);
+  return Number.isFinite(d.getTime()) ? d.toLocaleTimeString() : "—";
+}
 </script>
 
 <template>
@@ -111,6 +170,54 @@ const {
           </div>
         </div>
 
+        <!-- Work share: QR + URL + service discovery (0.3.0) -->
+        <div class="share-card">
+          <div class="share-card-header">
+            <span class="share-card-title">
+              <MonitorSmartphone :size="14" />
+              {{ $t("admin.workShare") }}
+            </span>
+            <span class="share-card-desc">{{ $t("admin.workShareDesc") }}</span>
+          </div>
+
+          <div v-if="workQrSvg" class="qr-frame">
+            <div class="qr-svg" v-html="workQrSvg" />
+          </div>
+          <div v-else class="qr-placeholder">
+            <RefreshCw :size="18" class="spin" />
+          </div>
+
+          <div v-if="workUrl" class="url-row">
+            <code class="url-text">{{ workUrl }}</code>
+            <button
+              class="btn btn-ghost btn-icon btn-sm"
+              :title="workCopied ? $t('common.copied') : $t('admin.copyWorkUrlHint')"
+              @click="copyWorkUrl"
+            >
+              <Check v-if="workCopied" :size="14" />
+              <Copy v-else :size="14" />
+            </button>
+          </div>
+          <div v-else class="share-error">{{ $t("admin.workUnavailable") }}</div>
+
+          <!-- 服务发现信息（供移动端 App mDNS 解析接入） -->
+          <div class="info-block">
+            <div class="info-row">
+              <span class="info-key">{{ $t("admin.serviceDiscovery") }}</span>
+              <span class="info-value">
+                <span v-if="mdns?.enabled" class="badge badge-success">
+                  {{ mdns?.serviceType }} · {{ mdns?.instanceName }} · :{{ mdns?.port }} · v{{ mdns?.proto }}
+                </span>
+                <span v-else class="badge badge-muted">{{ $t("admin.mdnsDisabled") }}</span>
+              </span>
+            </div>
+            <div v-if="authEnabled" class="info-row">
+              <span class="info-key">PIN</span>
+              <span class="info-value pin-hint">{{ $t("admin.pinRequiredHint") }}</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Connection info: broker endpoints + health -->
         <ShareInfoCard :lan-info="lanInfo" :health="health" :online="online" :gateway-port="gatewayPort" />
       </div>
@@ -131,6 +238,43 @@ const {
         @revoke-all="revokeAll"
         @copy-pin="copyPin"
       />
+
+      <!-- Connected clients (0.3.0): 5s 轮询 /api/connections 刷新 -->
+      <div class="section">
+        <div class="clients-header">
+          <h3 class="tab-title clients-title">
+            <Users :size="13" />
+            {{ $t("admin.connectedClients") }}
+          </h3>
+        </div>
+        <p class="tab-desc section-desc">{{ $t("admin.connectedClientsDesc") }}</p>
+
+        <div v-if="connections.length === 0" class="clients-empty">{{ $t("admin.noClients") }}</div>
+        <table v-else class="clients-table">
+          <thead>
+            <tr>
+              <th>{{ $t("admin.clientKind") }}</th>
+              <th>{{ $t("admin.clientForm") }}</th>
+              <th>{{ $t("admin.clientIp") }}</th>
+              <th>{{ $t("admin.clientUserAgent") }}</th>
+              <th>{{ $t("admin.clientConnectedAt") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in connections" :key="c.id">
+              <td>
+                <span class="badge" :class="c.kind === 'work' ? 'badge-accent' : 'badge-muted'">
+                  {{ c.kind === "work" ? $t("admin.kindWork") : c.kind === "chat" ? $t("admin.kindChat") : $t("admin.kindUi") }}
+                </span>
+              </td>
+              <td>{{ c.form === "app" ? $t("admin.formApp") : $t("admin.formWeb") }}</td>
+              <td class="mono">{{ c.ip }}</td>
+              <td class="mono ua-cell" :title="c.userAgent">{{ c.userAgent || "—" }}</td>
+              <td>{{ fmtClientTime(c.connectedAtMs) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- Connection guide: phone steps + manual fallback -->
       <div class="section">
@@ -159,6 +303,69 @@ const {
           </span>
           <span class="manual-desc">{{ $t("admin.manualEntryDesc") }}</span>
           <code v-if="manualExample" class="manual-example">{{ $t("admin.manualEntryExample", { url: manualExample }) }}</code>
+        </div>
+      </div>
+
+      <!-- Workspace storage: base dir config + migration (0.3.0) -->
+      <div class="section">
+        <h3 class="tab-title">
+          <FolderOpen :size="13" />
+          {{ $t("admin.wsBaseDirTitle") }}
+        </h3>
+        <p class="tab-desc section-desc">{{ $t("admin.wsBaseDirDesc") }}</p>
+
+        <div v-if="wsBaseDir" class="ws-dir-card">
+          <div class="info-block">
+            <div class="info-row">
+              <span class="info-key">{{ $t("admin.wsBaseDirCurrent") }}</span>
+              <code class="mono info-value">{{ wsBaseDir.baseDir }}</code>
+            </div>
+            <div class="info-row">
+              <span class="info-key">{{ $t("admin.wsBaseDirDefault") }}</span>
+              <code class="mono info-value">{{ wsBaseDir.defaultBaseDir }}</code>
+            </div>
+            <div class="info-row">
+              <span class="info-key">{{ $t("admin.wsBaseDirWritable") }}</span>
+              <span class="badge" :class="wsBaseDir.writable ? 'badge-success' : 'badge-error'">
+                {{ wsBaseDir.writable ? $t("admin.wsBaseDirWritableYes") : $t("admin.wsBaseDirWritableNo") }}
+              </span>
+            </div>
+          </div>
+
+          <div class="ws-dir-edit">
+            <input
+              v-model="wsDirInput"
+              class="input"
+              :placeholder="wsBaseDir.defaultBaseDir"
+              @input="wsDirTouched = true"
+            />
+            <button class="btn btn-sm" :disabled="wsBaseDirBusy" @click="saveWsBaseDir">
+              {{ wsBaseDirBusy ? $t("common.saving") : $t("admin.wsBaseDirSave") }}
+            </button>
+            <button v-if="wsBaseDir.configured" class="btn btn-ghost btn-sm" @click="resetWsBaseDir">
+              {{ $t("admin.wsBaseDirReset") }}
+            </button>
+          </div>
+          <p class="ws-dir-hint">{{ $t("admin.wsBaseDirHint") }}</p>
+          <div v-if="wsBaseDirError" class="share-error">{{ wsBaseDirError }}</div>
+
+          <div v-if="wsBaseDir.migration.migrating" class="ws-dir-migrating">
+            <RefreshCw :size="12" class="spin" /> {{ $t("admin.wsBaseDirMigrating") }}
+          </div>
+          <div v-if="wsBaseDir.migration.pending.length" class="ws-dir-pending">
+            <div v-for="p in wsBaseDir.migration.pending" :key="p.id" class="info-row">
+              <span class="info-key">{{ p.id }}</span>
+              <span class="mono info-value">
+                {{ p.oldPath }} → {{ p.newPath }}
+                <span v-if="p.waiting" class="badge badge-warning">{{ $t("admin.wsBaseDirWaiting") }}</span>
+              </span>
+            </div>
+          </div>
+          <div v-if="wsBaseDir.migration.errors.length" class="ws-dir-errors">
+            <div v-for="(e, i) in wsBaseDir.migration.errors" :key="i" class="share-error">
+              {{ e.id }}: {{ e.error }}
+            </div>
+          </div>
         </div>
       </div>
     </template>
@@ -379,12 +586,126 @@ const {
   word-break: break-all;
 }
 
+/* ── 0.3.0：Work 卡片服务发现 + 连接客户端列表 ── */
+.pin-hint {
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+}
+
+.clients-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.clients-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clients-empty {
+  padding: var(--space-lg);
+  text-align: center;
+  font-size: var(--font-size-caption);
+  color: var(--text-tertiary);
+  background: var(--bg-muted);
+  border-radius: var(--radius-md);
+}
+
+.clients-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-caption);
+}
+
+.clients-table th,
+.clients-table td {
+  text-align: left;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+.clients-table th {
+  font-weight: 600;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.clients-table .mono {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.clients-table .ua-cell {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 0.3.0：工作空间存储（基目录配置 + 迁移）── */
+.ws-dir-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.ws-dir-edit {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ws-dir-edit .input {
+  flex: 1 1 320px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.ws-dir-hint {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--text-tertiary);
+}
+
+.ws-dir-migrating {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-caption);
+  color: var(--accent-strong);
+}
+
+.ws-dir-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ws-dir-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 @media (max-width: 900px) {
   .share-grid {
     grid-template-columns: 1fr;
   }
   .guide-grid {
     grid-template-columns: 1fr;
+  }
+  .clients-table .ua-cell {
+    display: none;
   }
 }
 </style>

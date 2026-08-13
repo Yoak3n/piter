@@ -117,9 +117,26 @@ export function sendCommand(cmd: Record<string, unknown>, targetInstanceId?: str
 function getWsUrl(): string {
   const params = new URLSearchParams(window.location.search);
   const brokerWs = params.get("brokerWs");
-  if (brokerWs) return brokerWs;
+  // brokerWs 历史格式是 ws://IP:PORT/ws（0.3.0 前）且可能携带旧端口（如 1421）。
+  // ① 与当前页面同源（桌面端/App WebView 打开的都是当前服务端）→ 一律以当前
+  //    页面 hostname+port 为准，忽略残留的旧 brokerWs 端口/路径；
+  // ② 跨源（App 用不同 IP 打开时）→ 用 brokerWs，但路径统一归一化为 /chat-ws。
+  if (brokerWs) {
+    try {
+      const u = new URL(brokerWs);
+      if (u.hostname === window.location.hostname && window.location.port) {
+        return `ws://${window.location.hostname}:${window.location.port}/chat-ws`;
+      }
+      u.pathname = "/chat-ws";
+      return u.toString().replace(/^https?:/, "ws:");
+    } catch {
+      /* 非法 URL 走默认 */
+    }
+  }
   const port = window.location.port;
-  return `ws://${window.location.hostname}:${port}/ws`;
+  // /chat-ws = chat 前端（work 用 /work-ws；/ui-ws 是 admin 管理端路径——
+  // path 定前端，gateway 注册表据此分类，chat 不共用 /ui-ws）。
+  return `ws://${window.location.hostname}:${port}/chat-ws`;
 }
 
 /** 懒启动 watchdog：轮询所有 streaming session，超 90s 无进展提示一次 */

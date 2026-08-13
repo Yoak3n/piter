@@ -38,6 +38,38 @@ export interface LanDevice {
   expiresAt: string;
 }
 
+// ── 0.3.0「分享与连接页」：连接客户端 + work 分享 ──
+export interface ClientConnection {
+  id: number;
+  kind: "chat" | "work";
+  form: "web" | "app";
+  ip: string;
+  userAgent: string;
+  connectedAtMs: number;
+}
+
+export interface MdnsStatus {
+  enabled: boolean;
+  instanceName?: string;
+  port?: number;
+  serviceType?: string;
+  proto?: string;
+}
+
+// ── 0.3.0 工作空间基目录（默认安装目录 + Admin 可配置 + 迁移）──
+export interface WorkspaceBaseDirInfo {
+  baseDir: string;
+  configured: string;
+  defaultBaseDir: string;
+  writable: boolean;
+  migration: {
+    migrating: boolean;
+    pending: Array<{ id: string; oldPath: string; newPath: string; waiting: boolean }>;
+    errors: Array<{ id: string; error: string }>;
+  };
+  workspaces: Array<{ id: string; name: string; cwd: string; active: boolean }>;
+}
+
 export function useLanShare(gatewayBase: Ref<string>, onRefresh?: () => void) {
   const { t } = useI18n();
 
@@ -60,6 +92,17 @@ export function useLanShare(gatewayBase: Ref<string>, onRefresh?: () => void) {
   const manualExample = computed(() => lanInfo.value?.lan_urls?.[0] || displayUrl.value);
 
   const online = computed(() => health.value?.status === "ok" || !!lanInfo.value);
+
+  // ── 0.3.0 work 分享卡片 ──
+  const workUrl = computed(() => {
+    const u = lanInfo.value?.lan_urls?.[0] || "";
+    return u ? u.replace(/\/chat.*$/, "/work") : "";
+  });
+
+  const connections = ref<ClientConnection[]>([]);
+  const mdns = ref<MdnsStatus | null>(null);
+  const workQrSvg = ref("");
+  let workQrFetched = "";
 
   let qrUrlFetched = "";
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -95,6 +138,89 @@ export function useLanShare(gatewayBase: Ref<string>, onRefresh?: () => void) {
     const resp = await fetch(`${gatewayBase.value}api/health`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     health.value = await resp.json();
+  }
+
+  // ── 连接客户端 + work 分享数据（0.3.0）──
+  // 连接客户端列表走 5s 轮询（/api/connections）——admin 不占用 WS 连接。
+  async function fetchConnections() {
+    if (!gatewayBase.value) return;
+    try {
+      const resp = await fetch(`${gatewayBase.value}api/connections`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      connections.value = data.connections ?? [];
+    } catch {
+      // 静默
+    }
+  }
+
+  async function fetchMdns() {
+    if (!gatewayBase.value) return;
+    try {
+      const resp = await fetch(`${gatewayBase.value}api/mdns/status`);
+      if (!resp.ok) return;
+      mdns.value = await resp.json();
+    } catch {
+      // 静默
+    }
+  }
+
+  async function fetchWorkQr() {
+    if (!gatewayBase.value) return;
+    const next = workUrl.value;
+    if (!next || next === workQrFetched) return;
+    workQrFetched = next;
+    try {
+      const resp = await fetch(`${gatewayBase.value}api/lan-qr?path=${encodeURIComponent("/work")}`);
+      if (!resp.ok) return;
+      const svg = await resp.text();
+      if (svg.trim()) workQrSvg.value = svg;
+    } catch {
+      // 静默
+    }
+  }
+
+  async function fetchClients() {
+    await Promise.allSettled([fetchConnections(), fetchMdns(), fetchWorkQr(), fetchWsBaseDir()]);
+  }
+
+  // ── 工作空间基目录（0.3.0）──────────────────────────────────────────
+  const wsBaseDir = ref<WorkspaceBaseDirInfo | null>(null);
+  const wsBaseDirBusy = ref(false);
+  const wsBaseDirError = ref("");
+
+  async function fetchWsBaseDir() {
+    if (!gatewayBase.value) return;
+    try {
+      const resp = await fetch(`${gatewayBase.value}api/workspaces/base-dir`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      wsBaseDir.value = await resp.json();
+    } catch {
+      // 静默（老版本服务端无此接口）
+    }
+  }
+
+  /** 保存基目录并触发迁移。返回是否成功（失败时 wsBaseDirError 给出原因）。 */
+  async function setWsBaseDir(dir: string) {
+    if (!gatewayBase.value) return false;
+    wsBaseDirBusy.value = true;
+    wsBaseDirError.value = "";
+    try {
+      const resp = await fetch(`${gatewayBase.value}api/workspaces/base-dir`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ baseDir: dir }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.message ?? data.error ?? `HTTP ${resp.status}`);
+      await fetchWsBaseDir();
+      return true;
+    } catch (e) {
+      wsBaseDirError.value = `${e}`;
+      return false;
+    } finally {
+      wsBaseDirBusy.value = false;
+    }
   }
 
   async function fetchAll(silent = false) {
@@ -298,17 +424,30 @@ export function useLanShare(gatewayBase: Ref<string>, onRefresh?: () => void) {
   watch(gatewayBase, (base) => {
     if (base) {
       qrUrlFetched = "";
+      workQrFetched = "";
       fetchAll();
       fetchLanAuth();
+      fetchClients();
     }
+  });
+
+  // work URL 由 lanInfo 推导（异步加载后才有值）——一旦可用就拉 work 二维码。
+  watch(workUrl, (url) => {
+    if (url) fetchWorkQr();
   });
 
   onMounted(() => {
     fetchAll();
     fetchLanAuth();
+    fetchClients();
     // Poll so the LAN URL / QR refresh automatically after the backend
     // rediscovers the IP (2s TTL) — no restart needed on wifi change.
-    pollTimer = setInterval(() => fetchAll(true), 5000);
+    // 连接客户端列表随 5s 轮询刷新（admin 不占用 WS 连接）。
+    pollTimer = setInterval(() => {
+      fetchAll(true);
+      fetchConnections();
+      fetchWsBaseDir();
+    }, 5000);
   });
   onUnmounted(() => {
     if (pollTimer) clearInterval(pollTimer);
@@ -326,10 +465,19 @@ export function useLanShare(gatewayBase: Ref<string>, onRefresh?: () => void) {
     gatewayPort,
     manualExample,
     online,
+    // 0.3.0 work 分享 + 连接客户端
+    workUrl,
+    workQrSvg,
+    connections,
+    mdns,
+    wsBaseDir,
+    wsBaseDirBusy,
+    wsBaseDirError,
     fetchAll,
     handleRefresh,
     copyUrl,
     fmtUptime,
+    setWsBaseDir,
     // LAN 鉴权
     authEnabled,
     pinSet,

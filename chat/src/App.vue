@@ -346,7 +346,7 @@ watch(sessionStatus, (status) => {
 
         <NewSessionPane
           v-if="showNewSession"
-          :projects="wsSessions.map(p => ({ path: p.path, name: p.name }))"
+          :projects="wsSessions.map(p => ({ path: p.path, name: p.name, projectType: p.projectType }))"
           :initial-cwd="newSessionCwd"
           :initial-name="newSessionName"
           :is-running="isRunning"

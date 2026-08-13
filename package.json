@@ -8,7 +8,8 @@
     "dev:all": "pnpm build:chat && pnpm dev",
     "build": "vue-tsc --noEmit && vite build",
     "build:chat": "cd chat && pnpm build",
-    "build:all": "pnpm build && pnpm build:chat",
+    "build:work": "cd work && flutter build web --base-href=/work/",
+    "build:all": "pnpm build && pnpm build:chat && pnpm build:work",
     "preview": "vite preview",
     "tauri": "tauri"
   },

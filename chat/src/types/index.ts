@@ -113,6 +113,8 @@ export interface ProjectGroup {
   id?: string;
   path: string;
   name: string;
+  /** `normal` | `workspace`（0.3.0 工作空间，chat 新建会话准备页据此过滤） */
+  projectType?: string;
   /** 1 when pinned (backend sorts pinned first) */
   pinned?: number;
   /** Whether the project is archived (hidden from the default list) */

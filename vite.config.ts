@@ -33,11 +33,11 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://localhost:1421",
+        target: "http://localhost:31421",
         changeOrigin: true,
       },
       "/ws": {
-        target: "ws://localhost:1421",
+        target: "ws://localhost:31421",
         ws: true,
       },
     },

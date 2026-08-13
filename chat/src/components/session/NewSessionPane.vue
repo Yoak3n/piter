@@ -15,7 +15,7 @@ const { t } = useI18n()
 // Only show the 'Browse' button when running inside Tauri (native dialog)
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const props = defineProps<{
-  projects: Array<{ path: string; name: string }>
+  projects: Array<{ path: string; name: string; projectType?: string }>
   mobileMode: boolean
   /** 预选的工作目录（点击侧栏项目级 "+" 时传入，快速为该目录建会话） */
   initialCwd?: string
@@ -41,7 +41,7 @@ const error = ref('')
 const guideRef = ref<InstanceType<typeof OnboardingGuide> | null>(null)
 
 // ─── DB 项目加载与预选 ─────────────────────────────────────────────
-const dbProjects = ref<Array<{ id: string; name: string; cwd: string }>>([])
+const dbProjects = ref<Array<{ id: string; name: string; cwd: string; project_type?: string }>>([])
 
 async function fetchProjects() {
   try {
@@ -57,12 +57,13 @@ async function fetchProjects() {
 }
 
 // 预选 initialCwd 对应的 DB 项目：优先 (cwd+name) 精确匹配，其次 cwd 匹配；
+// 排除 workspace 型项目（工作空间目录不属于 chat 会话）；
 // DB 尚未收录时退化为"新建项目"并预填名称，保证创建时项目名正确。
 function preselectProject() {
   if (!props.initialCwd) return
   const match =
-    dbProjects.value.find(p => p.cwd === props.initialCwd && p.name === props.initialName) ??
-    dbProjects.value.find(p => p.cwd === props.initialCwd)
+    dbProjects.value.find(p => p.cwd === props.initialCwd && p.name === props.initialName && p.project_type !== 'workspace') ??
+    dbProjects.value.find(p => p.cwd === props.initialCwd && p.project_type !== 'workspace')
   if (match) {
     selectedProjectId.value = match.id
     createNewProject.value = false
@@ -72,10 +73,12 @@ function preselectProject() {
   }
 }
 
-// 根据项目的path来去重
+// 根据项目的path来去重；过滤 workspace 型项目（工作空间目录不应出现在
+// chat 新建会话准备页——工作空间在 work 端操作）。
 const uniqueDirs = computed(() => {
   const seen = new Set<string>()
   return props.projects.filter(p => {
+    if (p.projectType === 'workspace') return false
     if (seen.has(p.path)) return false
     seen.add(p.path)
     return true
@@ -86,7 +89,9 @@ const uniqueDirs = computed(() => {
 })
 
 const matchingProjects = computed(() =>
-  dbProjects.value.filter(p => p.cwd === selectedCwd.value)
+  dbProjects.value.filter(
+    p => p.cwd === selectedCwd.value && p.project_type !== 'workspace',
+  )
 )
 
 // Project name when "Auto" is selected: falls back to the directory name.
