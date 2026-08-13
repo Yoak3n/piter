@@ -118,3 +118,67 @@ jobs:
           prerelease: false
           # 关键：只有 Windows 上传 latest.json（Linux 关 updater，避免覆盖）
           uploadUpdaterJson: ${{ matrix.updater_json }}
+
+  # Android APK（Flutter 移动端 work 工程；非 tag 仅构建存 artifacts，tag 时上传 release）
+  android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Flutter + Android SDK（compileSdk 36 由 flutter-action 的 android-sdk 安装）
+      - name: Setup Flutter (with Android SDK)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          android-sdk: true
+
+      - name: Build release APK (split per ABI)
+        run: |
+          cd work
+          flutter pub get
+          flutter build apk --release --split-per-abi
+
+      # 非 tag：上传 APK 到 workflow artifacts（验证用）
+      - name: Upload APK artifacts (CI)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: piter-android-apks
+          path: work/build/app/outputs/flutter-apk/*.apk
+
+      # tag：等 tauri-action 创建好 release 草稿后上传 APK（最多等 10 分钟）
+      - name: Wait for release draft
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for i in $(seq 1 60); do
+            if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+              echo "release draft ready"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "release draft not created within 10min" >&2
+          exit 1
+
+      - name: Upload APKs to release (tag)
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # split-per-abi 产物：arm64-v8a / armeabi-v7a / x86_64，统一命名上传
+          VER="${GITHUB_REF_NAME#v}"
+          gh release upload "${GITHUB_REF_NAME}" "work/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk#piter_${VER}_android-arm64.apk" "work/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk#piter_${VER}_android-armv7.apk" "work/build/app/outputs/flutter-apk/app-x86_64-release.apk#piter_${VER}_android-x86_64.apk" --clobber
+
