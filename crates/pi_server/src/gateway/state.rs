@@ -72,7 +72,10 @@ pub struct GatewayState {
     /// Agent 完成观察点：会话 agent_end 时回调 (instance_id, session_label)。
     /// 由桌面壳层注册（用于系统通知——托盘隐藏时前端 WS 不可达，系统通知只能走 Rust 侧）；
     /// web / headless 场景保持 None。
-    pub agent_end_hook: Arc<parking_lot::Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
+    /// agent_end 观察回调（桌面壳层用，发送系统通知）。回调运行在 gateway
+    /// 事件循环线程，必须快速返回、不可 panic。参数：instance_id、会话名、
+    /// 最后一条 assistant 消息文本摘要（可空）。
+    pub agent_end_hook: Arc<parking_lot::Mutex<Option<Box<dyn Fn(&str, &str, &str) + Send + Sync>>>>,
     /// mDNS 广播注册句柄（None = 未注册/失败；mDNS 是便利层，失败不阻塞 gateway）。
     pub mdns: Arc<parking_lot::Mutex<Option<MdnsRegistration>>>,
     /// 工作空间基目录（启动时解析：配置优先 → 安装目录 → data_dir 回退；
@@ -111,7 +114,7 @@ impl GatewayState {
     /// gateway 事件循环线程，必须快速返回、不可 panic。
     pub fn set_agent_end_hook<F>(&self, hook: F)
     where
-        F: Fn(&str, &str) + Send + Sync + 'static,
+        F: Fn(&str, &str, &str) + Send + Sync + 'static,
     {
         *self.agent_end_hook.lock() = Some(Box::new(hook));
     }

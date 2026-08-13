@@ -99,15 +99,30 @@ fn process_broker_event(state: &Arc<GatewayState>, raw: &str) {
         send_get_state(state, &instance_id);
         // 会话完成通知观察点：向桌面壳层暴露 agent_end（托盘隐藏时前端 WS 不可达，
         // 系统通知只能由 Rust 侧基于此回调发送；label 为空时由壳层回退 instance_id）。
+        // 附带最后一条 assistant 消息摘要，供通知正文展示完成内容。
         if let Some(hook) = &*state.agent_end_hook.lock() {
-            let label = state
-                .session_manager
-                .lock()
+            let mgr = state.session_manager.lock();
+            let label = mgr
                 .sessions
                 .get(&instance_id)
                 .and_then(|s| s.session_name.clone())
                 .unwrap_or_default();
-            hook(&instance_id, &label);
+            let last_text = mgr
+                .sessions
+                .get(&instance_id)
+                .and_then(|s| {
+                    s.messages
+                        .iter()
+                        .rev()
+                        .find(|m| {
+                            m.get("role").and_then(serde_json::Value::as_str)
+                                == Some("assistant")
+                        })
+                })
+                .map(crate::search::extract_text)
+                .unwrap_or_default();
+            drop(mgr);
+            hook(&instance_id, &label, &last_text);
         }
     }
 

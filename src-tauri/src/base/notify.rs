@@ -26,12 +26,17 @@ static LAST_NOTIFY: Mutex<Option<(u64, u64)>> = Mutex::new(None);
 /// 回调运行在 gateway 事件循环线程，内部只做窗口状态判断 + 发通知，必须快速返回。
 pub fn init(app: &AppHandle, gw: &Arc<pi_server::gateway::GatewayState>) {
     let handle = app.clone();
-    gw.set_agent_end_hook(move |instance_id: &str, session_label: &str| {
-        notify_session_completed(&handle, instance_id, session_label);
+    gw.set_agent_end_hook(move |instance_id: &str, session_label: &str, last_text: &str| {
+        notify_session_completed(&handle, instance_id, session_label, last_text);
     });
 }
 
-fn notify_session_completed(app: &AppHandle, instance_id: &str, session_label: &str) {
+fn notify_session_completed(
+    app: &AppHandle,
+    instance_id: &str,
+    session_label: &str,
+    last_text: &str,
+) {
     // 窗口可见且聚焦：前端 toast 已覆盖，不发系统通知。
     if matches!(
         WM::global().get_cached_window_state(WindowType::Main),
@@ -72,10 +77,26 @@ fn notify_session_completed(app: &AppHandle, instance_id: &str, session_label: &
         .notification()
         .builder()
         .title(title)
-        .body("已完成")
+        .body(notification_body(last_text))
         .show()
     {
         // Linux 无通知守护（headless/精简桌面）等场景：静默降级，不影响主流程。
         log::debug!("[notify] session-complete notification failed: {}", e);
     }
+}
+
+/// 通知正文：最后一条 assistant 摘要（单行截断）；无摘要回退"已完成"。
+fn notification_body(last_text: &str) -> String {
+    let summary = last_text
+        .trim()
+        .replace("\n", " ")
+        .replace("\r", " ");
+    let summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    if summary.is_empty() {
+        return "已完成".to_string();
+    }
+    const MAX: usize = 60;
+    let clipped: String = summary.chars().take(MAX).collect();
+    let suffix = if summary.chars().count() > MAX { "…" } else { "" };
+    format!("已完成：{clipped}{suffix}")
 }
