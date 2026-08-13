@@ -22,6 +22,9 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub cwd: String,
+    /// `normal` | `workspace`（0.3.0 工作空间）。chat 准备页据此过滤。
+    #[serde(default)]
+    pub project_type: String,
     #[serde(default)]
     pub extensions: Vec<String>,
     #[serde(default)]
@@ -45,6 +48,7 @@ pub fn create_project(db: &Db, name: &str, cwd: &str, extensions: Vec<String>) -
         id,
         name: name.to_string(),
         cwd: cwd.to_string(),
+        project_type: "normal".to_string(),
         extensions,
         pinned: 0,
         archived: false,
@@ -61,6 +65,7 @@ pub fn update_project(db: &Db, id: &str, name: Option<&str>, extensions: Option<
         id: row.id,
         name: row.name,
         cwd: row.cwd,
+        project_type: row.project_type,
         extensions: exts,
         pinned: row.pinned,
         archived: row.archived,
@@ -82,6 +87,7 @@ pub fn list_projects(db: &Db, include_archived: bool) -> Vec<Project> {
                 id: row.id,
                 name: row.name,
                 cwd: row.cwd,
+                project_type: row.project_type,
                 extensions: exts,
                 pinned: row.pinned,
                 archived: row.archived,

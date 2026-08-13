@@ -228,10 +228,16 @@ mod tests {
             start_time: std::time::Instant::now(),
             db: db.clone(),
             data_dir: data_dir.path().to_path_buf(),
+            chat_dist: std::path::PathBuf::new(),
+            work_dist: None,
+            connections: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             extension_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             ui_clients: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             session_manager: sm.clone(),
             agent_end_hook: Arc::new(parking_lot::Mutex::new(None)),
+            mdns: Arc::new(parking_lot::Mutex::new(None)),
+            workspace_base_dir: Arc::new(parking_lot::Mutex::new(std::path::PathBuf::new())),
+            migrations: Arc::new(parking_lot::Mutex::new(crate::gateway::migrate::MigrationState::default())),
         });
 
         // ── turn 1：改 tracked a.txt→v2、新建 untracked agent_file.txt ──

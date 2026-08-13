@@ -11,21 +11,24 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::extract::State;
+use axum::http::{StatusCode, Uri};
 use axum::middleware;
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use tokio::sync::broadcast as tokio_broadcast_channel;
 use tower_http::cors::CorsLayer;
-use tower_http::services::{ServeDir, ServeFile};
 
 use crate::broker::types::{BrokerInner, EVENT_CHANNEL_CAP};
 
 use super::{
-    db, event_loop::run_event_loop, ext_cache, handlers, helper::discover_lan_ips, lan_auth,
-    session_manager, ws, GatewayState,
+    db, event_loop::run_event_loop, ext_cache, handlers, helper::discover_lan_ips, lan_auth, mdns,
+    migrate, session_manager, workspace, ws, GatewayState,
 };
 
 /// Default HTTP port for the gateway. Falls back to an ephemeral port when busy.
+/// 高位端口定案：固定默认 31421（与 dev 一致，App/work 需要稳定端口；被占用时回退随机）。
 const DEFAULT_HTTP_PORT: u16 = 31421;
 
 impl GatewayState {
@@ -36,6 +39,7 @@ impl GatewayState {
         pi_exe: PathBuf,
         pi_version: String,
         dist_path: PathBuf,
+        work_dist_path: Option<PathBuf>,
         port: Option<u16>,
         idle_timeout_secs: Option<u64>,
         data_dir: PathBuf,
@@ -72,6 +76,27 @@ impl GatewayState {
 
         let db = db::Db::open(&data_dir).map_err(|e| format!("[gateway] db open failed: {}", e))?;
 
+        // mDNS 广播注册（_piter._tcp）；失败不致命——扫码/手动输入是保底通路。
+        let mdns_reg = match mdns::MdnsRegistration::start(actual_port, &mdns::default_instance_name())
+        {
+            Ok(reg) => {
+                log::info!(
+                    "[mdns] 已注册 {}（端口 {}）",
+                    reg.fullname(),
+                    actual_port
+                );
+                Some(reg)
+            }
+            Err(e) => {
+                log::warn!("[mdns] 注册失败（不影响 gateway）: {e}");
+                None
+            }
+        };
+
+        // 工作空间基目录与迁移队列在 state 构造前解析（db 随后被 move 进 state）。
+        let ws_base_dir = resolve_workspace_base(&db, &static_dir, &data_dir);
+        let migration_pending = migrate::load_queue(&data_dir);
+
         let state = Arc::new(GatewayState {
             event_tx: event_tx.clone(),
             inner: inner.clone(),
@@ -86,11 +111,23 @@ impl GatewayState {
             start_time: std::time::Instant::now(),
             db,
             data_dir,
+            chat_dist: dist_path.clone(),
+            work_dist: work_dist_path,
+            connections: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             extension_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             ui_clients: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             session_manager: session_manager.clone(),
             agent_end_hook: Arc::new(parking_lot::Mutex::new(None)),
+            mdns: Arc::new(parking_lot::Mutex::new(mdns_reg)),
+            workspace_base_dir: Arc::new(parking_lot::Mutex::new(ws_base_dir)),
+            migrations: Arc::new(parking_lot::Mutex::new(migrate::MigrationState {
+                pending: migration_pending,
+                ..Default::default()
+            })),
         });
+
+        // 启动工作空间基目录迁移调度（恢复上次未完成队列 + 后续变更触发）。
+        migrate::spawn_migration_task(state.clone());
 
         // Warm the extension candidate cache in the background so the first
         // visit to Installed shows a snapshot without a synchronous scan.
@@ -217,9 +254,39 @@ impl GatewayState {
                 "/api/lan/auth/revoke",
                 post(handlers::lan_auth::lan_auth_revoke_handler),
             )
+            // mDNS 广播状态
+            .route(
+                "/api/mdns/status",
+                get(handlers::mdns::mdns_status_handler),
+            )
+            // Workspaces (0.3.0)
+            .route("/api/workspaces/base-dir", get(handlers::workspace::get_base_dir_handler))
+            .route("/api/workspaces/base-dir", put(handlers::workspace::set_base_dir_handler))
+            .route("/api/workspaces", get(handlers::workspace::list_workspaces_handler))
+            .route("/api/workspaces", post(handlers::workspace::create_workspace_handler))
+            .route("/api/workspaces/:id", get(handlers::workspace::get_workspace_handler))
+            .route("/api/workspaces/:id", delete(handlers::workspace::delete_workspace_handler))
+            .route("/api/workspaces/:id/mode", put(handlers::workspace::set_workspace_mode_handler))
+            .route("/api/workspaces/:id/files", get(handlers::workspace::files_handler))
+            .route("/api/workspaces/:id/upload", post(handlers::workspace::upload_handler))
+            .route(
+                "/api/workspaces/:id/mark-deliverable",
+                post(handlers::workspace::mark_deliverable_handler),
+            )
+            .route("/api/workspaces/:id/artifacts", get(handlers::workspace::artifacts_handler))
+            .route(
+                "/api/workspaces/:id/deliverables",
+                get(handlers::workspace::deliverables_handler),
+            )
+            .route("/api/workspaces/:id/download", get(handlers::workspace::download_handler))
+            .route("/api/workspaces/:id/zip", post(handlers::workspace::zip_handler))
             // WebSocket
             .route("/ws", get(ws::ws_handler))
             .route("/ui-ws", get(ws::ws_handler))
+            .route("/chat-ws", get(ws::ws_handler))
+            .route("/work-ws", get(ws::ws_handler))
+            // 连接客户端列表（分享页数据源）
+            .route("/api/connections", get(handlers::system::connections_handler))
             // LAN auth: outermost layer so it gates every route AND the SPA
             // fallback (loopback exempt / auth disabled → transparent).
             .layer(middleware::from_fn_with_state(
@@ -228,11 +295,12 @@ impl GatewayState {
             ))
             // CORS
             .layer(CorsLayer::permissive())
-            .with_state(state.clone())
-            // SPA fallback
-            .fallback_service(
-                ServeDir::new(&dist_path).fallback(ServeFile::new(dist_path.join("index.html"))),
-            );
+            // SPA fallback：多前端分发（0.3.0，计划「工作视图与下载」）。
+            // 注意：fallback handler 带 `State`，会迫使 Router 保持 state 类型；
+            // `with_state` 必须放在最后，使最终 Router<()> 可直接
+            // `into_make_service_with_connect_info`（该方法仅对 Router<()> 存在）。
+            .fallback(spa_fallback)
+            .with_state(state.clone());
 
         // Spawn HTTP+WS server and event loop
         let event_tx_clone = event_tx.clone();
@@ -290,5 +358,134 @@ impl GatewayState {
         }
 
         Ok((state, actual_port))
+    }
+}
+
+/// 解析工作空间基目录（0.3.0 文档定案：real_dir = `<基目录>/workspaces/<id>`）：
+/// 1. Admin 配置（DB workspace_config）优先；
+/// 2. 默认安装目录（static_dir = pi 所在目录）——可能被写入保护（Program Files），
+///    首启可写校验，失败回退 app 数据目录（兼容 0.3.0 前的 AppData 位置）。
+fn resolve_workspace_base(
+    db: &crate::gateway::db::Db,
+    static_dir: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> PathBuf {
+    let configured = db.get_workspace_base_dir();
+    if !configured.trim().is_empty() && workspace::dir_writable(std::path::Path::new(&configured)) {
+        return PathBuf::from(configured);
+    }
+    if workspace::dir_writable(static_dir) {
+        static_dir.to_path_buf()
+    } else {
+        data_dir.to_path_buf()
+    }
+}
+
+/// 多 SPA fallback（0.3.0，计划「工作视图与下载」）：非 API/WS 路径按前缀分发。
+/// - `/work`、`/work/*`、`/workspaces/:id` → work SPA（history 模式 fallback 到 index.html）
+/// - `/` → 重定向 `/chat`
+/// - 其余 → chat SPA
+/// `/api/*` 与 WS 由上面的显式路由接管，不会走到这里。
+///
+/// 实现为手写静态文件服务（相对路径清洗防穿越 + 扩展名推断 Content-Type +
+/// SPA history fallback），避免 tower-http ServeDir 的响应体类型转换问题。
+async fn spa_fallback(
+    uri: Uri,
+    State(state): State<Arc<GatewayState>>,
+) -> Response {
+    let path = uri.path();
+    if path == "/" {
+        return Redirect::temporary("/chat").into_response();
+    }
+    // SPA 目录页统一无尾斜杠（go_router 不允许尾斜杠路由；相对资源 base 已由
+    // index.html 的 <base href> 指定，无尾斜杠不影响加载）。
+    if path == "/work/" {
+        return Redirect::temporary("/work").into_response();
+    }
+    if path == "/chat/" {
+        return Redirect::temporary("/chat").into_response();
+    }
+    let (dir, strip_prefix) = if path.starts_with("/work") || path.starts_with("/workspaces") {
+        match &state.work_dist {
+            Some(d) => (d.clone(), true),
+            None => {
+                return (StatusCode::NOT_FOUND, "work view not deployed").into_response();
+            }
+        }
+    } else {
+        // /chat 前缀同样剥离：页面 URL 带前缀时，相对资源（/chat/xxx.js）按
+        // 前缀下分发到 chat 产物。
+        (state.chat_dist.clone(), path.starts_with("/chat"))
+    };
+
+    // 相对路径清洗：剥离前缀段（/work、/workspaces、/chat），跳过空段，
+    // 拒绝 `..` / `\` 段（防目录穿越）。
+    let mut ok = true;
+    let mut rel = String::new();
+    let mut first = true;
+    for seg in path.trim_start_matches('/').split('/') {
+        if seg.is_empty() {
+            continue;
+        }
+        if strip_prefix && first {
+            first = false;
+            continue;
+        }
+        first = false;
+        if seg == ".." || seg.contains('\\') {
+            ok = false;
+            break;
+        }
+        if !rel.is_empty() {
+            rel.push('/');
+        }
+        rel.push_str(seg);
+    }
+    if !ok {
+        return (StatusCode::BAD_REQUEST, "invalid path").into_response();
+    }
+
+    let candidate = dir.join(&rel);
+    let file = if candidate.is_file() {
+        candidate
+    } else {
+        // SPA history fallback：未知路径 → index.html
+        dir.join("index.html")
+    };
+    match tokio::fs::read(&file).await {
+        Ok(bytes) => {
+            let mime = guess_mime(&file);
+            ([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+/// 按扩展名推断 Content-Type（覆盖 chat/work 前端静态资源常用类型）。
+fn guess_mime(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+    {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "map" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "wasm" => "application/wasm",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "md" => "text/markdown; charset=utf-8",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
     }
 }

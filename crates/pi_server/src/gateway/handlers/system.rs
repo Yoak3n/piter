@@ -1,7 +1,9 @@
 //! System handlers: health, LAN info, QR code, git branch.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use axum::extract::Query;
 use axum::http::HeaderMap;
 use axum::response::Json;
 
@@ -92,17 +94,23 @@ pub async fn lan_info_handler(
 
 pub async fn lan_qr_handler(
     axum::extract::State(state): axum::extract::State<Arc<GatewayState>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> (HeaderMap, String) {
     let ips = state.current_lan_ips();
+    // 分享页 work 卡片需要 work URL 的二维码；path 白名单（仅 /work），防任意路径。
+    let path = match params.get("path").map(String::as_str) {
+        Some("/work") => "/work",
+        _ => "/chat",
+    };
     let data = ips
         .first()
         .map(|ip| {
             format!(
-                "http://{}:{}/chat?brokerWs=ws://{}:{}/ws&mobile=1",
-                ip, state.http_port, ip, state.http_port
+                "http://{}:{}{}?brokerWs=ws://{}:{}/chat-ws&mobile=1",
+                ip, state.http_port, path, ip, state.http_port
             )
         })
-        .unwrap_or_else(|| format!("http://127.0.0.1:{}/chat", state.http_port));
+        .unwrap_or_else(|| format!("http://127.0.0.1:{}{}", state.http_port, path));
 
     let svg = super::session::generate_qr_svg(&data);
     let mut headers = HeaderMap::new();
@@ -115,4 +123,17 @@ pub async fn lan_qr_handler(
 
 pub async fn git_branch_handler() -> Json<GitBranchResponse> {
     Json(get_git_branch())
+}
+
+/// `GET /api/connections` → 当前 WS 客户端连接列表（分享页「连接客户端」数据源）。
+pub async fn connections_handler(
+    axum::extract::State(state): axum::extract::State<Arc<GatewayState>>,
+) -> Json<serde_json::Value> {
+    let conns: Vec<serde_json::Value> = state
+        .connections
+        .lock()
+        .values()
+        .map(|c| serde_json::to_value(c).unwrap_or_default())
+        .collect();
+    Json(serde_json::json!({ "connections": conns }))
 }

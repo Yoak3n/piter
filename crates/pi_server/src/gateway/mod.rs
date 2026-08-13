@@ -25,12 +25,15 @@ mod git;
 pub mod handlers;
 mod helper;
 mod lan_auth;
+pub mod mdns;
+pub mod migrate;
 pub mod project;
 mod responses;
 pub mod server;
 pub mod session_manager;
 pub mod state;
 mod title;
+pub mod workspace;
 pub mod ws;
 
 pub use state::GatewayState;

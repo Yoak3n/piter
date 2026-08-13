@@ -58,3 +58,13 @@ pub fn push_sessions_list_to_clients(state: &GatewayState) {
         broadcast_to_clients(state, &msg);
     }
 }
+
+/// Push the current WS client connection list to all clients
+/// (join/leave 广播，分享页「连接客户端」实时刷新)。
+pub fn broadcast_connections_list(state: &GatewayState) {
+    let conns: Vec<_> = state.connections.lock().values().cloned().collect();
+    if let Ok(json) = serde_json::to_string(&conns) {
+        let msg = format!(r#"{{"type":"connections_list","connections":{}}}"#, json);
+        broadcast_to_clients(state, &msg);
+    }
+}

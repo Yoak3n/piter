@@ -11,16 +11,33 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::Serialize;
 use tokio::sync::mpsc;
 
 use crate::broker::types::{BrokerInner, EventTx};
 
 use super::{
     broadcast::push_sessions_list_to_clients, db::SessionRow, helper::discover_lan_ips, handlers,
-    project::list_projects, session_manager,
+    mdns::MdnsRegistration, project::list_projects, session_manager,
 };
 
 // ─── Gateway State ─────────────────────────────────────────────────────────
+
+/// 一条 WS 客户端连接记录（分享页「连接客户端」列表数据源）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientConnection {
+    pub id: u64,
+    /// 前端类型（由 WS 端点 path 决定）：`work`（/work-ws）| `chat`（/chat-ws）|
+    /// `ui`（/ws、/ui-ws 历史/管理兼容）。
+    pub kind: String,
+    /// 形态：`web` | `app` | `unknown`（由 UA 判定，仅展示辅助）。
+    pub form: String,
+    pub ip: String,
+    pub user_agent: String,
+    /// 连接建立时间（epoch ms）。
+    pub connected_at_ms: i64,
+}
 
 /// Clone-able state passed into every axum handler via `State`.
 #[derive(Clone)]
@@ -39,6 +56,12 @@ pub struct GatewayState {
     pub db: Arc<crate::gateway::db::Db>,
     /// App data dir（piter.db 所在目录）；checkpoint 快照存 `<data_dir>/checkpoints/`。
     pub data_dir: PathBuf,
+    /// Chat SPA 静态目录（多 SPA fallback 分发；0.3.0 起与 work 分离）。
+    pub chat_dist: PathBuf,
+    /// Work SPA 静态目录（`/work`、`/workspaces/*` 分发；None = 未部署 work 前端）。
+    pub work_dist: Option<PathBuf>,
+    /// WS 客户端连接注册表（`/api/connections` + join/leave 广播）。
+    pub connections: Arc<parking_lot::Mutex<HashMap<u64, ClientConnection>>>,
     /// Cached discovered extension candidates (global / per-project), filled
     /// at startup and refreshed in the background. DB state is not cached.
     pub extension_cache: Arc<parking_lot::RwLock<HashMap<String, Vec<super::project::ExtensionEntry>>>>,
@@ -50,12 +73,31 @@ pub struct GatewayState {
     /// 由桌面壳层注册（用于系统通知——托盘隐藏时前端 WS 不可达，系统通知只能走 Rust 侧）；
     /// web / headless 场景保持 None。
     pub agent_end_hook: Arc<parking_lot::Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>>,
+    /// mDNS 广播注册句柄（None = 未注册/失败；mDNS 是便利层，失败不阻塞 gateway）。
+    pub mdns: Arc<parking_lot::Mutex<Option<MdnsRegistration>>>,
+    /// 工作空间基目录（启动时解析：配置优先 → 安装目录 → data_dir 回退；
+    /// PUT /api/workspaces/base-dir 时更新）。real_dir = `<base>/workspaces/<id>`。
+    pub workspace_base_dir: Arc<parking_lot::Mutex<PathBuf>>,
+    /// 基目录迁移队列与状态（migrate.rs；标记文件持久化于 data_dir）。
+    pub migrations: Arc<parking_lot::Mutex<crate::gateway::migrate::MigrationState>>,
 }
 
 // ─── GatewayState lifecycle methods ────────────────────────────────────────
 // start_gateway（端口绑定 + Router 构建 + 线程 spawn）见 server.rs。
 
 impl GatewayState {
+    /// Current workspace base dir（real_dir = `<base>/workspaces/<id>`）。
+    pub fn workspace_base_dir(&self) -> PathBuf {
+        self.workspace_base_dir.lock().clone()
+    }
+
+    /// 优雅注销 mDNS 广播（进程退出时调用；即使不调用，OS 退出也会释放组播 socket）。
+    pub fn stop_mdns(&self) {
+        if let Some(reg) = self.mdns.lock().take() {
+            reg.stop();
+        }
+    }
+
     /// Clone the stdin sender for a running instance, if it exists.
     pub fn instance_stdin_tx(&self, instance_id: &str) -> Option<mpsc::UnboundedSender<String>> {
         self.inner
@@ -132,7 +174,7 @@ impl GatewayState {
             .iter()
             .map(|ip| {
                 format!(
-                    "http://{}:{}/chat?brokerWs=ws://{}:{}/ws",
+                    "http://{}:{}/chat?brokerWs=ws://{}:{}/chat-ws",
                     ip, self.http_port, ip, self.http_port
                 )
             })
@@ -286,6 +328,7 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
             path: proj.cwd.clone(),
             name: proj.name.clone(),
             id: Some(proj.id.clone()),
+            project_type: proj.project_type.clone(),
             pinned: proj.pinned,
             archived: proj.archived,
             sessions,
@@ -345,6 +388,7 @@ pub fn build_project_session_tree(state: &GatewayState) -> Vec<handlers::Project
             path: String::new(),
             name: "Other".to_string(),
             id: None,
+            project_type: String::new(),
             pinned: 0,
             archived: false,
             sessions: orphans,
@@ -383,10 +427,16 @@ mod tests {
             start_time: std::time::Instant::now(),
             db,
             data_dir: std::path::PathBuf::new(),
+            chat_dist: std::path::PathBuf::new(),
+            work_dist: None,
+            connections: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             extension_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             ui_clients: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             session_manager: Arc::new(parking_lot::Mutex::new(SessionManager::new(None))),
             agent_end_hook: Arc::new(parking_lot::Mutex::new(None)),
+            mdns: Arc::new(parking_lot::Mutex::new(None)),
+            workspace_base_dir: Arc::new(parking_lot::Mutex::new(std::path::PathBuf::new())),
+            migrations: Arc::new(parking_lot::Mutex::new(crate::gateway::migrate::MigrationState::default())),
         })
     }
 

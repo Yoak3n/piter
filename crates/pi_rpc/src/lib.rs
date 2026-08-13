@@ -10,7 +10,8 @@
 //!
 //! // Create a command
 //! let cmd = Command::prompt("Hello!").with_id("req-1");
-//! assert_eq!(cmd.to_json_line(), r#"{"type":"prompt","message":"Hello!","id":"req-1"}"# + "\n");
+//! let line = r#"{"type":"prompt","message":"Hello!","id":"req-1"}"#.to_string();
+//! assert_eq!(cmd.to_json_line(), line + "\n");
 //!
 //! // Parse an event
 //! let event = Event::from_json_line(r#"{"type":"agent_start"}"#).unwrap();

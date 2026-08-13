@@ -3,11 +3,13 @@
 pub mod budget;
 pub mod extensions;
 pub mod lan_auth;
+pub mod mdns;
 pub mod pi;
 pub mod project;
 pub mod search;
 pub mod session;
 pub mod system;
+pub mod workspace;
 
 use serde::Serialize;
 
@@ -70,6 +72,9 @@ pub struct ProjectGroup {
     /// Database project id; None for the synthetic "Other" orphan group.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// `normal` | `workspace`（0.3.0 工作空间）。chat 准备页据此过滤。
+    #[serde(default)]
+    pub project_type: String,
     /// 1 when the project is pinned (sorted first by the backend).
     #[serde(default)]
     pub pinned: i32,

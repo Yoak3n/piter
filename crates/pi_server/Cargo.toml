@@ -19,14 +19,15 @@ tokio = { version = "^1.44", features = [
     "io-util",
 ] }
 # Pi binary download
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "system-proxy"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "system-proxy", "json"] }
 tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 
 # HTTP+WebSocket server (axum-based)
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }
+tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
 # PIN hashing (LAN auth)
 sha2 = { workspace = true }
@@ -39,3 +40,8 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1"
 
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+mdns-sd = "0.21.0"
+hostname = "0.4.2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

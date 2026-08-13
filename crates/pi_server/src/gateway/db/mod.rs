@@ -14,12 +14,14 @@ pub mod projects;
 pub mod search;
 pub mod sessions;
 pub mod settings;
+pub mod workspace;
 
 pub use checkpoints::*;
 pub use projects::*;
 pub use search::*;
 pub use sessions::*;
 pub use settings::*;
+pub use workspace::*;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -165,6 +167,48 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_checkpoints_session
                 ON checkpoints(session_id, created_at_ms);
+
+            -- Workspaces (0.3.0): artifacts = per-turn change sets collected
+            -- by snapshot diff; workspace_snapshots = per-session latest tree
+            -- (overwrite-only, diff baseline — does not grow unbounded).
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id          TEXT PRIMARY KEY,
+                project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                session_id  TEXT NOT NULL,
+                turn_id     INTEGER NOT NULL,
+                rel_path    TEXT NOT NULL,
+                op          TEXT NOT NULL,
+                size        INTEGER NOT NULL DEFAULT 0,
+                source      TEXT NOT NULL DEFAULT 'snapshot',
+                deliverable INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_artifacts_project
+                ON artifacts(project_id, turn_id);
+            CREATE TABLE IF NOT EXISTS workspace_snapshots (
+                session_id  TEXT PRIMARY KEY,
+                tree_json   TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+            -- Manually-marked deliverable paths (mark-deliverable), persistent
+            -- across turns. Artifact rows also carry a per-turn `deliverable`
+            -- computed at diff time (output/ ∪ marks).
+            CREATE TABLE IF NOT EXISTS workspace_deliverable_marks (
+                workspace_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                rel_path      TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, rel_path)
+            );
+
+            -- Workspace base dir (0.3.0): single config row. '' = not configured
+            -- → default install dir; Admin may point it at a data disk. When it
+            -- changes, existing workspaces are migrated (gateway/migrate.rs).
+            CREATE TABLE IF NOT EXISTS workspace_config (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                base_dir    TEXT NOT NULL DEFAULT '',
+                updated_at  TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO workspace_config (id) VALUES (1);
             ",
         )
         .map_err(|e| format!("migrate: {}", e))?;
@@ -192,6 +236,46 @@ impl Db {
                 [],
             )
             .map_err(|e| format!("migrate add pinned: {}", e))?;
+        }
+
+        // Workspace write-boundary mode (0.3.0): ask|allow|deny per workspace.
+        let proj_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(projects)")
+            .map_err(|e| format!("migrate projects pragma: {}", e))?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| format!("migrate projects pragma rows: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !proj_cols.iter().any(|c| c == "mode") {
+            conn.execute(
+                "ALTER TABLE projects ADD COLUMN mode TEXT NOT NULL DEFAULT 'ask'",
+                [],
+            )
+            .map_err(|e| format!("migrate add projects.mode: {}", e))?;
+        }
+
+        // Workspace artifact line stats (0.3.1): per-turn added/deleted lines
+        // (+N −M), computed by snapshot diff. Additive for existing DBs.
+        let art_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(artifacts)")
+            .map_err(|e| format!("migrate artifacts pragma: {}", e))?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| format!("migrate artifacts pragma rows: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !art_cols.iter().any(|c| c == "lines_added") {
+            conn.execute(
+                "ALTER TABLE artifacts ADD COLUMN lines_added INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| format!("migrate add artifacts.lines_added: {}", e))?;
+        }
+        if !art_cols.iter().any(|c| c == "lines_deleted") {
+            conn.execute(
+                "ALTER TABLE artifacts ADD COLUMN lines_deleted INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| format!("migrate add artifacts.lines_deleted: {}", e))?;
         }
 
         // ── Cross-session search index (0.2.0) ──────────────────────────
