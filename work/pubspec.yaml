@@ -35,6 +35,20 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # piter work 模块依赖（0.3.0 定案）
+  flutter_riverpod: ^2.6.1
+  dio: ^5.7.0
+  web_socket_channel: ^3.0.1
+  go_router: ^14.6.2
+  shared_preferences: ^2.3.3
+  # 局域网服务发现（App 端 mDNS 浏览 _piter._tcp；0.3.0，7.x 修复 KGP 编译警告）
+  bonsoir: ^7.1.5
+  # 浏览器文件选择/下载（Web 端上传下载文件，0.3.1）
+  web: ^1.1.0
+  # 原生 chat（0.3.2）：Markdown 渲染 + 移动端图片附件
+  flutter_markdown: ^0.7.4
+  image_picker: ^1.1.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

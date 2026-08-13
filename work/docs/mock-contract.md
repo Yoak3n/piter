@@ -18,7 +18,7 @@ created: 2026-08-10
 ### 1.1 基础路径与鉴权
 
 - REST：`/api/workspaces/*`（与现有 `/api/sessions` 等并列）
-- WS：复用现有 `/ws`、`/ui-ws`（**不加独立 work WS**——见 §3.1）
+- WS：`/chat-ws`（chat）、`/work-ws`（work）——见 §3.1
 - 鉴权：LAN 非 loopback 请求走 PIN/token（0.2.0 已有）；loopback 豁免
 - 错误格式（统一）：`{"success": false, "error": "<code>", "message": "<human>"}`（对齐现有 `/api/*` 约定）
 
@@ -104,10 +104,13 @@ created: 2026-08-10
 
 ## 3. WS 契约
 
-### 3.1 连接模型（复用现有 WS，不加独立端点）
+### 3.1 连接模型（端点定前端，0.3.0 定案）
 
-- **同一 WS 连接**（`/ws` 或 `/ui-ws`）承载 chat + work 两类事件——App/Web 的 work 模块复用现有连接，不新增 `/work-ws`
-- 与 chat 的差异仅在**命令与事件内容**（work 会话带 `cwd=workspace`）
+- **端点与客户端类型对应**（gateway 连接注册表按 path 判定）：
+  - `/chat-ws` → chat（Vue chat / App chat WebView）
+  - `/work-ws` → work（工作空间视图/App；初始握手不发 chat 会话列表）
+  - `/ws`、`/ui-ws` → ui（历史/管理兼容，不冒充业务客户端）
+- chat 与 work 复用同一 WS 消息协议（`gateway_command` 等）；差异在**命令与事件内容**（work 会话带 `cwd=workspace`）+ 初始握手（work 无 `sessions_list`）
 
 ### 3.2 客户端 → 服务端命令
 
@@ -169,7 +172,7 @@ created: 2026-08-10
 
 | TXT key | 值 | 说明 |
 |---|---|---|
-| `port` | `"31421"` | 实际端口（固定默认 1421 + 冲突回退随机，QR/卡片同源） |
+| `port` | `"31421"` | 实际端口（固定默认 31421 + 冲突回退随机，QR/卡片同源） |
 | `proto` | `"1"` | 协议版本（能力探测用） |
 | `name` | `"Yoa 的 Piter"` | 实例名（可读标识，列表显示） |
 
@@ -191,13 +194,65 @@ created: 2026-08-10
 
 ## 7. 待后端确认（开放项）
 
-| # | 项 | 当前基线 | 待确认 |
-|---|---|---|---|
-| 1 | `/api/workspaces/:id/zip` 返回形态 | `downloadUrl` 间接 | 或直接流式 `application/zip`（推荐直接流式，少一跳） |
-| 2 | 上传批量上限 | 单次 ≤20 文件 | 后端定 |
-| 3 | `turn_artifacts` 推送时机 | turn_end 后 | 与 `turn_end` 事件顺序 |
-| 4 | `approve_write` 的 `remember` 语义 | 写入 approvals.json 白名单 | 是否区分"仅本次" |
-| 5 | mDNS TXT 字段名 | port/proto/name | 后端定稿 |
+> 状态：2026-08-12 后端已全部定稿并落地（见 §8.5）。
+
+| # | 项 | 定稿 |
+|---|---|---|
+| 1 | `/api/workspaces/:id/zip` 返回形态 | **直接流式 `application/zip`**（`Content-Disposition: attachment`） |
+| 2 | 上传批量上限 | 单文件 ≤50MB；批量不设上限（逐文件拒绝报告） |
+| 3 | `turn_artifacts` 推送时机 | turn_end 事件处理后立即推送（快照 diff 结果），与 turn_end 同序 |
+| 4 | `approve_write` 的 `remember` 语义 | 一律写入 `.pi/approvals.json` 白名单（持久）；`allow=false` 仅应答不改状态 |
+| 5 | mDNS TXT 字段名 | `port` / `proto` / `name`（已落地，见 §8.4） |
+
+---
+
+## 8. 实现备注（Flutter mock 阶段追加，不改原契约）
+
+> 由 Flutter 客户端实现时发现的契约与实现偏差记录（2026-08-12）。
+
+### 8.1 默认端口：定案 31421（高位端口）
+
+- 契约 §4 mDNS TXT `port` 基线为 `"31421"`（表格内）但 §4 说明文字曾写"固定默认 1421"，两处冲突——以 **31421 为准**；
+- 后端：`crates/pi_server/src/gateway/server.rs` `DEFAULT_HTTP_PORT = 31421`（busy 时回退随机端口）；
+- **0.3.0 定案（P1）**：服务端保持高位端口 **31421**；Flutter 侧手动添加默认端口、Web 候选、测试同步为 31421；连接/探测均读当前服务器 `baseUrl`，不硬编码端口。
+
+### 8.2 SPA fallback 与 work 能力探测
+
+- 0.2.x 服务端未注册 `/api/*` 路径时，SPA fallback 返回 **200 text/html**（而非 404 JSON）；
+- 能力探测（`core/network/probe.dart`）判定 work 支持：`/api/workspaces` 返回 JSON 且含 `workspaces` 数组才视为支持；HTML/非 JSON 视为不支持；
+- 优雅降级：work 不支持时列表页提示「当前服务端 piter {version} 不支持 work 模块」，chat 不受影响（与 0.3.0/移动端App 规划一致）。
+
+### 8.3 服务端版本现状（联调验证）
+
+- 本机运行服务端 `/api/health` 返回 `version: 0.2.1`、`pi_version: 0.83.0`——**尚无 work API**；
+- Flutter 侧 `HttpApiClient`/`HttpWsClient` 已按本契约实现，后端 work API 落地后即真实可用（数据源按当前服务器自动切换，见 `features/work/providers/data_sources.dart`）。
+
+### 8.4 mDNS 服务端已实现（2026-08-12）
+
+- 服务端 `crates/pi_server/src/gateway/mdns.rs` 用 **mdns-sd** 注册 `_piter._tcp` 广播，TXT `port`/`proto`/`name` 对齐契约 §4；
+- 实例名：环境变量 `PITER_MDNS_NAME` 优先，否则取主机名；
+- 启动 gateway 时自动注册（端口确定后）；失败仅告警不阻塞（扫码/手动为保底）；
+- 新增 `GET /api/mdns/status` → `{enabled, instanceName, port, serviceType}`（未注册时 `{enabled:false}`）；
+- 注册校验注意：host_name 必须以 `.local.` 结尾（mdns-sd 要求）；
+- 真实组播验证：`cargo test -p pi_server mdns -- --ignored`（注册 + browse 自发现）。
+
+### 8.5 Work 后端已落地（2026-08-12，契约定稿）
+
+- **REST**：`/api/workspaces` 全端点已实现——CRUD、`files`（含 basePath）、`upload`（multipart `files` 字段，单文件 ≤50MB，拒绝 `output/` 与 `..`/绝对路径）、`mark-deliverable`、`artifacts?sinceTurn=`、`deliverables`、`download?path=`（锚定 real_dir）、`zip`（直接流式）、额外 `PUT /:id/mode`（ask|allow|deny 写边界）；
+- **错误格式**：`{"error": "<code>", "message": "<human>"}` + 非 2xx 状态码（对齐 §1.1；非 SPA HTML）；
+- **`approve_write` data 需携带 `workspaceId` + `path`**：客户端把 `write_block` 事件里的两个字段原样回填（契约 §3.3 示例省略了它们）；
+- **写边界软约束**：workspace 创建时自动生成 `.pi/extensions/constraint.ts`（注册为项目扩展，工作空间会话 spawn 自动携带），拦截工作空间外 write/edit；`allow` 放行 / `deny` 全拦 / `ask` 按 `.pi/approvals.json` 白名单放行；模式存 `.pi/workspace.json`；
+- **`write_block` 推断**：服务端从 `tool_execution_start`（toolName=write/edit，目标在工作空间外且未在白名单）推断并推送；已批准路径不再重复打扰；
+- **产物**：`deliverable` = `output/` 前缀 ∪ 手动标记；turn_end 快照 diff 后推送 `turn_artifacts`（items 无 id 轻量形态）；
+- **验证**：`cargo test -p pi_server` 61 通过（含 CRUD/快照 diff/路径穿越/artifacts 分组/REST 流程/live server 路由）+ `cargo check --workspace` 通过；Flutter 端数据源自动切换后即可真实联调（§8.3）。
+
+### 8.6 工作空间基目录（2026-08-13 落地，对齐《工作空间与产物管理》定案）
+
+- **定案实现**：real_dir = `<基目录>/workspaces/<id>`；基目录 = Admin 配置（DB `workspace_config` 单行表）优先 → 默认安装目录（pi 所在目录）→ 写入保护（Program Files）回退 app 数据目录；
+- **API**：`GET/PUT /api/workspaces/base-dir`——GET 返回生效/默认基目录、可写性、迁移队列与各工作空间活跃状态；PUT（`{"baseDir": ""}` 清空回默认）校验可写 → 持久化 → 构建迁移队列；
+- **迁移（gateway/migrate.rs）**：后台 2s 调度；不活跃工作空间立即迁移（同卷 rename / 跨卷 copy+`.migrating` 暂存+delete）；活跃会话等待 agent_end 后迁移；等待期间 `create_workspace_session` 拒绝（防饿死）；迁移完成先文件落位再事务更新 `projects.cwd` + `sessions.cwd`；队列持久化 `data_dir/migration-queue.json`（temp+rename 原子写），重启恢复；pending 期间禁止再次修改基目录（409）；
+- **兼容**：既有工作空间（0.3.0 前建在 AppData）在下次改基目录时一并迁移；get/list/delete/mode 一律读 DB cwd，迁移中途不串位；
+- **验证**：`cargo test -p pi_server` 66 通过（含迁移单测：同卷迁移 + 队列持久化恢复）。
 
 ---
 

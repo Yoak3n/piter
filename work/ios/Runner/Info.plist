@@ -26,6 +26,22 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- 局域网 HTTP（gateway 明文 http://IP:31421）：允许任意加载 + 本地网络权限说明 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于发现并连接局域网内的 Piter 服务端。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于在聊天中发送图片附件。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍照后发送到聊天会话。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_piter._tcp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

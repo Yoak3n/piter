@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "dev.yoak3n.piter"
-    compileSdk = flutter.compileSdkVersion
+    // bonsoir_android 的 androidx 依赖（fragment 1.7.x 等）要求 compileSdk >= 36。
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
