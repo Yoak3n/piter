@@ -32,7 +32,8 @@
       }
     },
     "resources": {
-      "../chat/dist": "chat"
+      "../chat/dist": "web/chat",
+      "../work/build/web": "web/work"
     }
   },
   "plugins": {

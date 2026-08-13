@@ -217,20 +217,22 @@ pub fn try_start_gateway(app: &AppHandle) -> Result<Option<(Arc<pi_server::gatew
 
     let pi_version = locked_pi_version().to_string();
     let dist_path = get_dist_path(app);
+    let work_dist_path = get_work_dist_path(app);
     let app_data_dir = app
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| app_data_dir_path());
-    // dev 构建固定用 1421；release 不传端口，由 gateway 使用默认端口 31421
-    //（被占用时回退随机端口），避免与 dev 端口冲突。
+    // dev 构建固定用 31421；release 不传端口，由 gateway 使用默认端口 31421
+    //（被占用时回退随机端口）。
     let dev_port = std::env::var("TAURI_ENV_DEBUG")
         .ok()
-        .and_then(|v| if v == "true" { Some(1421u16) } else { None });
+        .and_then(|v| if v == "true" { Some(31421u16) } else { None });
 
     match pi_server::gateway::GatewayState::start_gateway(
         pi_exe,
         pi_version,
         dist_path,
+        work_dist_path,
         dev_port,
         None,
         app_data_dir,
@@ -248,6 +250,10 @@ fn get_dist_path(app: &AppHandle) -> PathBuf {
     // Dev builds serve the vite-built frontend from the workspace, but release
     // builds must only use the resource dir bundled next to the executable —
     // a compile-time path must never leak into a shipped binary.
+    //
+    // 产物布局（build 安装目录）：`<install>/web/chat` 与 `<install>/web/work`
+    // 统一放在 web/ 目录下（tauri.conf.json bundle.resources 映射
+    // `../chat/dist → web/chat`、`../work/build/web → web/work`）。
     #[cfg(debug_assertions)]
     {
         let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -261,8 +267,34 @@ fn get_dist_path(app: &AppHandle) -> PathBuf {
     }
     app.path()
         .resource_dir()
-        .map(|p| p.join("chat"))
+        .map(|p| p.join("web").join("chat"))
         .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Work SPA 静态目录（多 SPA 分发 `/work`、`/workspaces/*`）。
+/// dev：Flutter work 的 web 构建产物（`work/build/web`，须先
+/// `flutter build web --base-href=/work/`——base href 必须带 `/work/` 前缀，
+/// 否则资源指向站根、在 /work 下 404 白屏）；
+/// release：`resources/work/`（bundle.resources 外置，未打包时为 None → /work 404）。
+fn get_work_dist_path(app: &AppHandle) -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("work")
+            .join("build")
+            .join("web");
+        if dev_path.join("index.html").exists() {
+            return Some(dev_path);
+        }
+    }
+    // release：`<install>/web/work`（bundle.resources 映射 `../work/build/web → web/work`）。
+    app.path()
+        .resource_dir()
+        .ok()
+        .map(|p| p.join("web").join("work"))
+        .filter(|p| p.join("index.html").exists())
 }
 
 /// Piter's app data directory: `%APPDATA%\<identifier>` (e.g.
