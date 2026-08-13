@@ -74,6 +74,14 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      # Flutter（work 模块 web 构建：build:work = flutter build web --base-href=/work/，
+      # 产物经 bundle.resources 外置为 <install>/web/work）
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 

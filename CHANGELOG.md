@@ -2,6 +2,36 @@
 
 本文件记录 piter 的重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.1] - 2026-08-12
+
+> 版本主线：**work 工作空间模块（0.3.0 规划核心，提前合入）**——工作空间/上传/产物交付 + 浏览器 work 视图 + 移动端 Flutter 工程 + 多 SPA 路由改造 + 前端产物 web/ 目录布局；BUG-019/020 修复。
+
+### ✨ 新增
+
+- **work 工作空间后端**（crates/pi_server）：workspace = projects 表 type 标记，虚拟目录映射 `<基目录>/workspaces/<id>/`；快照 diff 收集（增量变更集 + 噪声排除）；产物两层（交付物 output/ + 工作区快照）；写边界软限制（ask/allow/deny + approvals.json 放行通道）；基目录变更自动迁移
+- **work REST API**：workspaces CRUD / upload（multipart）/ files / artifacts / deliverables / download（单文件流式）/ zip（直接流式）/ mode / base_dir
+- **work WS 事件**：turn_artifacts 推送（turn_end 后）+ write_block 请求 / approve_write 批准
+- **mDNS 服务发现**：`_piter._tcp` 广播（mdns-sd，TXT port/proto/name）——移动端 App 自动发现服务端的基石
+- **多 SPA 路由改造**：gateway 按前缀分发 `/work*` → work SPA、其余 → chat SPA；WS 端点分离 `/chat-ws`（chat）/ `/work-ws`（work）/ `/ws`、`/ui-ws`（ui 管理兼容）
+- **前端产物统一 web/ 目录**：build 安装目录 `<install>/web/chat` + `<install>/web/work`（tauri bundle.resources 映射，不进二进制）
+- **Flutter work 工程**（`work/`，Dart 包 `piter_work`）：全平台脚手架 + 改名（piter_work / dev.yoak3n.piter / Piter）；app/core/features/shared 四层；Riverpod + dio + web_socket_channel + go_router；mock 数据源驱动全部 UI/交互/状态流；原生 chat reducer（移植 Vue handlePiEvent 语义）+ work 模块双壳
+- **浏览器 work 视图**（Flutter Web）：/work 页面可用——工作空间列表/详情三区（文件树/消息流/产物）、edit 工具 unified diff 渲染、write_block 批准条、能力探测优雅降级；完整流程已联调跑通
+- **chat 适配**：新建会话过滤 workspace 型项目、brokerWs 归一化 /chat-ws、ShareTab 展示 work 分享信息（mDNS 字段）
+
+### 🐛 修复
+
+- **BUG-019**：扩展卡片（ask user question）被长模型输出挤出视口——未应答卡片置底悬浮（Composer 上方，多卡片堆叠，应答/超时消失）
+- **BUG-020**：问题卡片选项溢出省略——改为自动换行（white-space normal + overflow-wrap anywhere + min-width 0）
+
+### ✨ 增强
+
+- **会话完成系统通知正文**：agent_end 回调携带最后一条 assistant 消息摘要（`extract_text`），通知显示完成内容而非固定"已完成"
+
+### 🔧 工程
+
+- **Flutter 测试**：51 tests 全绿（mock 契约模型 / diff 解析器 / work 会话 reducer / workspaces provider 等 7 个测试文件）+ analyze 0 issues
+- **Rust 测试**：69 tests 全绿（新增 workspace_rest_flow / live_server_* / zip / upload 边界 / mDNS 等 25 个）
+
 ## [0.2.0] - 2026-08-08
 
 > 版本主线：对话记录管理（消息撤回 + 文件回滚）+ 跨会话搜索 + 命令面板 + 局域网鉴权 + 预算提醒 + 大规模代码组织重构。
