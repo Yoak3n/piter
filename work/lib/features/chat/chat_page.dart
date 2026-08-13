@@ -8,12 +8,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/config/server_config.dart';
+import '../../app/module_switcher.dart';
 import '../connection/connection_page.dart';
 import '../connection/providers/servers_provider.dart';
 import 'session_list_page.dart';
 
 class ChatPage extends ConsumerWidget {
-  const ChatPage({super.key});
+  const ChatPage({super.key, this.currentModule = 0, this.onSwitchModule});
+
+  /// 当前模块（0 = 聊天），传给 AppBar title 的模块切换器。
+  final int currentModule;
+  final ValueChanged<int>? onSwitchModule;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -30,26 +35,38 @@ class ChatPage extends ConsumerWidget {
     current ??= servers.isNotEmpty ? servers.first : null;
     if (current == null) {
       return _NoServerView(
+        currentModule: currentModule,
+        onSwitchModule: onSwitchModule,
         onOpenConnection: () => Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const ConnectionPage()),
         ),
       );
     }
-    return const SessionListPage();
+    return SessionListPage(currentModule: currentModule, onSwitchModule: onSwitchModule);
   }
 }
 
 /// 无可用服务器的引导视图（首次使用 App 必经）。
 class _NoServerView extends StatelessWidget {
-  const _NoServerView({required this.onOpenConnection});
+  const _NoServerView({
+    required this.onOpenConnection,
+    this.currentModule = 0,
+    this.onSwitchModule,
+  });
 
   final VoidCallback onOpenConnection;
+  final int currentModule;
+  final ValueChanged<int>? onSwitchModule;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('聊天')),
+      appBar: AppBar(
+        title: onSwitchModule != null
+            ? ModuleSwitcher(current: currentModule, onSwitch: onSwitchModule!)
+            : const Text('聊天'),
+      ),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),

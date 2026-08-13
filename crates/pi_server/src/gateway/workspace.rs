@@ -408,6 +408,31 @@ pub fn workspace_dir_from_id(db: &Db, id: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(&row.cwd))
 }
 
+/// 迁移对齐：工作空间基目录变化后，旧会话文件首行 `session.cwd` 可能指向失效路径
+/// （pi 启动时校验该路径，不存在则拒绝加载会话直接退出）。把首行 stored cwd 重写为
+/// 当前 real_dir，其余行（消息）原样保留。仅在 pi 未运行的 NeedSpawn 恢复路径调用。
+/// 幂等：读首行比对，仅当 stored cwd ≠ new_cwd 时才落盘；返回是否发生了修改。
+pub fn rewrite_session_file_cwd(path: &str, new_cwd: &str) -> Result<bool, String> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("read session file {}: {}", path, e))?;
+    let idx = content.find('\n').unwrap_or(content.len());
+    let first = &content[..idx];
+    let rest = &content[idx..]; // 含首行换行，后续内容原样保留
+    let mut meta: serde_json::Value = serde_json::from_str(first)
+        .map_err(|e| format!("parse session meta {}: {}", path, e))?;
+    if meta.get("cwd").and_then(serde_json::Value::as_str) == Some(new_cwd) {
+        return Ok(false);
+    }
+    if let Some(map) = meta.as_object_mut() {
+        map.insert("cwd".to_string(), serde_json::Value::String(new_cwd.to_string()));
+    }
+    let new_first = serde_json::to_string(&meta)
+        .map_err(|e| format!("serialize session meta {}: {}", path, e))?;
+    std::fs::write(path, format!("{new_first}{rest}"))
+        .map_err(|e| format!("write session file {}: {}", path, e))?;
+    Ok(true)
+}
+
 /// 把一个会话（instance_id）映射到其所属工作空间 id；非工作空间会话 → None。
 /// 事件循环（turn_end / tool_execution）用它判断是否走 workspace 集成路径。
 pub fn workspace_id_for_session(db: &Db, instance_id: &str) -> Option<String> {

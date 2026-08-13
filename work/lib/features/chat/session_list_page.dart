@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/network/models/models.dart';
+import '../../core/platform/storage/storage.dart';
+import '../../app/module_switcher.dart';
+import '../../app/server_settings_button.dart';
 import '../work/providers/data_sources.dart';
 import 'chat_session_page.dart';
 import 'providers/chat_session_provider.dart';
@@ -12,7 +15,11 @@ import 'providers/models_provider.dart';
 import 'providers/sessions_provider.dart';
 
 class SessionListPage extends ConsumerStatefulWidget {
-  const SessionListPage({super.key});
+  const SessionListPage({super.key, this.currentModule = 0, this.onSwitchModule});
+
+  /// 当前模块（0 = 聊天），传给 AppBar title 的模块切换器。
+  final int currentModule;
+  final ValueChanged<int>? onSwitchModule;
 
   @override
   ConsumerState<SessionListPage> createState() => _SessionListPageState();
@@ -34,7 +41,9 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
     final sessions = ref.watch(chatSessionsProvider);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('聊天'),
+        title: widget.onSwitchModule != null
+            ? ModuleSwitcher(current: widget.currentModule, onSwitch: widget.onSwitchModule!)
+            : const Text('聊天'),
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
@@ -46,6 +55,7 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
             tooltip: '命令面板',
             onPressed: () => _openCommandPalette(context),
           ),
+          const ServerSettingsButton(),
         ],
       ),
       body: sessions.when(
@@ -57,22 +67,23 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
               child: Text('暂无会话，点击右下角开始', style: Theme.of(context).textTheme.bodySmall),
             );
           }
+          final active = [for (final g in groups) if (!g.archived) g];
+          final archived = [for (final g in groups) if (g.archived) g];
+          final hasArchived = archived.any((g) => g.sessions.isNotEmpty);
           return ListView(
             padding: const EdgeInsets.only(bottom: 96),
             children: [
-              for (final g in groups)
-                if (g.sessions.isNotEmpty) ...[
-                  _GroupHeader(name: g.name.isEmpty ? g.id : g.name),
-                  for (final s in g.sessions) _SessionTile(group: g, session: s),
-                ],
+              for (final g in active)
+                if (g.sessions.isNotEmpty) _ProjectSection(group: g),
+              if (hasArchived) _ArchivedSection(groups: archived),
             ],
           );
         },
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: FloatingActionButton(
         onPressed: _createSession,
-        icon: const Icon(Icons.add),
-        label: const Text('新建会话'),
+        tooltip: '新建会话',
+        child: const Icon(Icons.add),
       ),
     );
   }
@@ -123,9 +134,155 @@ class _GroupHeader extends StatelessWidget {
         name,
         style: Theme.of(context)
             .textTheme
-            .labelMedium
-            ?.copyWith(color: scheme.primary),
+            .titleMedium
+            ?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600),
       ),
+    );
+  }
+}
+
+/// 单个 project 分组：可折叠（默认展开），标题为 project 名；折叠状态持久化。
+class _ProjectSection extends ConsumerStatefulWidget {
+  const _ProjectSection({required this.group});
+
+  final ProjectGroup group;
+
+  @override
+  ConsumerState<_ProjectSection> createState() => _ProjectSectionState();
+}
+
+class _ProjectSectionState extends ConsumerState<_ProjectSection> {
+  final _controller = ExpansibleController();
+  // 无记录默认展开；'1' 展开，'0' 折叠。
+  bool _expanded = true;
+
+  String get _storageKey {
+    final g = widget.group;
+    return 'chat.collapsed.${g.id.isEmpty ? g.path : g.id}';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final v = await ref.read(storageServiceProvider).read(_storageKey);
+    if (!mounted) return;
+    setState(() => _expanded = v != '0');
+    // 同步 controller（异步回调中调用是安全的，不在 build 内）。
+    if (_expanded) {
+      _controller.expand();
+    } else {
+      _controller.collapse();
+    }
+  }
+
+  void _onExpansionChanged(bool expanded) {
+    setState(() => _expanded = expanded);
+    ref.read(storageServiceProvider).write(_storageKey, expanded ? '1' : '0');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ExpansionTile(
+      controller: _controller,
+      shape: const Border(),
+      collapsedShape: const Border(),
+      initiallyExpanded: _expanded,
+      onExpansionChanged: _onExpansionChanged,
+      title: Text(
+        widget.group.name.isEmpty ? widget.group.id : widget.group.name,
+        style: Theme.of(context)
+            .textTheme
+            .titleMedium
+            ?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600),
+      ),
+      children: [
+        for (final s in widget.group.sessions)
+          _SessionTile(group: widget.group, session: s),
+      ],
+    );
+  }
+}
+
+/// 已归档项目分区（独立于普通分组，默认折叠）；展开状态持久化。
+class _ArchivedSection extends ConsumerStatefulWidget {
+  const _ArchivedSection({required this.groups});
+
+  final List<ProjectGroup> groups;
+
+  @override
+  ConsumerState<_ArchivedSection> createState() => _ArchivedSectionState();
+}
+
+class _ArchivedSectionState extends ConsumerState<_ArchivedSection> {
+  static const _storageKey = 'chat.collapsed.archived';
+  final _controller = ExpansibleController();
+  // 无记录默认折叠；'1' 展开，'0' 折叠。
+  bool _expanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final v = await ref.read(storageServiceProvider).read(_storageKey);
+    if (!mounted) return;
+    setState(() => _expanded = v == '1');
+    // 同步 controller（异步回调中调用是安全的，不在 build 内）。
+    if (_expanded) {
+      _controller.expand();
+    } else {
+      _controller.collapse();
+    }
+  }
+
+  void _onExpansionChanged(bool expanded) {
+    setState(() => _expanded = expanded);
+    ref.read(storageServiceProvider).write(_storageKey, expanded ? '1' : '0');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ExpansionTile(
+      controller: _controller,
+      shape: const Border(),
+      collapsedShape: const Border(),
+      initiallyExpanded: _expanded,
+      onExpansionChanged: _onExpansionChanged,
+      leading: Icon(Icons.archive_outlined, size: 20, color: scheme.outline),
+      title: Text(
+        '已归档',
+        style: Theme.of(context)
+            .textTheme
+            .labelMedium
+            ?.copyWith(color: scheme.outline),
+      ),
+      children: [
+        for (final g in widget.groups)
+          if (g.sessions.isNotEmpty) ...[
+            _GroupHeader(name: g.name.isEmpty ? g.id : g.name),
+            for (final s in g.sessions) _SessionTile(group: g, session: s),
+          ],
+      ],
     );
   }
 }
@@ -145,7 +302,12 @@ class _SessionTile extends ConsumerWidget {
         size: 20,
         color: session.busy ? scheme.primary : scheme.outline,
       ),
-      title: Text(session.label, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(
+        session.label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodyMedium,
+      ),
       subtitle: Text(
         session.preview.isEmpty ? _timeText(session) : session.preview,
         maxLines: 1,

@@ -94,6 +94,20 @@ class ChatExtUi {
         result: json['result'],
         createdAt: json['createdAt'] as int? ?? 0,
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'method': method,
+        'title': title,
+        if (message != null) 'message': message,
+        if (placeholder != null) 'placeholder': placeholder,
+        if (prefill != null) 'prefill': prefill,
+        if (options.isNotEmpty) 'options': options,
+        if (timeout != null) 'timeout': timeout,
+        'answered': answered,
+        if (result != null) 'result': result,
+        'createdAt': createdAt,
+      };
 }
 
 // ─── 消息 ──────────────────────────────────────────────────────────────────
@@ -222,7 +236,7 @@ class SessionInfo {
   const SessionInfo({
     required this.id,
     this.label = '',
-    this.createdAt = 0,
+    this.createdAt = '',
     this.filePath = '',
     this.updatedAt = 0,
     this.preview = '',
@@ -239,7 +253,7 @@ class SessionInfo {
 
   final String id;
   final String label;
-  final int createdAt;
+  final String createdAt;
   final String filePath;
   final int updatedAt;
   final String preview;
@@ -248,7 +262,7 @@ class SessionInfo {
   final String state;
   final String? model;
   final String? modelProvider;
-  final int? thinkingLevel;
+  final String? thinkingLevel;
   final int messageCount;
   final int messageSeq;
   final int pinned;
@@ -261,7 +275,7 @@ class SessionInfo {
   factory SessionInfo.fromJson(Map<String, dynamic> json) => SessionInfo(
         id: json['id'] as String? ?? '',
         label: json['label'] as String? ?? '',
-        createdAt: json['createdAt'] as int? ?? 0,
+        createdAt: json['createdAt'] as String? ?? '',
         filePath: json['filePath'] as String? ?? '',
         updatedAt: json['updatedAt'] as int? ?? 0,
         preview: json['preview'] as String? ?? '',
@@ -270,7 +284,7 @@ class SessionInfo {
         state: json['state'] as String? ?? 'idle',
         model: json['model'] as String?,
         modelProvider: json['modelProvider'] as String?,
-        thinkingLevel: json['thinkingLevel'] as int?,
+        thinkingLevel: json['thinkingLevel'] as String?,
         messageCount: json['messageCount'] as int? ?? 0,
         messageSeq: json['messageSeq'] as int? ?? 0,
         pinned: json['pinned'] as int? ?? 0,
@@ -285,7 +299,7 @@ class ProjectGroup {
     this.name = '',
     this.projectType = '',
     this.pinned = 0,
-    this.archived = 0,
+    this.archived = false,
     this.sessions = const [],
   });
 
@@ -294,7 +308,7 @@ class ProjectGroup {
   final String name;
   final String projectType;
   final int pinned;
-  final int archived;
+  final bool archived;
   final List<SessionInfo> sessions;
 
   factory ProjectGroup.fromJson(Map<String, dynamic> json) => ProjectGroup(
@@ -303,7 +317,7 @@ class ProjectGroup {
         name: json['name'] as String? ?? '',
         projectType: json['projectType'] as String? ?? '',
         pinned: json['pinned'] as int? ?? 0,
-        archived: json['archived'] as int? ?? 0,
+        archived: json['archived'] as bool? ?? false,
         sessions: (json['sessions'] as List<dynamic>? ?? const [])
             .whereType<Map<String, dynamic>>()
             .map(SessionInfo.fromJson)

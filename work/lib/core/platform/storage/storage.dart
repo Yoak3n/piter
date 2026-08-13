@@ -4,7 +4,11 @@
 /// 后续若接入原生存储（如 file system / secure storage）在此替换实现，UI 零改动。
 library;
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// 全局存储实例 provider（各模块 UI 读共享偏好时统一使用）。
+final storageServiceProvider = Provider<StorageService>((ref) => createStorageService());
 
 /// 键值存储接口。
 abstract class StorageService {

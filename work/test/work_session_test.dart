@@ -16,7 +16,12 @@ void main() {
         instanceId: 'ins',
         message: const PiMessage(role: PiMessageRole.user, content: '帮我优化构建'),
       ));
-      s = reduceWorkSession(s, const MessageEvent(phase: 'start', instanceId: 'ins'));
+      // assistant 的 message_start 携带 message 才会建流式条目。
+      s = reduceWorkSession(s, MessageEvent(
+        phase: 'start',
+        instanceId: 'ins',
+        message: const PiMessage(role: PiMessageRole.assistant, content: ''),
+      ));
       s = reduceWorkSession(s, const MessageEvent(phase: 'update', instanceId: 'ins', delta: '好的，'));
       s = reduceWorkSession(s, const MessageEvent(phase: 'update', instanceId: 'ins', delta: '开始处理。'));
       s = reduceWorkSession(s, const MessageEvent(
@@ -25,13 +30,11 @@ void main() {
         message: PiMessage(role: PiMessageRole.assistant, content: '好的，开始处理。'),
       ));
 
-      expect(s.entries.length, 2);
-      final user = s.entries[0] as MessageEntry;
-      expect(user.message.role, PiMessageRole.user);
-      expect(user.message.content, '帮我优化构建');
-      expect(user.streaming, isFalse);
-
-      final assistant = s.entries[1] as MessageEntry;
+      // 实现意图：user 消息由 sendPrompt 本地回显，reducer 不建 user 条目
+      // （避免双写重复），流式组装只产生 assistant 一条。
+      expect(s.entries.length, 1);
+      final assistant = s.entries[0] as MessageEntry;
+      expect(assistant.message.role, PiMessageRole.assistant);
       expect(assistant.streaming, isFalse);
       expect(assistant.message.content, '好的，开始处理。');
     });

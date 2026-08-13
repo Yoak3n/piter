@@ -375,10 +375,6 @@ fn restore_workspace_session(
         ws::helper::message::send_snapshot,
     };
     let iid = session.instance_id.clone();
-    let extensions = match session.project_id.as_deref() {
-        Some(pid) => effective_project_extensions(&state.db, pid, &session.cwd),
-        None => effective_global_extensions(&state.db, &session.cwd),
-    };
     match SessionManager::switch_session(&state.session_manager, &iid, client_id) {
         SessionResult::Switched {
             messages, message_seq, ..
@@ -387,6 +383,37 @@ fn restore_workspace_session(
             Ok(())
         }
         SessionResult::NeedSpawn { .. } => {
+            // 迁移对齐：workspace 基目录变化后，会话文件首行 stored cwd 可能指向失效路径
+            // （pi 校验不存在则拒绝加载直接退出）。恢复前用当前 real_dir 校正：
+            // DB 与会话文件可能不同步（DB 已更新但文件仍旧路径），所以两者都要对齐。
+            let mut effective_cwd = session.cwd.clone();
+            if let Some(pid) = session.project_id.as_deref() {
+                if let Ok(real) = crate::gateway::workspace::workspace_dir_from_id(&state.db, pid) {
+                    let real_str = real.to_string_lossy().to_string();
+                    if real_str != effective_cwd {
+                        log::warn!(
+                            "[gateway] workspace session {} cwd mismatch: {} → {}",
+                            iid, effective_cwd, real_str
+                        );
+                        if let Err(e) = state.db.update_session_cwd(&iid, &real_str) {
+                            log::warn!("[gateway] update session cwd failed: {}", e);
+                        }
+                        effective_cwd = real_str.clone();
+                    }
+                    // 会话文件 stored cwd 始终与 real_dir 对齐（幂等，不一致才写）。
+                    if let Some(sp) = session.session_path.as_deref() {
+                        if let Err(e) = crate::gateway::workspace::rewrite_session_file_cwd(
+                            sp, &real_str,
+                        ) {
+                            log::warn!("[gateway] rewrite session file cwd failed: {}", e);
+                        }
+                    }
+                }
+            }
+            let extensions = match session.project_id.as_deref() {
+                Some(pid) => effective_project_extensions(&state.db, pid, &effective_cwd),
+                None => effective_global_extensions(&state.db, &effective_cwd),
+            };
             let session_path = session.session_path.clone();
             let existing_messages: Vec<serde_json::Value> = session_path
                 .as_ref()
@@ -396,7 +423,7 @@ fn restore_workspace_session(
             let new_iid = resume_session(
                 state,
                 &iid,
-                &session.cwd,
+                &effective_cwd,
                 session_path.as_deref(),
                 None,
                 &extensions,
@@ -406,7 +433,12 @@ fn restore_workspace_session(
                 .routes
                 .lock()
                 .insert(new_iid.clone(), new_iid.clone());
-            SessionManager::register_instance(&state.session_manager, &new_iid, &session.cwd, client_id);
+            SessionManager::register_instance(
+                &state.session_manager,
+                &new_iid,
+                &effective_cwd,
+                client_id,
+            );
             {
                 let mut mgr = state.session_manager.lock();
                 if let Some(s) = mgr.sessions.get_mut(&new_iid) {

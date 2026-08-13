@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/network/models/models.dart';
+import '../../../app/module_switcher.dart';
+import '../../../app/server_settings_button.dart';
 import '../../connection/connection_page.dart';
 import '../../connection/providers/capability_provider.dart';
 import '../providers/workspaces_provider.dart';
@@ -13,7 +15,11 @@ import '../widgets/workspace_mode_badge.dart';
 import 'workspace_create_dialog.dart';
 
 class WorkspaceListPage extends ConsumerWidget {
-  const WorkspaceListPage({super.key});
+  const WorkspaceListPage({super.key, this.currentModule = 1, this.onSwitchModule});
+
+  /// 当前模块（1 = 工作空间），传给 AppBar title 的模块切换器。
+  final int currentModule;
+  final ValueChanged<int>? onSwitchModule;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -22,20 +28,16 @@ class WorkspaceListPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('工作空间'),
+        title: onSwitchModule != null
+            ? ModuleSwitcher(current: currentModule, onSwitch: onSwitchModule!)
+            : const Text('工作空间'),
         actions: [
-          IconButton(
-            tooltip: '服务器',
-            icon: const Icon(Icons.cast),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const ConnectionPage()),
-            ),
-          ),
           IconButton(
             tooltip: '新建',
             icon: const Icon(Icons.add),
             onPressed: () => showCreateWorkspaceDialog(context),
           ),
+          const ServerSettingsButton(),
         ],
       ),
       body: capability.when(

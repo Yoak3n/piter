@@ -29,11 +29,20 @@ class HttpWsClient implements WsClient {
   @override
   Future<void> connect({String? workspaceId}) async {
     if (_connected) return;
+    // 旧连接若未完全关闭（onError 场景），先关掉避免资源泄漏。
+    if (_channel != null) {
+      try {
+        await _channel!.sink.close();
+      } catch (_) {}
+    }
     _connected = true;
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
     _sub = _channel!.stream.listen(
       _onRaw,
-      onError: (Object _) => _controller.add(UnknownEvent(type: 'ws_error')),
+      onError: (Object _) {
+        _connected = false;
+        _controller.add(UnknownEvent(type: 'ws_error'));
+      },
       onDone: () {
         _connected = false;
       },
@@ -61,21 +70,29 @@ class HttpWsClient implements WsClient {
 
   @override
   void sendGatewayCommand(String requestId, String command, Map<String, dynamic> data) {
-    _channel?.sink.add(jsonEncode({
-      'type': 'gateway_command',
-      'requestId': requestId,
-      'command': command,
-      'data': data,
-    }));
+    try {
+      _channel?.sink.add(jsonEncode({
+        'type': 'gateway_command',
+        'requestId': requestId,
+        'command': command,
+        'data': data,
+      }));
+    } catch (_) {
+      // 连接已断开（重连中）：丢弃该帧，重连后由上层重发。
+    }
   }
 
   @override
   void sendBrokerCommand(String instanceId, Map<String, dynamic> payload) {
-    _channel?.sink.add(jsonEncode({
-      'type': 'broker_command',
-      'instanceId': instanceId,
-      'payload': payload,
-    }));
+    try {
+      _channel?.sink.add(jsonEncode({
+        'type': 'broker_command',
+        'instanceId': instanceId,
+        'payload': payload,
+      }));
+    } catch (_) {
+      // 连接已断开（重连中）：丢弃该帧，重连后由上层重发。
+    }
   }
 
   @override

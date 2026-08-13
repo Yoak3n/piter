@@ -1,4 +1,4 @@
-/// App 端壳：底部双 tab（chat 占位 / work）。
+/// App 端壳：顶部模块切换（聊天 / 工作空间），替代底部双 tab。
 library;
 
 import 'package:flutter/material.dart';
@@ -14,33 +14,19 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  // 默认落在 work tab（0.3.0 主目标）。
+  // 默认落在 work 模块（0.3.0 主目标）。
   int _index = 1;
+
+  void _switchTo(int i) => setState(() => _index = i);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [
-          ChatPage(),
-          WorkspaceListPage(),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline),
-            selectedIcon: Icon(Icons.chat_bubble),
-            label: '聊天',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.folder_outlined),
-            selectedIcon: Icon(Icons.folder),
-            label: '工作空间',
-          ),
+        children: [
+          ChatPage(currentModule: 0, onSwitchModule: _switchTo),
+          WorkspaceListPage(currentModule: 1, onSwitchModule: _switchTo),
         ],
       ),
     );

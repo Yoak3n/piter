@@ -45,11 +45,19 @@ class WriteBlockEntry extends TimelineEntry {
       WriteBlockEntry(block: block, state: state ?? this.state);
 }
 
+/// 扩展 UI 请求卡片（ask_user_question 等交互插件；未应答阻塞 pi，应答后只读历史）。
+class WorkExtEntry extends TimelineEntry {
+  const WorkExtEntry({required this.ui});
+
+  final ChatExtUi ui;
+}
+
 // ─── 会话状态 ───────────────────────────────────────────────────────────────
 
 class WorkSessionState {
   const WorkSessionState({
     this.connected = false,
+    this.reconnectFailed = false,
     this.instanceId = '',
     this.entries = const [],
     this.liveArtifacts = const [],
@@ -57,6 +65,9 @@ class WorkSessionState {
   });
 
   final bool connected;
+
+  /// 自动重连耗尽（服务端长时间不可达），等待用户手动重试。
+  final bool reconnectFailed;
 
   /// 工作空间会话的 pi 实例 id（create_workspace_session 响应回填；发 prompt 用）。
   final String instanceId;
@@ -69,6 +80,7 @@ class WorkSessionState {
 
   WorkSessionState copyWith({
     bool? connected,
+    bool? reconnectFailed,
     String? instanceId,
     List<TimelineEntry>? entries,
     List<TurnArtifactItem>? liveArtifacts,
@@ -76,6 +88,7 @@ class WorkSessionState {
   }) =>
       WorkSessionState(
         connected: connected ?? this.connected,
+        reconnectFailed: reconnectFailed ?? this.reconnectFailed,
         instanceId: instanceId ?? this.instanceId,
         entries: entries ?? this.entries,
         liveArtifacts: liveArtifacts ?? this.liveArtifacts,
@@ -98,9 +111,10 @@ WorkSessionState reduceWorkSession(WorkSessionState state, WsEvent event) {
     CapabilitiesEvent() => state,
     SessionsListEvent() => state,
     AgentEndEvent() => state,
+    // 交互插件扩展 UI 请求（ask_user_question 等；非阻塞方法在 reducer 内过滤）。
+    ExtUiRequestEvent() => _reduceExtUi(state, event),
     // chat 专用事件（work 不消费）。
     CommandResponseEvent() => state,
-    ExtUiRequestEvent() => state,
     QueueUpdateEvent() => state,
     SessionStatusEvent() => state,
     PiErrorEvent() => state,
@@ -212,14 +226,45 @@ WorkSessionState _reduceWriteBlock(WorkSessionState state, WriteBlockEvent evt) 
   );
 }
 
+/// 交互插件扩展 UI 请求：非阻塞方法（notify/setStatus/setWidget/setTitle/set_editor_text）
+/// 不进时间线（toast/状态由 UI 层另行处理）；阻塞方法以卡片形式插入时间线等待应答。
+WorkSessionState _reduceExtUi(WorkSessionState state, ExtUiRequestEvent evt) {
+  if (evt.method == 'notify' || evt.method == 'setStatus' ||
+      evt.method == 'setWidget' || evt.method == 'setTitle' ||
+      evt.method == 'set_editor_text') {
+    return state;
+  }
+  return state.copyWith(entries: [
+    ...state.entries,
+    WorkExtEntry(
+      ui: ChatExtUi(
+        id: evt.id,
+        method: evt.method,
+        title: evt.title,
+        message: evt.message,
+        placeholder: evt.placeholder,
+        prefill: evt.prefill,
+        options: evt.options,
+        timeout: evt.timeout,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      ),
+    ),
+  ]);
+}
+
 /// session_snapshot：历史消息回放为时间线（按文件序）。toolResult 角色不单独
 /// 渲染气泡（工具块由 tool_execution 事件表达），与流式路径行为一致。
 WorkSessionState _reduceSnapshot(WorkSessionState state, SessionSnapshotEvent evt) {
-  final entries = <TimelineEntry>[
+  final history = <TimelineEntry>[
     for (final m in evt.messages)
       if (m.role != PiMessageRole.toolResult) MessageEntry(message: m),
   ];
-  return state.copyWith(entries: entries);
+  // 保留本地未应答的扩展 UI 卡片：服务端快照不携带 extUi，若不保留，
+  // 断线重连（create_ws 重推快照覆盖 entries）后 pi 仍阻塞等待应答而卡片已丢。
+  final pending = state.entries
+      .whereType<WorkExtEntry>()
+      .where((e) => !e.ui.answered);
+  return state.copyWith(entries: [...history, ...pending]);
 }
 
 WorkSessionState _reduceGatewayResponse(WorkSessionState state, GatewayResponseEvent evt) {

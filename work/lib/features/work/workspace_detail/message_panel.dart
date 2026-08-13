@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/work_session.dart';
 import '../providers/work_session_provider.dart';
+import '../../chat/widgets/chat_entry_view.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/tool_block.dart';
 import '../widgets/write_block_card.dart';
@@ -75,6 +76,34 @@ class _MessagePanelState extends ConsumerState<MessagePanel> {
                       style: Theme.of(context).textTheme.labelSmall,
                     ),
                   ],
+                )
+              else if (session.reconnectFailed)
+                Row(
+                  children: [
+                    Icon(Icons.error_outline, size: 14, color: Theme.of(context).colorScheme.error),
+                    const SizedBox(width: 4),
+                    Text(
+                      '连接失败',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ],
+                )
+              else
+                Row(
+                  children: [
+                    Icon(Icons.circle, size: 8, color: Theme.of(context).colorScheme.error),
+                    const SizedBox(width: 4),
+                    Text(
+                      '重连中…',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ],
                 ),
             ],
           ),
@@ -82,14 +111,33 @@ class _MessagePanelState extends ConsumerState<MessagePanel> {
         const Divider(height: 1),
         Expanded(
           child: session.entries.isEmpty
-              ? Center(
-                  child: Text(
-                    session.connected
-                        ? '发送一条消息开始对话'
-                        : '连接中…',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                )
+              ? session.reconnectFailed
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '连接失败，请确认服务端已启动',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            onPressed: () =>
+                                ref.read(workSessionProvider.notifier).retryConnect(),
+                            icon: const Icon(Icons.refresh, size: 16),
+                            label: const Text('重新连接'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : Center(
+                      child: Text(
+                        session.connected
+                            ? '发送一条消息开始对话'
+                            : '连接断开，正在重连…',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    )
               : ListView.builder(
                   controller: _scroll,
                   padding: const EdgeInsets.all(12),
@@ -101,6 +149,12 @@ class _MessagePanelState extends ConsumerState<MessagePanel> {
                         MessageBubble(message: message, streaming: streaming),
                       ToolEntry(:final tool) => ToolBlock(tool: tool),
                       WriteBlockEntry() => WriteBlockCard(entry: entry),
+                      WorkExtEntry(:final ui) => ExtensionCard(
+                          ui: ui,
+                          onRespond: (id, method, value) => ref
+                              .read(workSessionProvider.notifier)
+                              .sendExtResponse(id, value: value),
+                        ),
                     };
                   },
                 ),

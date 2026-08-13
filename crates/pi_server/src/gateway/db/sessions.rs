@@ -57,6 +57,18 @@ impl Db {
         Ok(())
     }
 
+    /// Update a session's working directory.
+    /// 工作空间基目录迁移后，旧会话的 cwd 可能指向失效路径；恢复前校正为当前 real_dir。
+    pub fn update_session_cwd(&self, instance_id: &str, cwd: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET cwd = ?1 WHERE instance_id = ?2",
+            params![cwd, instance_id],
+        )
+        .map_err(|e| format!("update_session_cwd: {}", e))?;
+        Ok(())
+    }
+
     /// Delete a session record by session_path.
     pub fn delete_session(&self, session_path: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
