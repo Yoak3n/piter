@@ -135,13 +135,12 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      # Flutter + Android SDK（compileSdk 36 由 flutter-action 的 android-sdk 安装）
-      - name: Setup Flutter (with Android SDK)
+      # Flutter（ubuntu-latest runner 预装 Android SDK，无需 android-sdk 参数）
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-          android-sdk: true
 
       - name: Build release APK (split per ABI)
         run: |
