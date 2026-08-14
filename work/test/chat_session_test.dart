@@ -157,6 +157,66 @@ void main() {
       );
       expect(state.entries, isEmpty);
     });
+
+    test('重复 message_start（同 turn）复用条目不重叠', () {
+      // 模拟：assistant start 建条目 → 重复 start（流式中重连补发）→ update。
+      var state = reduceChatSession(
+        const ChatSessionState(),
+        MessageEvent(
+          phase: 'start',
+          instanceId: 'ins-1',
+          rawMessage: {'role': 'assistant', 'content': ''},
+        ),
+      );
+      expect(state.entries.length, 1);
+      // 重复 start（空缓冲）→ 复用，不新增。
+      state = reduceChatSession(
+        state,
+        MessageEvent(
+          phase: 'start',
+          instanceId: 'ins-1',
+          rawMessage: {'role': 'assistant', 'content': ''},
+        ),
+      );
+      expect(state.entries.length, 1);
+      // update 追加到同一条目。
+      state = reduceChatSession(
+        state,
+        const MessageEvent(phase: 'update', instanceId: 'ins-1', delta: '回复内容'),
+      );
+      expect(state.entries.length, 1);
+      final msg = state.entries.last as ChatMsgEntry;
+      expect(msg.textBuffer, '回复内容');
+    });
+
+    test('agent_end 兜底定型全部残留 streaming 条目', () {
+      var state = reduceChatSession(
+        const ChatSessionState(),
+        MessageEvent(
+          phase: 'start',
+          instanceId: 'ins-1',
+          rawMessage: {'role': 'assistant', 'content': ''},
+        ),
+      );
+      state = reduceChatSession(
+        state,
+        const MessageEvent(phase: 'update', instanceId: 'ins-1', delta: '第一条'),
+      );
+      // 再 start（内容已有 → 视为新 turn 追加），模拟异常多条目。
+      state = reduceChatSession(
+        state,
+        MessageEvent(
+          phase: 'start',
+          instanceId: 'ins-1',
+          rawMessage: {'role': 'assistant', 'content': ''},
+        ),
+      );
+      expect(state.entries.length, 2);
+      state = reduceChatSession(state, const AgentEndEvent(instanceId: 'ins-1'));
+      // 两条全部定型（无 streaming 残留）。
+      expect(state.entries.every((e) => e is! ChatMsgEntry || !e.streaming), isTrue);
+      expect(state.streaming, isFalse);
+    });
   });
 
   group('命令应答与扩展', () {

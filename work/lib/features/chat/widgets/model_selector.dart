@@ -14,6 +14,8 @@ class ModelSelector extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final models = ref.watch(chatModelsProvider).valueOrNull ?? const <ModelInfo>[];
     final current = ref.watch(currentChatModelProvider);
+    // 未手动选中时显示默认模型（settings 默认 → 目录第一个），而非占位"模型"。
+    final effective = current ?? ref.watch(chatDefaultModelProvider);
     final scheme = Theme.of(context).colorScheme;
 
     if (models.isEmpty) return const SizedBox.shrink();
@@ -27,7 +29,7 @@ class ModelSelector extends ConsumerWidget {
             value: m,
             child: Row(
               children: [
-                if (m.id == current?.id)
+                if (m.id == effective?.id)
                   Icon(Icons.check, size: 16, color: scheme.primary),
                 const SizedBox(width: 8),
                 Flexible(
@@ -47,7 +49,7 @@ class ModelSelector extends ConsumerWidget {
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 120),
               child: Text(
-                current?.id ?? '模型',
+                effective?.id ?? '模型',
                 style: Theme.of(context).textTheme.labelMedium,
                 overflow: TextOverflow.ellipsis,
               ),

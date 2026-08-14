@@ -158,6 +158,17 @@ ChatSessionState _reduceMessage(ChatSessionState state, MessageEvent evt) {
       // 只处理 assistant：user 消息由 sendPrompt 本地回显，避免双写重复。
       if (evt.rawMessage != null &&
           (evt.rawMessage!['role'] as String? ?? '') == 'assistant') {
+        // 去重守卫：若已有未定型的 assistant 流式条目（同 turn 重复 message_start
+        // 或流式中途重连补发），复用而非新建——防止重叠回复。
+        final existing = _lastStreamingIndex(entries);
+        if (existing >= 0) {
+          final cur = entries[existing] as ChatMsgEntry;
+          // 仅当现有条目仍为"空缓冲"（未收到 delta）时才复用；
+          // 已有内容则视为新 turn，追加新条目。
+          if (cur.textBuffer.isEmpty && cur.thinkingBuffer.isEmpty) {
+            return state;
+          }
+        }
         entries.add(ChatMsgEntry(
           message: ChatMessage.fromSnapshotJson(evt.rawMessage!),
           streaming: true,
@@ -169,6 +180,8 @@ ChatSessionState _reduceMessage(ChatSessionState state, MessageEvent evt) {
       final idx = _lastStreamingIndex(entries);
       if (idx < 0) {
         // 无流式条目则新建（兼容缺 message_start 的时序）。
+        // 但若最后一条 assistant 消息已定型（agent_end 后）且非流式，
+        // 说明是新 turn 的 update 先行——也新建，正常。
         entries.add(ChatMsgEntry(
           message: const ChatMessage(role: 'assistant'),
           streaming: true,
@@ -225,16 +238,24 @@ ChatSessionState _appendDelta(
 /// 结束流式：把最后一条流式助手消息定型（保留缓冲文本，标记非流式）。
 ChatSessionState _finalizeStreaming(ChatSessionState state) {
   final entries = [...state.entries];
-  final idx = _lastStreamingIndex(entries);
-  if (idx >= 0) {
-    final cur = entries[idx] as ChatMsgEntry;
-    entries[idx] = cur.copyWith(
-      streaming: false,
-      message: cur.message.blocks.isEmpty && cur.textBuffer.isNotEmpty
-          ? ChatMessage(role: 'assistant', blocks: [TextBlock(cur.textBuffer)])
-          : cur.message,
-      textBuffer: '',
-    );
+  var changed = false;
+  // 定型所有残留 streaming 条目（防止多 start/中断后重叠回复残留）。
+  for (var i = 0; i < entries.length; i++) {
+    final e = entries[i];
+    if (e is ChatMsgEntry && e.streaming) {
+      changed = true;
+      entries[i] = e.copyWith(
+        streaming: false,
+        message: e.message.blocks.isEmpty && e.textBuffer.isNotEmpty
+            ? ChatMessage(role: 'assistant', blocks: [TextBlock(e.textBuffer)])
+            : e.message,
+        textBuffer: '',
+      );
+    }
+  }
+  if (!changed) {
+    // 无流式条目但 streaming 标志为 true 时也复位（状态一致性）。
+    return state.copyWith(streaming: false);
   }
   return state.copyWith(entries: entries, streaming: false);
 }

@@ -89,12 +89,12 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
   }
 
   void _createSession() {
-    // 项目工作目录选择 + 名称输入 + 模型。
-    showModalBottomSheet<_NewSessionSpec>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => const _NewSessionSheet(),
-    ).then((spec) {
+    // 整页新建会话（对齐 web NewSessionPane：项目分组选择 + 名称 + 模型）。
+    Navigator.of(context)
+        .push<NewSessionSpec>(
+      MaterialPageRoute(builder: (_) => const NewSessionPage()),
+    )
+        .then((spec) {
       if (spec == null || !mounted) return;
       // 新建会话的模型种子写入当前模型选择（详情页随 prompt 生效）。
       if (spec.modelId != null && spec.modelId!.isNotEmpty) {
@@ -427,10 +427,10 @@ class _SessionTile extends ConsumerWidget {
   }
 }
 
-// ─── 新建会话 ──────────────────────────────────────────────────────────────
+// ─── 新建会话（整页，对齐 web NewSessionPane）────────────────────────────
 
-class _NewSessionSpec {
-  const _NewSessionSpec({
+class NewSessionSpec {
+  const NewSessionSpec({
     required this.cwd,
     required this.name,
     this.modelId,
@@ -443,14 +443,15 @@ class _NewSessionSpec {
   final String? modelProvider;
 }
 
-class _NewSessionSheet extends ConsumerStatefulWidget {
-  const _NewSessionSheet();
+/// 整页新建会话：项目分组选择（明确选择工作目录，非默认第一个）+ 名称 + 模型。
+class NewSessionPage extends ConsumerStatefulWidget {
+  const NewSessionPage({super.key});
 
   @override
-  ConsumerState<_NewSessionSheet> createState() => _NewSessionSheetState();
+  ConsumerState<NewSessionPage> createState() => _NewSessionPageState();
 }
 
-class _NewSessionSheetState extends ConsumerState<_NewSessionSheet> {
+class _NewSessionPageState extends ConsumerState<NewSessionPage> {
   final _name = TextEditingController();
   String _cwd = '';
   String? _modelId;
@@ -460,7 +461,8 @@ class _NewSessionSheetState extends ConsumerState<_NewSessionSheet> {
   void initState() {
     super.initState();
     final groups = ref.read(chatSessionsProvider).valueOrNull ?? const <ProjectGroup>[];
-    if (groups.isNotEmpty) _cwd = groups.first.path;
+    // 无默认选中（要求用户明确选择，与 web 一致）；仅一个分组时预填。
+    if (groups.length == 1) _cwd = groups.first.path;
   }
 
   @override
@@ -473,48 +475,64 @@ class _NewSessionSheetState extends ConsumerState<_NewSessionSheet> {
   Widget build(BuildContext context) {
     final groups = ref.watch(chatSessionsProvider).valueOrNull ?? const <ProjectGroup>[];
     final models = ref.watch(chatModelsProvider).valueOrNull ?? const <ModelInfo>[];
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+    final defaultModel = ref.watch(chatDefaultModelProvider);
+    final scheme = Theme.of(context).colorScheme;
+    final canCreate = _cwd.isNotEmpty && _name.text.trim().isNotEmpty;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('新建会话')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          Text('新建会话', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
           TextField(
             controller: _name,
+            onChanged: (_) => setState(() {}),
             decoration: const InputDecoration(
-              labelText: '名称（可选）',
-              isDense: true,
+              labelText: '会话名称（必填）',
               border: OutlineInputBorder(),
             ),
           ),
-          const SizedBox(height: 12),
-          if (groups.isNotEmpty)
-            DropdownButtonFormField<String>(
-              initialValue: _cwd,
-              decoration: const InputDecoration(
-                labelText: '工作目录',
-                isDense: true,
-                border: OutlineInputBorder(),
+          const SizedBox(height: 16),
+          Text('工作目录（选择 pi 工作的项目）',
+              style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 8),
+          // 项目分组卡片选择（非下拉，与 web 一致可浏览全部）。
+          if (groups.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Text(
+                '暂无项目，请先在服务端创建项目或工作空间。',
+                style: TextStyle(color: scheme.outline),
               ),
-              items: [
-                for (final g in groups)
-                  DropdownMenuItem(value: g.path, child: Text(g.name.isEmpty ? g.id : g.name)),
-              ],
-              onChanged: (v) => setState(() => _cwd = v ?? ''),
-            ),
+            )
+          else
+            for (final g in groups)
+              Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(
+                    color: _cwd == g.path ? scheme.primary : scheme.outlineVariant,
+                    width: _cwd == g.path ? 2 : 1,
+                  ),
+                ),
+                child: ListTile(
+                  title: Text(g.name.isEmpty ? g.id : g.name),
+                  subtitle: g.path.isNotEmpty ? Text(g.path, maxLines: 1, overflow: TextOverflow.ellipsis) : null,
+                  trailing: _cwd == g.path
+                      ? Icon(Icons.check_circle, color: scheme.primary)
+                      : null,
+                  onTap: () => setState(() => _cwd = g.path),
+                ),
+              ),
           if (models.isNotEmpty) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
+            Text('模型', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: _modelId,
               decoration: const InputDecoration(
-                labelText: '模型',
+                labelText: '模型（留空用默认）',
                 isDense: true,
                 border: OutlineInputBorder(),
               ),
@@ -534,21 +552,35 @@ class _NewSessionSheetState extends ConsumerState<_NewSessionSheet> {
                 });
               },
             ),
+            // 显示当前默认模型（settings 默认 / 目录第一个）。
+            if (_modelId == null && defaultModel != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  '默认：${defaultModel.display}',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: scheme.outline),
+                ),
+              ),
           ],
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: () => Navigator.pop(
-                context,
-                _NewSessionSpec(
-                  cwd: _cwd,
-                  name: _name.text.trim(),
-                  modelId: _modelId,
-                  modelProvider: _modelProvider,
-                ),
-              ),
-              child: const Text('创建'),
+              onPressed: canCreate
+                  ? () => Navigator.pop(
+                        context,
+                        NewSessionSpec(
+                          cwd: _cwd,
+                          name: _name.text.trim(),
+                          modelId: _modelId,
+                          modelProvider: _modelProvider,
+                        ),
+                      )
+                  : null,
+              child: const Text('创建会话'),
             ),
           ),
         ],

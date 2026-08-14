@@ -54,6 +54,88 @@ class _ChatComposerState extends ConsumerState<ChatComposer> {
     }
   }
 
+  /// 全屏编辑器（与主输入共享 _input 控制器，所见即所得）。
+  Future<void> _openFullscreen() async {
+    final session = ref.read(chatSessionProvider);
+    final canSend = session.connected && session.instanceId.isNotEmpty;
+    final submitted = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.edit_outlined,
+                      size: 18, color: Theme.of(ctx).colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text('全屏编辑', style: Theme.of(ctx).textTheme.titleMedium),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close),
+                    tooltip: '关闭',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // 高度 55% 视口，多行自由输入。
+              SizedBox(
+                height: MediaQuery.of(ctx).size.height * 0.5,
+                child: TextField(
+                  controller: _input,
+                  onChanged: _onChanged,
+                  maxLines: null,
+                  expands: true,
+                  textAlignVertical: TextAlignVertical.top,
+                  autofocus: true,
+                  keyboardType: TextInputType.multiline,
+                  decoration: InputDecoration(
+                    hintText: '输入消息，/ 查看命令',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    contentPadding: const EdgeInsets.all(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Spacer(),
+                  OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('取消'),
+                  ),
+                  const SizedBox(width: 12),
+                  FilledButton(
+                    onPressed: canSend
+                        ? () => Navigator.pop(ctx, true)
+                        : null,
+                    child: const Text('发送'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (submitted == true) {
+      _send();
+    }
+  }
+
   Future<void> _pickImages() async {
     try {
       final picked = await _picker.pickMultiImage(limit: 9);
@@ -175,6 +257,11 @@ class _ChatComposerState extends ConsumerState<ChatComposer> {
                   onPressed: _pickImages,
                   icon: Icon(Icons.image_outlined, color: scheme.primary),
                   tooltip: '添加图片',
+                ),
+                IconButton(
+                  onPressed: _openFullscreen,
+                  icon: Icon(Icons.fullscreen, color: scheme.outline),
+                  tooltip: '全屏编辑',
                 ),
                 Expanded(
                   child: TextField(
