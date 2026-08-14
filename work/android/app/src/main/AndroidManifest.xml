@@ -2,7 +2,7 @@
     <!-- 联网访问局域网 Piter gateway（work API / chat / WS） -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="Piter"
+        android:label="Piter Work"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">

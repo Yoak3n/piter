@@ -40,6 +40,14 @@ export default defineConfig({
         target: "ws://localhost:31421",
         ws: true,
       },
+      "/chat-ws": {
+        target: "ws://localhost:31421",
+        ws: true,
+      },
+      "/work-ws": {
+        target: "ws://localhost:31421",
+        ws: true,
+      },
     },
   },
   optimizeDeps: {

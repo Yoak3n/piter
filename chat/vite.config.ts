@@ -20,6 +20,22 @@ export default defineConfig({
     fs: {
       allow: [".."],
     },
+    // chat dev server 直连 gateway：REST 走 /api、WS 走 /chat-ws
+    //（与 usePiConnection 的 getWsUrl 归一化保持一致；旧 /ws 兼容保留）。
+    proxy: {
+      "/api": {
+        target: "http://localhost:31421",
+        changeOrigin: true,
+      },
+      "/chat-ws": {
+        target: "ws://localhost:31421",
+        ws: true,
+      },
+      "/ws": {
+        target: "ws://localhost:31421",
+        ws: true,
+      },
+    },
   },
   // @piter/ui ships source SFCs — let the vue plugin compile them instead of
   // letting esbuild pre-bundle (esbuild cannot parse .vue).
