@@ -135,19 +135,55 @@ class _WorkUnavailableView extends StatelessWidget {
   }
 }
 
-class _WorkspaceCard extends StatelessWidget {
+class _WorkspaceCard extends ConsumerWidget {
   const _WorkspaceCard({required this.workspace});
 
   final Workspace workspace;
 
+  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除工作空间'),
+        content: Text(
+          '确定删除「${workspace.name}」吗？\n\n将级联删除工作空间目录（real_dir）与全部产物，不可恢复。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await ref.read(workspacesProvider.notifier).deleteWorkspace(workspace.id);
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('已删除「${workspace.name}」')));
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('删除失败：$e')));
+    }
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () => context.push('/workspaces/${workspace.id}'),
+        onLongPress: () => _delete(context, ref),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
@@ -184,7 +220,26 @@ class _WorkspaceCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               WorkspaceModeBadge(mode: workspace.mode),
-              const SizedBox(width: 4),
+              // 更多菜单：删除（长按卡片同样触发）。
+              PopupMenuButton<String>(
+                icon: Icon(Icons.more_vert, size: 20, color: scheme.outline),
+                tooltip: '更多操作',
+                onSelected: (v) {
+                  if (v == 'delete') _delete(context, ref);
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline, size: 18, color: scheme.error),
+                        const SizedBox(width: 8),
+                        Text('删除', style: TextStyle(color: scheme.error)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
               Icon(Icons.chevron_right, color: scheme.outline),
             ],
           ),
