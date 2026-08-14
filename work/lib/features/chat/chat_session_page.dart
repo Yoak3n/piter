@@ -31,11 +31,14 @@ class ChatSessionPage extends ConsumerStatefulWidget {
 class _ChatSessionPageState extends ConsumerState<ChatSessionPage> {
   final _scroll = ScrollController();
   late String _title;
+  bool _isAtBottom = true;
 
   @override
   void initState() {
     super.initState();
     _title = widget.title;
+    // 滚动监听：离开底部 → 显示“直达底部”FAB；回到底部 → 隐藏。
+    _scroll.addListener(_onScroll);
     // 进入即连接 + 打开会话（新建时先建会话再等 instanceId 回填）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final notifier = ref.read(chatSessionProvider.notifier);
@@ -45,12 +48,31 @@ class _ChatSessionPageState extends ConsumerState<ChatSessionPage> {
         } else {
           notifier.switchSession(widget.instanceId);
         }
+        // 打开（或切换）会话后：无论历史消息多长，直接跳到底部。
+        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
       });
     });
   }
 
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final atBottom =
+        _scroll.position.pixels >= _scroll.position.maxScrollExtent - 120;
+    if (atBottom != _isAtBottom) {
+      setState(() => _isAtBottom = atBottom);
+    }
+  }
+
+  void _jumpToBottom() {
+    if (_scroll.hasClients) {
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    }
+    _isAtBottom = true;
+  }
+
   @override
   void dispose() {
+    _scroll.removeListener(_onScroll);
     // 离开会话：通知后端移除订阅者；连接保留（会话列表页继续用）。
     ref.read(chatSessionProvider.notifier).deactivate();
     _scroll.dispose();
@@ -61,9 +83,11 @@ class _ChatSessionPageState extends ConsumerState<ChatSessionPage> {
   Widget build(BuildContext context) {
     final session = ref.watch(chatSessionProvider);
     final pendingExt = _pendingExtCards(session);
-    // 新条目到达时滚动到底（用户未上滑时）。
+    // 新条目到达时：若用户贴近底部则自动跟随滚动（流式输出）；
+    // 上滑阅读历史时暂停跟随（与 web 版 sticky 语义一致）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients && _scroll.position.pixels >= _scroll.position.maxScrollExtent - 120) {
+      if (_scroll.hasClients &&
+          _scroll.position.pixels >= _scroll.position.maxScrollExtent - 120) {
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       }
     });
@@ -76,24 +100,40 @@ class _ChatSessionPageState extends ConsumerState<ChatSessionPage> {
       body: Column(
         children: [
           Expanded(
-            child: session.entries.isEmpty
-                ? Center(
-                    child: Text(
-                      session.connected ? '发送一条消息开始对话' : '连接中…',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  )
-                : ListView.builder(
-                    controller: _scroll,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    itemCount: session.entries.length,
-                    itemBuilder: (context, i) => ChatEntryView(
-                      entry: session.entries[i],
-                      onExtRespond: (id, method, value) => ref
-                          .read(chatSessionProvider.notifier)
-                          .sendExtResponse(id, value: value),
+            child: Stack(
+              children: [
+                session.entries.isEmpty
+                    ? Center(
+                        child: Text(
+                          session.connected ? '发送一条消息开始对话' : '连接中…',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        itemCount: session.entries.length,
+                        itemBuilder: (context, i) => ChatEntryView(
+                          entry: session.entries[i],
+                          onExtRespond: (id, method, value) => ref
+                              .read(chatSessionProvider.notifier)
+                              .sendExtResponse(id, value: value),
+                        ),
+                      ),
+                // 直达底部浮动按钮（上滑离开底部时显示）。
+                if (!_isAtBottom)
+                  Positioned(
+                    right: 16,
+                    bottom: 12,
+                    child: FloatingActionButton.small(
+                      heroTag: 'chat-jump-bottom',
+                      onPressed: _jumpToBottom,
+                      tooltip: '回到底部',
+                      child: const Icon(Icons.keyboard_arrow_down),
                     ),
                   ),
+              ],
+            ),
           ),
           if (pendingExt.isNotEmpty) _ExtDock(cards: pendingExt),
           ChatComposer(cwd: widget.cwd),
