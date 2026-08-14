@@ -75,6 +75,13 @@ class _FileTreePanelState extends ConsumerState<FileTreePanel> {
             children: [
               Text('文件', style: Theme.of(context).textTheme.labelLarge),
               const Spacer(),
+              // 手动刷新（agent 新增/修改文件后，未触发 turn_artifacts 时兜底）。
+              IconButton(
+                onPressed: () =>
+                    ref.invalidate(workspaceDetailProvider(widget.workspaceId)),
+                icon: const Icon(Icons.refresh),
+                tooltip: '刷新文件列表',
+              ),
               IconButton(
                 onPressed: _uploading ? null : _upload,
                 icon: _uploading

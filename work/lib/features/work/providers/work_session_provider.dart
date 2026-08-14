@@ -9,8 +9,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/models/models.dart';
 import '../../../core/platform/storage/storage.dart';
 import '../../../shared/ws_events.dart';
+import 'artifacts_provider.dart';
 import 'data_sources.dart';
 import 'work_session.dart';
+import 'workspace_detail_provider.dart';
 
 final workSessionProvider =
     NotifierProvider<WorkSessionNotifier, WorkSessionState>(WorkSessionNotifier.new);
@@ -81,6 +83,17 @@ class WorkSessionNotifier extends Notifier<WorkSessionState> {
     // 阻塞交互请求新增未应答卡片 → 本地持久化（刷新/重启后恢复）。
     if (isBlockingExt) {
       _persistPendingExt();
+    }
+    // 本轮产物变化 → 同步刷新文件树与产物区（文件新增/修改需重新拉取）。
+    if (evt is TurnArtifactsEvent) {
+      final wid = evt.workspaceId.isNotEmpty ? evt.workspaceId : _workspaceId;
+      if (wid != null && wid.isNotEmpty) {
+        // 产物区增量同步（sinceTurn 用事件携带的 turnId）。
+        final turnId = evt.turnId;
+        unawaited(ref.read(artifactsProvider(wid).notifier).refreshSince(turnId));
+        // 文件树重新拉取（新增/修改文件）。
+        ref.invalidate(workspaceDetailProvider(wid));
+      }
     }
   }
 
