@@ -15,10 +15,18 @@ class HttpWsClient implements WsClient {
 
   final String wsUrl;
 
+  /// 断线自动重连上限（对齐 web 端 MAX_RECONNECT_ATTEMPTS=3）。
+  static const int _maxReconnectAttempts = 3;
+
   final StreamController<WsEvent> _controller = StreamController<WsEvent>.broadcast(sync: true);
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   bool _connected = false;
+  Timer? _reconnectTimer;
+  int _reconnectAttempts = 0;
+
+  /// 上次 connect 携带的 workspaceId（重连时复用，工作空间会话恢复）。
+  String? _pendingWorkspaceId;
 
   @override
   Stream<WsEvent> get events => _controller.stream;
@@ -29,12 +37,17 @@ class HttpWsClient implements WsClient {
   @override
   Future<void> connect({String? workspaceId}) async {
     if (_connected) return;
+    _pendingWorkspaceId = workspaceId;
+    // 手动重连时取消未决的自动重连定时器。
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     // 旧连接若未完全关闭（onError 场景），先关掉避免资源泄漏。
     if (_channel != null) {
       try {
         await _channel!.sink.close();
       } catch (_) {}
     }
+    _channel = null;
     _connected = true;
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
     _sub = _channel!.stream.listen(
@@ -42,9 +55,11 @@ class HttpWsClient implements WsClient {
       onError: (Object _) {
         _connected = false;
         _controller.add(UnknownEvent(type: 'ws_error'));
+        _scheduleReconnect();
       },
       onDone: () {
         _connected = false;
+        _scheduleReconnect();
       },
     );
     // 等待服务端 capabilities 握手后再建会话（gateway 收包顺序保证）。
@@ -56,11 +71,27 @@ class HttpWsClient implements WsClient {
     }
   }
 
+  /// 断线后按 2s/4s/6s 退避重连（上限 3 次）；成功后由上层收到新的
+  /// capabilities 重新 ack 会话（对齐 web 端 scheduleReconnect）。
+  void _scheduleReconnect() {
+    if (_reconnectTimer != null) return;
+    if (_reconnectAttempts >= _maxReconnectAttempts) return;
+    _reconnectAttempts++;
+    final delay = Duration(seconds: _reconnectAttempts * 2);
+    _reconnectTimer = Timer(delay, () {
+      _reconnectTimer = null;
+      _connected = false;
+      connect(workspaceId: _pendingWorkspaceId);
+    });
+  }
+
   void _onRaw(dynamic raw) {
     if (raw is! String) return;
     try {
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
+        // 能解出帧说明连接存活：复位重连计数（下次断线从头退避）。
+        _reconnectAttempts = 0;
         _controller.add(parseWsEvent(decoded));
       }
     } catch (_) {
@@ -97,6 +128,8 @@ class HttpWsClient implements WsClient {
 
   @override
   Future<void> disconnect() async {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _connected = false;
     await _sub?.cancel();
     _sub = null;

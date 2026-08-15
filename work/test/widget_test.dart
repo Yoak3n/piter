@@ -11,9 +11,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:piter_work/app/piter_app.dart';
+import 'package:piter_work/core/config/server_config.dart';
 import 'package:piter_work/core/network/api_client.dart';
 import 'package:piter_work/core/network/models/models.dart';
 import 'package:piter_work/features/connection/providers/capability_provider.dart';
+import 'package:piter_work/features/connection/providers/servers_provider.dart';
 import 'package:piter_work/features/work/providers/data_sources.dart';
 
 /// 空数据桩：列表页仅加载，不做增删。
@@ -99,6 +101,19 @@ class _FakeCapabilityNotifier extends ServerCapabilityNotifier {
       const ServerCapability(reachable: true, workSupported: true);
 }
 
+/// 服务器桩：直接提供一台假服务器（列表页依赖 currentServerProvider）。
+class _FakeServersNotifier extends ServersNotifier {
+  @override
+  Future<List<ServerInfo>> build() async => const [
+        ServerInfo(
+          id: 'srv_test',
+          name: 'test',
+          baseUrl: 'http://127.0.0.1:31421',
+          wsUrl: 'ws://127.0.0.1:31421/ws',
+        ),
+      ];
+}
+
 void main() {
   testWidgets('Web 端启动后渲染工作空间列表（空态）', (tester) async {
     await tester.pumpWidget(
@@ -106,6 +121,8 @@ void main() {
         overrides: [
           apiClientProvider.overrideWithValue(_EmptyApiClient()),
           serverCapabilityProvider.overrideWith(_FakeCapabilityNotifier.new),
+          // 列表页依赖已配置服务器（currentServerProvider），注入假服务器。
+          serversProvider.overrideWith(_FakeServersNotifier.new),
         ],
         child: const PiterApp(isWeb: true),
       ),

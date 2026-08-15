@@ -10,14 +10,14 @@ import 'servers_provider.dart';
 export '../../../core/network/probe.dart' show ServerCapability;
 
 /// 当前选中的服务器；无记录返回 null（不臆造默认本机服务器）。
-ServerInfo? currentServerOf(Ref ref) {
+final currentServerProvider = Provider<ServerInfo?>((ref) {
   final servers = ref.watch(serversProvider).valueOrNull ?? const <ServerInfo>[];
   final currentId = ref.watch(currentServerIdProvider);
   for (final s in servers) {
     if (s.id == currentId) return s;
   }
   return servers.isNotEmpty ? servers.first : null;
-}
+});
 
 /// 当前服务器的能力探测：统一走 probeServer（后端未实现 work API 时优雅降级）。
 final serverCapabilityProvider =
@@ -27,7 +27,7 @@ final serverCapabilityProvider =
 class ServerCapabilityNotifier extends AsyncNotifier<ServerCapability> {
   @override
   Future<ServerCapability> build() async {
-    final server = currentServerOf(ref);
+    final server = ref.watch(currentServerProvider);
     if (server == null) {
       // 没有连接服务器就是没有服务器——标记为不可达，不探测任何默认地址。
       return const ServerCapability(reachable: false, error: '未连接服务器');

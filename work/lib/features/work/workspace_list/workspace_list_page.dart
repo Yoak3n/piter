@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/network/models/models.dart';
 import '../../../app/module_switcher.dart';
+import '../../../app/no_server_view.dart';
 import '../../../app/server_settings_button.dart';
 import '../../connection/connection_page.dart';
 import '../../connection/providers/capability_provider.dart';
@@ -23,6 +24,19 @@ class WorkspaceListPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 与 chat 页一致：无配置服务器时显示"尚未连接"，避免误报"不支持 work 模块"。
+    final current = ref.watch(currentServerProvider);
+    if (current == null) {
+      return NoServerView(
+        title: '工作空间',
+        currentModule: currentModule,
+        onSwitchModule: onSwitchModule,
+        onOpenConnection: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const ConnectionPage()),
+        ),
+      );
+    }
+
     final workspaces = ref.watch(workspacesProvider);
     final capability = ref.watch(serverCapabilityProvider);
 

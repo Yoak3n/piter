@@ -17,7 +17,7 @@ import '../../connection/providers/capability_provider.dart';
 
 /// REST 数据源：当前服务器（无记录 → 抛错，引导去连接页，不连默认地址）。
 final apiClientProvider = Provider<ApiClient>((ref) {
-  final server = currentServerOf(ref);
+  final server = ref.watch(currentServerProvider);
   if (server == null) {
     throw StateError('未连接服务器，请先在连接页添加 Piter 服务端');
   }
@@ -35,7 +35,7 @@ String chatWsUrl(ServerInfo server) =>
 
 /// WS 数据源：当前服务器（无记录 → 抛错，引导去连接页，不连默认地址）。
 final wsClientProvider = Provider<WsClient>((ref) {
-  final server = currentServerOf(ref);
+  final server = ref.watch(currentServerProvider);
   if (server == null) {
     throw StateError('未连接服务器，请先在连接页添加 Piter 服务端');
   }
@@ -44,7 +44,7 @@ final wsClientProvider = Provider<WsClient>((ref) {
 
 /// chat 专用 WS 数据源（原生 chat，/chat-ws）。
 final chatWsClientProvider = Provider<WsClient>((ref) {
-  final server = currentServerOf(ref);
+  final server = ref.watch(currentServerProvider);
   if (server == null) {
     throw StateError('未连接服务器，请先在连接页添加 Piter 服务端');
   }
