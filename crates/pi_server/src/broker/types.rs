@@ -69,6 +69,50 @@ pub struct PiAgentSettings {
     pub default_model: String,
     #[serde(default)]
     pub default_thinking_level: String,
+    /// Pi 允许 packages 数组里每个元素是普通 source 字符串（`"npm:foo"`）
+    /// 或过滤对象（`{ "source": ..., "extensions": [...] }`）。
+    /// piter 不解释这些内容，原样透传 JSON 即可。
     #[serde(default)]
-    pub packages: Vec<String>,
+    pub packages: Vec<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PiAgentSettings;
+
+    /// Pi 的 packages 数组允许混合普通 source 字符串和过滤对象
+    /// （见 Pi packages.md「Package Filtering」）。此前这里误用
+    /// Vec<String> 导致「invalid type: map, expected a string」解析失败。
+    #[test]
+    fn parses_mixed_packages_entries() {
+        let json = r#"{
+            "defaultProvider": "opencode-go",
+            "defaultModel": "deepseek-v4-flash",
+            "defaultThinkingLevel": "medium",
+            "packages": [
+                "npm:pi-subagents",
+                {
+                    "source": "npm:@hypabolic/pi-hypa",
+                    "extensions": ["-extensions/index.ts"]
+                },
+                {
+                    "source": "npm:pi-web-access",
+                    "extensions": ["-index.ts"],
+                    "skills": ["-skills/librarian/SKILL.md"]
+                }
+            ]
+        }"#;
+        let settings: PiAgentSettings =
+            serde_json::from_str(json).expect("mixed packages entries should parse");
+        assert_eq!(settings.packages.len(), 3);
+        assert_eq!(settings.packages[0], serde_json::json!("npm:pi-subagents"));
+        assert_eq!(
+            settings.packages[1]["source"],
+            serde_json::json!("npm:@hypabolic/pi-hypa")
+        );
+        // 回写必须保持对象形式，不能把过滤配置丢成纯字符串
+        let roundtrip = serde_json::to_string(&settings).unwrap();
+        assert!(roundtrip.contains("\"extensions\":[\"-extensions/index.ts\"]"));
+        assert!(roundtrip.contains("\"source\":\"npm:@hypabolic/pi-hypa\""));
+    }
 }

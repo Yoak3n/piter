@@ -89,9 +89,22 @@ function handlePiUpdate(settings: PiSettings) {
   saveConfig({ ...config.value, pi: settings });
 }
 
-function handlePackagesChanged(packages: string[]) {
+function handlePackagesChanged(installed: string[]) {
   if (!piSettings.value) return;
-  savePiAgentSettings({ ...piSettings.value, packages });
+  // 保留原有条目（含过滤对象），只剔除已卸载的、追加新安装的，
+  // 避免从 marketplace 保存时把用户的过滤配置冲掉。
+  const installedSet = new Set(installed);
+  const merged: unknown[] = piSettings.value.packages.filter((entry) => {
+    const source = typeof entry === "string" ? entry : (entry as { source?: unknown }).source;
+    return typeof source === "string" && installedSet.has(source);
+  });
+  const known = new Set(merged.map((entry) =>
+    typeof entry === "string" ? entry : (entry as { source?: unknown }).source
+  ));
+  for (const src of installed) {
+    if (!known.has(src)) merged.push(src);
+  }
+  savePiAgentSettings({ ...piSettings.value, packages: merged });
 }
 </script>
 

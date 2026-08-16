@@ -42,7 +42,9 @@ export interface PiAgentSettings {
   defaultProvider: string;
   defaultModel: string;
   defaultThinkingLevel: string;
-  packages: string[];
+  // Pi 允许 packages 数组里每个元素是 source 字符串或过滤对象
+  // （{ source, extensions, skills, ... }）。piter 不解释内容，原样透传。
+  packages: Array<unknown>;
   skills?: string[];
 }
 

@@ -13,12 +13,22 @@ import { useMarketplace } from "../../composables/useMarketplace";
 // 本组件只做模板组装（工具栏 + 网格 + 分页）。
 
 const props = defineProps<{
-  packages: string[];
+  packages: Array<unknown>;
 }>();
 
 const emit = defineEmits<{
   (e: "packages-changed", packages: string[]): void;
 }>();
+
+// 取包的 source：字符串元素直接用；过滤对象元素取 .source 字段。
+function packageSource(entry: unknown): string | null {
+  if (typeof entry === "string") return entry;
+  if (entry && typeof entry === "object") {
+    const source = (entry as { source?: unknown }).source;
+    if (typeof source === "string") return source;
+  }
+  return null;
+}
 
 const {
   loading, error, loaded, activeType,
@@ -32,7 +42,11 @@ const {
   setType, setPage,
   handleInstall, handleUninstall, openLink,
 } = useMarketplace({
-  fallbackInstalled: () => props.packages.map((p) => p.replace(/^npm:/, "")),
+  fallbackInstalled: () =>
+    props.packages
+      .map(packageSource)
+      .filter((s): s is string => s !== null)
+      .map((p) => p.replace(/^npm:/, "")),
   onPackagesChanged: (installed) => emit("packages-changed", installed),
 });
 
